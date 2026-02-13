@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Bump version via changesets
-npx changeset version
+npx @changesets/cli version
 
 # Sync version from package.json into pyproject.toml
 python3 -c "
