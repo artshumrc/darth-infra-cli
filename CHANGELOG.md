@@ -1,5 +1,11 @@
 # darth-ecs
 
+## 0.0.3
+
+### Patch Changes
+
+- [`324e207`](https://github.com/artshumrc/darth-ecs-cli/commit/324e207f24fcbd04c1da2e6d0f8be0dd9eacebf9) Thanks [@d-flood](https://github.com/d-flood)! - wip ci
+
 ## 0.0.2
 
 ### Patch Changes
