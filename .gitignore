@@ -214,3 +214,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node (changesets tooling)
+node_modules/
+package-lock.json
