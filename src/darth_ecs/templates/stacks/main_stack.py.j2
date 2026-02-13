@@ -89,7 +89,7 @@ class _SecretCfg:
 @dataclass
 class _AlbCfg:
     mode: str = "shared"
-    shared_alb_name_pattern: str = "global-{env}"
+    shared_alb_name: str = ""
     certificate_arn: str | None = None
 
 
@@ -209,7 +209,7 @@ class MainStack(Stack):
             project_name=config.project_name,
             env_name=env_name,
             alb_mode=config.alb.mode,
-            shared_alb_name_pattern=config.alb.shared_alb_name_pattern,
+            shared_alb_name=config.alb.shared_alb_name,
             certificate_arn=config.alb.certificate_arn,
         )
 

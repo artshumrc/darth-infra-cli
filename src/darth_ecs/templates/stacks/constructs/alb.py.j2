@@ -12,8 +12,8 @@ from constructs import Construct
 class AlbProvider(Construct):
     """Provides an ALB target attachment point.
 
-    In **shared** mode the construct looks up an existing ALB by name
-    (default pattern ``global-{env}``).  In **dedicated** mode it provisions
+    In **shared** mode the construct looks up an existing ALB by name.
+    In **dedicated** mode it provisions
     a new internet-facing ALB with an HTTPS listener.
     """
 
@@ -26,7 +26,7 @@ class AlbProvider(Construct):
         project_name: str,
         env_name: str,
         alb_mode: str = "shared",
-        shared_alb_name_pattern: str = "global-{env}",
+        shared_alb_name: str = "",
         certificate_arn: str | None = None,
     ) -> None:
         super().__init__(scope, construct_id)
@@ -39,7 +39,7 @@ class AlbProvider(Construct):
         stack = Stack.of(self)
 
         if alb_mode == "shared":
-            alb_name = shared_alb_name_pattern.format(env=env_name)
+            alb_name = shared_alb_name
             details = self._get_alb_details(stack, alb_name)
 
             self.alb_arn = details["alb_arn"]

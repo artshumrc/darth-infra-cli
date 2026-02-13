@@ -27,7 +27,7 @@ class ReviewScreen(Screen):
         self._state = state
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="form-container"):
+        with VerticalScroll(classes="form-container"):
             yield Static("Review & Confirm", classes="title")
             with VerticalScroll():
                 yield Static(self._build_summary(), id="summary")
@@ -138,6 +138,7 @@ class ReviewScreen(Screen):
 
         alb = AlbConfig(
             mode=AlbMode(s.get("alb_mode", "shared")),
+            shared_alb_name=s.get("shared_alb_name", ""),
             certificate_arn=s.get("certificate_arn"),
         )
 

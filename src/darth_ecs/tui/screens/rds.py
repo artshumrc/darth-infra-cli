@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Static, Switch
 
@@ -16,7 +16,7 @@ class RdsScreen(Screen):
         self._state = state
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="form-container"):
+        with VerticalScroll(classes="form-container"):
             yield Static("RDS Database (Optional)", classes="title")
 
             yield Label("Enable RDS PostgreSQL?", classes="section-label")
@@ -39,10 +39,13 @@ class RdsScreen(Screen):
             yield Input(placeholder=svc_names, id="db_expose", value=svc_names)
 
             with Vertical(classes="button-row"):
+                yield Button("← Back", id="back", variant="default")
                 yield Button("Next →", id="next", variant="primary")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "next":
+        if event.button.id == "back":
+            self.app.pop_screen()
+        elif event.button.id == "next":
             enabled = self.query_one("#enable_rds", Switch).value
             if enabled:
                 db_name = self.query_one("#db_name", Input).value.strip()

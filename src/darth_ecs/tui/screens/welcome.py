@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Static
 
@@ -16,7 +16,7 @@ class WelcomeScreen(Screen):
         self._state = state
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="form-container"):
+        with VerticalScroll(classes="form-container"):
             yield Static("darth-ecs — New Project Setup", classes="title")
 
             yield Label("Project name (kebab-case):", classes="section-label")

@@ -131,7 +131,7 @@ def _parse_alb(raw: dict[str, Any]) -> AlbConfig:
     mode_str = raw.get("mode", "shared")
     return AlbConfig(
         mode=AlbMode(mode_str),
-        shared_alb_name_pattern=raw.get("shared_alb_name_pattern", "global-{env}"),
+        shared_alb_name=raw.get("shared_alb_name", ""),
         certificate_arn=raw.get("certificate_arn"),
     )
 
@@ -157,6 +157,8 @@ def dump_config(config: ProjectConfig) -> str:
     """Serialize a ``ProjectConfig`` to TOML string."""
     lines: list[str] = []
 
+    lines.append("#:schema darth-ecs.schema.json")
+    lines.append("")
     lines.append("[project]")
     lines.append(f'name = "{config.project_name}"')
     lines.append(f'aws_region = "{config.aws_region}"')
@@ -222,7 +224,7 @@ def dump_config(config: ProjectConfig) -> str:
 
     lines.append("[alb]")
     lines.append(f'mode = "{config.alb.mode.value}"')
-    lines.append(f'shared_alb_name_pattern = "{config.alb.shared_alb_name_pattern}"')
+    lines.append(f'shared_alb_name = "{config.alb.shared_alb_name}"')
     if config.alb.certificate_arn:
         lines.append(f'certificate_arn = "{config.alb.certificate_arn}"')
     lines.append("")

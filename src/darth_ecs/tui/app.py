@@ -22,11 +22,30 @@ class DarthEcsInitApp(App[None]):
     Screen {
         align: center middle;
     }
+    .screen-layout {
+        width: 100%;
+        max-width: 120;
+        height: 100%;
+        max-height: 100%;
+    }
+    .sidebar {
+        width: 30;
+        height: 100%;
+        border: round $accent;
+        padding: 1;
+    }
+    .sidebar #item-list {
+        height: 1fr;
+    }
     .form-container {
         width: 80;
-        max-height: 40;
+        max-height: 100%;
+        height: auto;
         border: round $accent;
         padding: 1 2;
+    }
+    .screen-layout .form-container {
+        width: 1fr;
     }
     .title {
         text-align: center;
@@ -68,6 +87,7 @@ class DarthEcsInitApp(App[None]):
             "rds": None,
             "s3_buckets": [],
             "alb_mode": "shared",
+            "shared_alb_name": "",
             "certificate_arn": None,
             "secrets": [],
         }

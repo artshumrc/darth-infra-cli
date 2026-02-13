@@ -82,15 +82,14 @@ class AlbConfig:
     """Application Load Balancer configuration.
 
     Attributes:
-        mode: "shared" looks up an existing ALB named ``global-{env}``.
+        mode: "shared" looks up an existing ALB by name.
               "dedicated" provisions a new ALB for this project.
-        shared_alb_name_pattern: Override the ALB name pattern for shared mode.
-                                 Use ``{env}`` as a placeholder.
+        shared_alb_name: The name of the existing shared ALB to look up.
         certificate_arn: ACM certificate ARN (required for dedicated mode).
     """
 
     mode: AlbMode = AlbMode.SHARED
-    shared_alb_name_pattern: str = "global-{env}"
+    shared_alb_name: str = ""
     certificate_arn: str | None = None
 
 

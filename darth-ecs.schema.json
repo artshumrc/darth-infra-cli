@@ -1,0 +1,295 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/dflood/darth-ecs-cli/darth-ecs.schema.json",
+  "title": "darth-ecs.toml",
+  "description": "Configuration schema for darth-ecs ECS/Fargate projects.",
+  "type": "object",
+  "required": ["project", "services"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path or URL to this JSON Schema (for editor support)."
+    },
+    "project": {
+      "type": "object",
+      "description": "Top-level project metadata.",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Short kebab-case project name (e.g. \"my-webapp\"). Used as a prefix for all AWS resources.",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "aws_region": {
+          "type": "string",
+          "description": "AWS region for deployment.",
+          "default": "us-east-1",
+          "examples": ["us-east-1", "us-west-2", "eu-west-1"]
+        },
+        "vpc_name": {
+          "type": "string",
+          "description": "Name tag of the existing VPC to deploy into.",
+          "default": "artshumrc-prod-standard"
+        },
+        "environments": {
+          "type": "array",
+          "description": "Environment names. \"prod\" must be included and will be placed first.",
+          "items": { "type": "string" },
+          "default": ["prod"],
+          "contains": { "const": "prod" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "tags": {
+          "type": "object",
+          "description": "Additional tags applied to all AWS resources.",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "services": {
+      "type": "array",
+      "description": "One or more ECS Fargate services to deploy.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Logical service name (e.g. \"django\", \"celery-worker\")."
+          },
+          "dockerfile": {
+            "type": "string",
+            "description": "Path to the Dockerfile, relative to project root.",
+            "default": "Dockerfile"
+          },
+          "build_context": {
+            "type": "string",
+            "description": "Docker build context path, relative to project root.",
+            "default": "."
+          },
+          "port": {
+            "type": ["integer", "null"],
+            "description": "Container port exposed to the ALB. Omit or set to null for background workers.",
+            "default": 8000,
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "health_check_path": {
+            "type": "string",
+            "description": "ALB health check endpoint.",
+            "default": "/health"
+          },
+          "cpu": {
+            "type": "integer",
+            "description": "Fargate task CPU units.",
+            "default": 256,
+            "enum": [256, 512, 1024, 2048, 4096]
+          },
+          "memory_mib": {
+            "type": "integer",
+            "description": "Fargate task memory in MiB.",
+            "default": 512,
+            "minimum": 512
+          },
+          "desired_count": {
+            "type": "integer",
+            "description": "Number of running tasks.",
+            "default": 1,
+            "minimum": 0
+          },
+          "command": {
+            "type": ["string", "null"],
+            "description": "Override the container CMD.",
+            "default": null
+          },
+          "domain": {
+            "type": ["string", "null"],
+            "description": "Hostname for ALB host-header routing. Required when port is set.",
+            "default": null
+          },
+          "secrets": {
+            "type": "array",
+            "description": "Names of secrets entries to inject into this container.",
+            "items": { "type": "string" },
+            "default": [],
+            "uniqueItems": true
+          },
+          "s3_access": {
+            "type": "array",
+            "description": "Names of s3_buckets entries to grant read/write access.",
+            "items": { "type": "string" },
+            "default": [],
+            "uniqueItems": true
+          },
+          "environment_variables": {
+            "type": "object",
+            "description": "Static environment variables passed to the container.",
+            "additionalProperties": { "type": "string" }
+          },
+          "enable_exec": {
+            "type": "boolean",
+            "description": "Enable ECS Exec for interactive shell access.",
+            "default": true
+          }
+        }
+      }
+    },
+    "rds": {
+      "type": "object",
+      "description": "Optional RDS PostgreSQL instance configuration.",
+      "required": ["database_name"],
+      "additionalProperties": false,
+      "properties": {
+        "database_name": {
+          "type": "string",
+          "description": "Name of the initial database."
+        },
+        "instance_type": {
+          "type": "string",
+          "description": "EC2 instance type string.",
+          "default": "t4g.micro",
+          "examples": ["t4g.micro", "t4g.small", "t4g.medium"]
+        },
+        "allocated_storage_gb": {
+          "type": "integer",
+          "description": "Disk size in GB.",
+          "default": 20,
+          "minimum": 20
+        },
+        "expose_to": {
+          "type": "array",
+          "description": "Service names that receive DB connection environment variables (DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD).",
+          "items": { "type": "string" },
+          "default": [],
+          "uniqueItems": true
+        },
+        "engine_version": {
+          "type": "string",
+          "description": "PostgreSQL major version.",
+          "default": "15",
+          "examples": ["14", "15", "16"]
+        },
+        "backup_retention_days": {
+          "type": "integer",
+          "description": "Number of days to keep automated backups.",
+          "default": 7,
+          "minimum": 0,
+          "maximum": 35
+        }
+      }
+    },
+    "s3_buckets": {
+      "type": "array",
+      "description": "Optional S3 buckets to provision per environment.",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Logical bucket name. Actual bucket will be named \"{project}-{env}-{name}\"."
+          },
+          "public_read": {
+            "type": "boolean",
+            "description": "Grant public read access.",
+            "default": false
+          },
+          "cloudfront": {
+            "type": "boolean",
+            "description": "Provision a CloudFront distribution in front of this bucket.",
+            "default": false
+          },
+          "cors": {
+            "type": "boolean",
+            "description": "Enable permissive CORS headers.",
+            "default": false
+          }
+        }
+      },
+      "default": []
+    },
+    "alb": {
+      "type": "object",
+      "description": "Application Load Balancer configuration.",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "\"shared\" looks up an existing ALB by name. \"dedicated\" provisions a new ALB for this project.",
+          "enum": ["shared", "dedicated"],
+          "default": "shared"
+        },
+        "shared_alb_name": {
+          "type": "string",
+          "description": "Name of the existing shared ALB to look up. Used when mode is \"shared\".",
+          "default": ""
+        },
+        "certificate_arn": {
+          "type": ["string", "null"],
+          "description": "ACM certificate ARN. Required when mode is \"dedicated\".",
+          "default": null,
+          "pattern": "^arn:aws:acm:[a-z0-9-]+:\\d{12}:certificate/[a-f0-9-]+$"
+        }
+      }
+    },
+    "secrets": {
+      "type": "array",
+      "description": "Additional secrets to inject into containers as environment variables.",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Environment variable name (e.g. DJANGO_SECRET_KEY)."
+          },
+          "source": {
+            "type": "string",
+            "description": "\"generate\" to auto-create a random value per environment. \"env\" to read from the deployer's local environment.",
+            "enum": ["generate", "env"],
+            "default": "generate"
+          },
+          "length": {
+            "type": "integer",
+            "description": "Character length for generated secrets.",
+            "default": 50,
+            "minimum": 1
+          },
+          "generate_once": {
+            "type": "boolean",
+            "description": "If true, the value is created once per environment and reused across deploys. If false, regenerated each deploy.",
+            "default": true
+          }
+        }
+      },
+      "default": []
+    },
+    "environments": {
+      "type": "object",
+      "description": "Per-environment configuration overrides. Keys are environment names.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "domain_overrides": {
+            "type": "object",
+            "description": "Map of service name to domain override for this environment.",
+            "additionalProperties": { "type": "string" }
+          },
+          "instance_type_override": {
+            "type": ["string", "null"],
+            "description": "Override RDS instance type for this environment.",
+            "default": null
+          }
+        }
+      }
+    }
+  }
+}

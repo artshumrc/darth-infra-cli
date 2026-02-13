@@ -42,6 +42,11 @@ def generate_project(config: ProjectConfig, output_dir: Path) -> Path:
     toml_path = output_dir / "darth-ecs.toml"
     toml_path.write_text(dump_config(config))
 
+    # Copy the JSON schema for editor support
+    schema_src = Path(__file__).resolve().parent.parent / "darth-ecs.schema.json"
+    if schema_src.exists():
+        shutil.copy2(schema_src, output_dir / "darth-ecs.schema.json")
+
     # Render stacks
     stacks_dir = output_dir / "stacks"
     stacks_dir.mkdir(exist_ok=True)
