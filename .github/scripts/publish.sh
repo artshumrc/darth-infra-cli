@@ -8,7 +8,11 @@ echo "Publishing version $VERSION"
 # Build the Python package
 python -m build
 
-# Create a GitHub release with the wheel and sdist
+# Create a local git tag and push it (changesets action expects a pushable tag)
+git tag "v${VERSION}"
+git push origin "v${VERSION}"
+
+# Create a GitHub release with the wheel and sdist, using the existing tag
 gh release create "v${VERSION}" \
   --title "v${VERSION}" \
   --generate-notes \
