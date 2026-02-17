@@ -7,6 +7,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import (
     Button,
+    Checkbox,
     Input,
     Label,
     ListItem,
@@ -62,6 +63,11 @@ class ServicesScreen(Screen):
 
                 yield Label("Command override (optional):", classes="section-label")
                 yield Input(placeholder="", id="svc_command")
+
+                yield Checkbox(
+                    "Enable service discovery (Cloud Map DNS)",
+                    id="svc_discovery",
+                )
 
                 # --- Launch type selection ---
                 yield Label("Launch type:", classes="section-label")
@@ -191,6 +197,11 @@ class ServicesScreen(Screen):
                 "health_check_path", "/health"
             )
             self.query_one("#svc_command", Input).value = svc.get("command") or ""
+
+            # Service discovery
+            self.query_one("#svc_discovery", Checkbox).value = svc.get(
+                "enable_service_discovery", False
+            )
 
             # Launch type
             is_ec2 = svc.get("launch_type") == "ec2"
@@ -339,6 +350,9 @@ class ServicesScreen(Screen):
             "health_check_path": self.query_one("#svc_health", Input).value.strip()
             or "/health",
             "command": command,
+            "enable_service_discovery": self.query_one(
+                "#svc_discovery", Checkbox
+            ).value,
             "launch_type": launch_type,
             "ec2_instance_type": ec2_instance_type,
             "user_data_script": user_data_script,
@@ -386,6 +400,7 @@ class ServicesScreen(Screen):
         self.query_one("#svc_command", Input).value = ""
         self.query_one("#lt_fargate", RadioButton).value = True
         self.query_one("#lt_ec2", RadioButton).value = False
+        self.query_one("#svc_discovery", Checkbox).value = False
         self.query_one("#svc_ec2_instance_type", Input).value = ""
         self.query_one("#svc_user_data_script", Input).value = ""
         self._ebs_volumes = []

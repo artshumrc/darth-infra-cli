@@ -32,6 +32,7 @@ class EcsService(Construct):
         construct_id: str,
         *,
         vpc: aws_ec2.IVpc,
+        cluster: aws_ecs.Cluster,
         project_name: str,
         env_name: str,
         service_name: str,
@@ -53,6 +54,7 @@ class EcsService(Construct):
         user_data_script: str | None = None,
         ebs_volumes: list[dict[str, Any]] | None = None,
         ebs_snapshot_ids: dict[str, str] | None = None,
+        cloud_map_service_name: str | None = None,
     ) -> None:
         super().__init__(scope, construct_id)
 
@@ -67,15 +69,6 @@ class EcsService(Construct):
             log_group_name=f"/ecs/{prefix}",
             retention=aws_logs.RetentionDays.ONE_MONTH,
             removal_policy=RemovalPolicy.DESTROY,
-        )
-
-        # --- Cluster ---------------------------------------------------------
-        cluster = aws_ecs.Cluster(
-            self,
-            "Cluster",
-            vpc=vpc,
-            cluster_name=f"{project_name}-{env_name}",
-            container_insights_v2=aws_ecs.ContainerInsights.ENABLED,
         )
 
         # --- Security group --------------------------------------------------
@@ -231,7 +224,7 @@ class EcsService(Construct):
                 execution_role=execution_role,
                 task_role=task_role,
                 family=prefix,
-                network_mode=aws_ecs.NetworkMode.BRIDGE,
+                network_mode=aws_ecs.NetworkMode.AWS_VPC,
             )
 
             # Add EBS host volumes to the task definition
@@ -315,6 +308,12 @@ class EcsService(Construct):
                 )
 
         # --- ECS service -----------------------------------------------------
+        cloud_map_opts = None
+        if cloud_map_service_name:
+            cloud_map_opts = aws_ecs.CloudMapOptions(
+                name=cloud_map_service_name,
+            )
+
         if launch_type == "ec2":
             service = aws_ecs.Ec2Service(
                 self,
@@ -322,8 +321,13 @@ class EcsService(Construct):
                 cluster=cluster,
                 task_definition=task_def,
                 desired_count=desired_count,
+                security_groups=[self.task_security_group],
                 service_name=prefix,
                 enable_execute_command=enable_exec,
+                cloud_map_options=cloud_map_opts,
+                vpc_subnets=aws_ec2.SubnetSelection(
+                    subnet_type=aws_ec2.SubnetType.PRIVATE_WITH_EGRESS
+                ),
             )
         else:
             service = aws_ecs.FargateService(
@@ -336,6 +340,7 @@ class EcsService(Construct):
                 assign_public_ip=False,
                 service_name=prefix,
                 enable_execute_command=enable_exec,
+                cloud_map_options=cloud_map_opts,
                 vpc_subnets=aws_ec2.SubnetSelection(
                     subnet_type=aws_ec2.SubnetType.PRIVATE_WITH_EGRESS
                 ),

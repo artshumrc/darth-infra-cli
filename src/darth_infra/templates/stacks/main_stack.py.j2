@@ -11,7 +11,10 @@ import sys
 from pathlib import Path
 
 import boto3
-from aws_cdk import RemovalPolicy, Stack, aws_ec2, aws_ssm
+from aws_cdk import RemovalPolicy, Stack, aws_ec2, aws_ecs, aws_ssm
+{% if has_service_discovery %}
+from aws_cdk import aws_servicediscovery
+{% endif %}
 from constructs import Construct
 
 if sys.version_info >= (3, 11):
@@ -62,6 +65,7 @@ class _ServiceCfg:
     ec2_instance_type: str | None = None
     user_data_script: str | None = None
     ebs_volumes: list[dict[str, Any]] = field(default_factory=list)
+    enable_service_discovery: bool = False
 
 
 @dataclass
@@ -276,6 +280,28 @@ class MainStack(Stack):
         {% endif %}
 
         # --- ECS services ----------------------------------------------------
+        # Shared ECS cluster — exactly one per environment
+        cluster = aws_ecs.Cluster(
+            self,
+            f"Cluster-{env_name}",
+            vpc=vpc,
+            cluster_name=prefix,
+            container_insights_v2=aws_ecs.ContainerInsights.ENABLED,
+        )
+
+        {% if has_service_discovery %}
+        # Cloud Map private DNS namespace (when any service opts in)
+        _any_discovery = any(
+            s.enable_service_discovery for s in config.services
+        )
+        if _any_discovery:
+            cluster.add_default_cloud_map_namespace(
+                name="local",
+                type=aws_servicediscovery.NamespaceType.DNS_PRIVATE,
+                vpc=vpc,
+            )
+        {% endif %}
+
         {% if has_ec2 %}
         # Find EBS snapshots from prod for non-prod environments
         ebs_snapshot_map: dict[str, dict[str, str]] = {}
@@ -287,6 +313,7 @@ class MainStack(Stack):
                     )
         {% endif %}
 
+        ecs_constructs: dict[str, EcsService] = {}
         for svc in config.services:
             domain = config.domain_for(svc.name, env_name)
 
@@ -316,6 +343,7 @@ class MainStack(Stack):
                 self,
                 f"Ecs-{env_name}-{svc.name}",
                 vpc=vpc,
+                cluster=cluster,
                 project_name=config.project_name,
                 env_name=env_name,
                 service_name=svc.name,
@@ -339,13 +367,42 @@ class MainStack(Stack):
                 {% if has_ec2 %}
                 ebs_snapshot_ids=ebs_snapshot_map.get(svc.name, {}),
                 {% endif %}
+                {% if has_service_discovery %}
+                cloud_map_service_name=svc.name if svc.enable_service_discovery else None,
+                {% endif %}
             )
+
+            ecs_constructs[svc.name] = ecs_svc
 
             # Wire security groups
             {% if has_rds %}
             if rds_db and svc.name in (config.rds.expose_to if config.rds else []):
                 rds_db.allow_from(ecs_svc.task_security_group)
             {% endif %}
+
+        {% if has_service_discovery %}
+        # Inter-service security group wiring for discovery-enabled services
+        _discovery_svcs = [
+            (svc_name, svc_construct)
+            for svc_name, svc_construct in ecs_constructs.items()
+        ]
+        _discovery_names = [
+            s.name for s in config.services if s.enable_service_discovery
+        ]
+        for i, name_a in enumerate(_discovery_names):
+            for name_b in _discovery_names[i + 1:]:
+                if name_a in ecs_constructs and name_b in ecs_constructs:
+                    ecs_constructs[name_a].task_security_group.add_ingress_rule(
+                        ecs_constructs[name_b].task_security_group,
+                        aws_ec2.Port.all_tcp(),
+                        f"{name_b} -> {name_a} (service discovery)",
+                    )
+                    ecs_constructs[name_b].task_security_group.add_ingress_rule(
+                        ecs_constructs[name_a].task_security_group,
+                        aws_ec2.Port.all_tcp(),
+                        f"{name_a} -> {name_b} (service discovery)",
+                    )
+        {% endif %}
 
     {% if has_rds %}
 

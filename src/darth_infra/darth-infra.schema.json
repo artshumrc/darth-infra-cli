@@ -153,6 +153,11 @@
             "description": "Path to a shell script for EC2 user data, relative to project root.",
             "default": null
           },
+          "enable_service_discovery": {
+            "type": "boolean",
+            "description": "Register this service with Cloud Map for inter-service DNS discovery (<service-name>.local).",
+            "default": false
+          },
           "ebs_volumes": {
             "type": "array",
             "description": "EBS volumes to attach to EC2-backed ECS tasks.",

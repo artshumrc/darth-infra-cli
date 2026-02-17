@@ -122,6 +122,7 @@ def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
         ec2_instance_type=raw.get("ec2_instance_type"),
         user_data_script=raw.get("user_data_script"),
         ebs_volumes=ebs_volumes,
+        enable_service_discovery=raw.get("enable_service_discovery", False),
     )
 
 
@@ -225,6 +226,9 @@ def dump_config(config: ProjectConfig) -> str:
             for k, v in svc.environment_variables.items():
                 lines.append(f'"{k}" = "{v}"')
         lines.append(f"enable_exec = {str(svc.enable_exec).lower()}")
+        lines.append(
+            f"enable_service_discovery = {str(svc.enable_service_discovery).lower()}"
+        )
         for vol in svc.ebs_volumes:
             lines.append("")
             lines.append("[[services.ebs_volumes]]")

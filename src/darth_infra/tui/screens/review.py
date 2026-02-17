@@ -53,7 +53,10 @@ class ReviewScreen(Screen):
             lt_info = ""
             if svc.get("launch_type") == "ec2":
                 lt_info = f" [EC2: {svc.get('ec2_instance_type', '?')}]"
-            lines.append(f"  • {svc['name']}{port_info}{domain_info}{lt_info}")
+            disc_info = " [discovery]" if svc.get("enable_service_discovery") else ""
+            lines.append(
+                f"  • {svc['name']}{port_info}{domain_info}{lt_info}{disc_info}"
+            )
             if svc.get("user_data_script"):
                 lines.append(f"    User data: {svc['user_data_script']}")
             if svc.get("ebs_volumes"):
@@ -128,6 +131,7 @@ class ReviewScreen(Screen):
                     )
                     for v in svc.get("ebs_volumes", [])
                 ],
+                enable_service_discovery=svc.get("enable_service_discovery", False),
             )
             for svc in s["services"]
         ]

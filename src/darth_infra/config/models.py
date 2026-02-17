@@ -142,6 +142,8 @@ class ServiceConfig:
         ec2_instance_type: EC2 instance type (required when launch_type is "ec2").
         user_data_script: Path to a shell script for EC2 user data (optional).
         ebs_volumes: EBS volumes to attach (EC2 launch type only).
+        enable_service_discovery: Register with Cloud Map for inter-service DNS
+            discovery (``<service-name>.local``).
     """
 
     name: str
@@ -162,6 +164,7 @@ class ServiceConfig:
     ec2_instance_type: str | None = None
     user_data_script: str | None = None
     ebs_volumes: list[EbsVolumeConfig] = field(default_factory=list)
+    enable_service_discovery: bool = False
 
 
 @dataclass
