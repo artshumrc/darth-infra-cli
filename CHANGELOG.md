@@ -1,5 +1,15 @@
 # darth-infra
 
+## 0.1.0
+
+### Minor Changes
+
+- [`904788a`](https://github.com/artshumrc/darth-infra-cli/commit/904788a4c1ad912868a2036af04405a0afc9e404) Thanks [@d-flood](https://github.com/d-flood)! - Add ec2 launch type, optional service discovery, and fix critical error in environment handling
+
+### Patch Changes
+
+- [`f8fe7e3`](https://github.com/artshumrc/darth-infra-cli/commit/f8fe7e33b986d971ce5165a466233b6d72b4d442) Thanks [@d-flood](https://github.com/d-flood)! - trigger release
+
 ## 0.0.4
 
 ### Patch Changes
