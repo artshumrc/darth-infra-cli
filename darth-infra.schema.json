@@ -310,7 +310,7 @@
           },
           "source": {
             "type": "string",
-            "description": "\"generate\" to auto-create a random value per environment. \"env\" to read from the deployer's local environment.",
+            "description": "\"generate\" to auto-create a random value per environment. \"env\" to import an existing Secrets Manager secret name/ARN from the deployer's local environment variable.",
             "enum": ["generate", "env"],
             "default": "generate"
           },
@@ -322,7 +322,8 @@
           },
           "generate_once": {
             "type": "boolean",
-            "description": "If true, the value is created once per environment and reused across deploys. If false, regenerated each deploy.",
+            "description": "Currently must be true. Generated values are created once per environment and reused across deploys.",
+            "const": true,
             "default": true
           }
         }

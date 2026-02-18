@@ -38,7 +38,7 @@ def deploy(env_name: str, require_approval: str) -> None:
         f"environment [cyan]{env_name}[/cyan]...[/bold]"
     )
 
-    stack_name = f"{config.project_name}-ecs"
+    stack_name = f"{config.project_name}-ecs-{env_name}"
     rc = run_cdk(
         [
             "deploy",

@@ -15,12 +15,30 @@ env = cdk.Environment(
     region=config.aws_region,
 )
 
-stack = MainStack(app, f"{config.project_name}-ecs", config=config, env=env)
+target_env = app.node.try_get_context("target_env")
+if target_env:
+    if target_env not in config.environments:
+        raise ValueError(
+            f"Unknown target_env '{target_env}'. "
+            f"Expected one of: {', '.join(config.environments)}"
+        )
+    envs_to_deploy = [target_env]
+else:
+    envs_to_deploy = config.environments
 
-cdk.Tags.of(stack).add("project", config.project_name)
-cdk.Tags.of(stack).add("managed-by", "darth-infra")
-cdk.Tags.of(stack).add("deployment-type", "ecs")
-for key, value in config.tags.items():
-    cdk.Tags.of(stack).add(key, value)
+for env_name in envs_to_deploy:
+    stack = MainStack(
+        app,
+        f"{config.project_name}-ecs-{env_name}",
+        config=config,
+        target_env=env_name,
+        env=env,
+    )
+    cdk.Tags.of(stack).add("project", config.project_name)
+    cdk.Tags.of(stack).add("environment", env_name)
+    cdk.Tags.of(stack).add("managed-by", "darth-infra")
+    cdk.Tags.of(stack).add("deployment-type", "ecs")
+    for key, value in config.tags.items():
+        cdk.Tags.of(stack).add(key, value)
 
 app.synth()

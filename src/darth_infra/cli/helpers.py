@@ -31,7 +31,7 @@ def require_prod_deployed(config: ProjectConfig, env: str) -> None:
     if env == "prod":
         return
 
-    stack_name = f"{config.project_name}-ecs"
+    stack_name = f"{config.project_name}-ecs-prod"
     try:
         cf = boto3.client("cloudformation", region_name=config.aws_region)
         cf.describe_stacks(StackName=stack_name)

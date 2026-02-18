@@ -159,7 +159,7 @@ def load_project_config() -> ProjectConfig:
 
 
 class MainStack(Stack):
-    """Deploys all environments for **{{ project_name }}**."""
+    """Deploys one environment for **{{ project_name }}**."""
 
     def __init__(
         self,
@@ -167,6 +167,7 @@ class MainStack(Stack):
         construct_id: str,
         *,
         config: ProjectConfig,
+        target_env: str,
         **kwargs: Any,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -186,9 +187,7 @@ class MainStack(Stack):
                 service_name=svc.name,
             )
 
-        # Per-environment resources
-        for env_name in config.environments:
-            self._deploy_environment(vpc, config, env_name, ecr_repos)
+        self._deploy_environment(vpc, config, target_env, ecr_repos)
 
     # ------------------------------------------------------------------
 

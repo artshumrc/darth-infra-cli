@@ -42,7 +42,7 @@ def destroy(env_name: str, force: bool) -> None:
         f"environment [cyan]{env_name}[/cyan]...[/bold]"
     )
 
-    stack_name = f"{config.project_name}-ecs"
+    stack_name = f"{config.project_name}-ecs-{env_name}"
     rc = run_cdk(
         ["destroy", stack_name, "--force", "-c", f"target_env={env_name}"],
         project_dir,

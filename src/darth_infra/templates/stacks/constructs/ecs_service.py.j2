@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -278,15 +279,10 @@ class EcsService(Construct):
             container_kwargs["cpu"] = cpu
             container_kwargs["memory_limit_mib"] = memory_mib
 
-        container = task_def.add_container("Container", **container_kwargs)
-
         if command:
-            container.add_container_dependencies()  # no-op, just ensure order
-            # Override the entrypoint with a shell command
-            task_def_cfn = task_def.node.default_child
-            # Use command override via container definition
-            container_node = container.node.default_child
-            container.add_environment("_CMD_OVERRIDE", command)
+            container_kwargs["command"] = shlex.split(command)
+
+        container = task_def.add_container("Container", **container_kwargs)
 
         if container_port is not None:
             container.add_port_mappings(

@@ -28,6 +28,11 @@ from .models import (
 CONFIG_FILENAME = "darth-infra.toml"
 
 
+def _toml_escape(value: str) -> str:
+    """Escape a string value for safe inclusion in TOML double quotes."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def find_config(start: Path | None = None) -> Path:
     """Walk up from *start* (default: cwd) to find ``darth-infra.toml``."""
     current = (start or Path.cwd()).resolve()
@@ -221,10 +226,11 @@ def dump_config(config: ProjectConfig) -> str:
             s3_list = ", ".join(f'"{s}"' for s in svc.s3_access)
             lines.append(f"s3_access = [{s3_list}]")
         if svc.environment_variables:
-            lines.append("")
-            lines.append(f"[services.{svc.name}.environment_variables]")
-            for k, v in svc.environment_variables.items():
-                lines.append(f'"{k}" = "{v}"')
+            env_inline = ", ".join(
+                f'"{k}" = "{_toml_escape(v)}"'
+                for k, v in svc.environment_variables.items()
+            )
+            lines.append(f"environment_variables = {{ {env_inline} }}")
         lines.append(f"enable_exec = {str(svc.enable_exec).lower()}")
         lines.append(
             f"enable_service_discovery = {str(svc.enable_service_discovery).lower()}"

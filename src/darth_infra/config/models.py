@@ -34,10 +34,11 @@ class SecretConfig:
     Attributes:
         name: Environment variable name (e.g. DJANGO_SECRET_KEY).
         source: "generate" to auto-create a random value per environment,
-                "env" to read from the deployer's local environment.
+                "env" to import an existing Secrets Manager secret whose
+                name/ARN is provided in the deployer's local environment.
         length: Character length for generated secrets.
         generate_once: If True, the value is created once per environment and
-                       reused across deploys. If False, regenerated each deploy.
+                       reused across deploys.
     """
 
     name: str
@@ -252,6 +253,13 @@ class ProjectConfig:
                     raise ValueError(
                         f"RDS expose_to references unknown service '{svc_name}'"
                     )
+
+        for secret in self.secrets:
+            if secret.source == SecretSource.GENERATE and not secret.generate_once:
+                raise ValueError(
+                    f"Secret '{secret.name}' sets generate_once=false, "
+                    "which is not supported"
+                )
 
         for svc in self.services:
             for s3_name in svc.s3_access:
