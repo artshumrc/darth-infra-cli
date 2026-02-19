@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.2.0
+
+### Minor Changes
+
+- [`7aa89f1`](https://github.com/artshumrc/darth-infra-cli/commit/7aa89f101ab3cc834f77fe1704b793e7bd37232c) Thanks [@d-flood](https://github.com/d-flood)! - add architecture, ulimit config, filesystem typ, etc
+
 ## 0.1.0
 
 ### Minor Changes

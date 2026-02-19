@@ -1,6 +1,6 @@
 [project]
 name = "darth-infra"
-version = "0.1.0"
+version = "0.2.0"
 description = "A CLI tool for deploying websites to AWS ECS with multi-environment support"
 readme = "README.md"
 requires-python = ">=3.12"
