@@ -111,6 +111,7 @@ def _build_context(config: ProjectConfig) -> dict:
         "has_cloudfront": any(b.cloudfront for b in config.s3_buckets),
         "has_ec2": any(s.launch_type == LaunchType.EC2 for s in config.services),
         "has_ebs": any(s.ebs_volumes for s in config.services),
+        "has_external_images": any(s.image for s in config.services),
         "has_service_discovery": any(
             s.enable_service_discovery for s in config.services
         ),

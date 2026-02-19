@@ -31,6 +31,12 @@ def build(service_name: str | None) -> None:
             raise SystemExit(1)
 
     for svc in services:
+        if svc.image:
+            console.print(
+                f"[dim]Skipping {svc.name} — uses external image: {svc.image}[/dim]"
+            )
+            continue
+
         tag = f"{config.project_name}-{svc.name}:latest"
         console.print(f"[bold]Building {svc.name}...[/bold]")
 

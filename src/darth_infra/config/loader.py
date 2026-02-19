@@ -14,6 +14,7 @@ else:
 from .models import (
     AlbConfig,
     AlbMode,
+    Architecture,
     EbsVolumeConfig,
     EnvironmentOverride,
     LaunchType,
@@ -23,6 +24,7 @@ from .models import (
     SecretConfig,
     SecretSource,
     ServiceConfig,
+    UlimitConfig,
 )
 
 CONFIG_FILENAME = "darth-infra.toml"
@@ -105,13 +107,26 @@ def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
             mount_path=v["mount_path"],
             device_name=v.get("device_name", "/dev/xvdf"),
             volume_type=v.get("volume_type", "gp3"),
+            filesystem_type=v.get("filesystem_type", "ext4"),
         )
         for v in ebs_raw
     ]
+    ulimits_raw = raw.get("ulimits", [])
+    ulimits = [
+        UlimitConfig(
+            name=u["name"],
+            soft_limit=u["soft_limit"],
+            hard_limit=u["hard_limit"],
+        )
+        for u in ulimits_raw
+    ]
+    arch_str = raw.get("architecture")
+    architecture = Architecture(arch_str) if arch_str else None
     return ServiceConfig(
         name=raw["name"],
         dockerfile=raw.get("dockerfile", "Dockerfile"),
         build_context=raw.get("build_context", "."),
+        image=raw.get("image"),
         port=port,
         health_check_path=raw.get("health_check_path", "/health"),
         cpu=raw.get("cpu", 256),
@@ -122,9 +137,11 @@ def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
         secrets=raw.get("secrets", []),
         s3_access=raw.get("s3_access", []),
         environment_variables=raw.get("environment_variables", {}),
+        ulimits=ulimits,
         enable_exec=raw.get("enable_exec", True),
         launch_type=LaunchType(launch_type_str),
         ec2_instance_type=raw.get("ec2_instance_type"),
+        architecture=architecture,
         user_data_script=raw.get("user_data_script"),
         ebs_volumes=ebs_volumes,
         enable_service_discovery=raw.get("enable_service_discovery", False),
@@ -202,6 +219,8 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f'name = "{svc.name}"')
         lines.append(f'dockerfile = "{svc.dockerfile}"')
         lines.append(f'build_context = "{svc.build_context}"')
+        if svc.image:
+            lines.append(f'image = "{svc.image}"')
         if svc.port is not None:
             lines.append(f"port = {svc.port}")
         else:
@@ -217,6 +236,8 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f'launch_type = "{svc.launch_type.value}"')
         if svc.ec2_instance_type:
             lines.append(f'ec2_instance_type = "{svc.ec2_instance_type}"')
+        if svc.architecture:
+            lines.append(f'architecture = "{svc.architecture.value}"')
         if svc.user_data_script:
             lines.append(f'user_data_script = "{svc.user_data_script}"')
         if svc.secrets:
@@ -235,6 +256,12 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(
             f"enable_service_discovery = {str(svc.enable_service_discovery).lower()}"
         )
+        for ul in svc.ulimits:
+            lines.append("")
+            lines.append("[[services.ulimits]]")
+            lines.append(f'name = "{ul.name}"')
+            lines.append(f"soft_limit = {ul.soft_limit}")
+            lines.append(f"hard_limit = {ul.hard_limit}")
         for vol in svc.ebs_volumes:
             lines.append("")
             lines.append("[[services.ebs_volumes]]")
@@ -243,6 +270,7 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append(f'mount_path = "{vol.mount_path}"')
             lines.append(f'device_name = "{vol.device_name}"')
             lines.append(f'volume_type = "{vol.volume_type}"')
+            lines.append(f'filesystem_type = "{vol.filesystem_type}"')
         lines.append("")
 
     if config.rds:

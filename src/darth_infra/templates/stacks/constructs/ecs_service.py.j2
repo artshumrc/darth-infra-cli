@@ -37,7 +37,8 @@ class EcsService(Construct):
         project_name: str,
         env_name: str,
         service_name: str,
-        ecr_repo: aws_ecr.IRepository,
+        ecr_repo: aws_ecr.IRepository | None,
+        container_image: str | None,
         container_port: int | None,
         health_check_path: str,
         cpu: int,
@@ -49,9 +50,11 @@ class EcsService(Construct):
         secret_arns: dict[str, str],
         s3_bucket_arns: list[str],
         alb_provider: AlbProvider,
+        ulimits: list[dict[str, Any]] | None = None,
         enable_exec: bool = True,
         launch_type: str = "fargate",
         ec2_instance_type: str | None = None,
+        architecture: str | None = None,
         user_data_script: str | None = None,
         ebs_volumes: list[dict[str, Any]] | None = None,
         ebs_snapshot_ids: dict[str, str] | None = None,
@@ -62,6 +65,7 @@ class EcsService(Construct):
         prefix = f"{project_name}-{env_name}-{service_name}"
         ebs_volumes = ebs_volumes or []
         ebs_snapshot_ids = ebs_snapshot_ids or {}
+        ulimits = ulimits or []
 
         # --- Log group -------------------------------------------------------
         log_group = aws_logs.LogGroup(
@@ -179,18 +183,26 @@ class EcsService(Construct):
                     f'# Mount EBS volume: {vol["name"]}',
                     f'mkdir -p {vol["mount_path"]}',
                     f'if ! blkid {vol.get("device_name", "/dev/xvdf")}; then',
-                    f'  mkfs.ext4 {vol.get("device_name", "/dev/xvdf")}',
+                    f'  mkfs.{vol.get("filesystem_type", "ext4")} {vol.get("device_name", "/dev/xvdf")}',
                     "fi",
-                    f'{vol.get("device_name", "/dev/xvdf")} {vol["mount_path"]} ext4 defaults,nofail 0 2 | tee -a /etc/fstab',
+                    f'{vol.get("device_name", "/dev/xvdf")} {vol["mount_path"]} {vol.get("filesystem_type", "ext4")} defaults,nofail 0 2 | tee -a /etc/fstab',
                     f'mount {vol["mount_path"]}',
                 )
+
+            # Select the correct AMI based on architecture
+            if architecture == "arm64":
+                machine_image = aws_ecs.EcsOptimizedImage.amazon_linux2(
+                    hardware_type=aws_ecs.AmiHardwareType.ARM
+                )
+            else:
+                machine_image = aws_ecs.EcsOptimizedImage.amazon_linux2()
 
             asg = aws_autoscaling.AutoScalingGroup(
                 self,
                 "Asg",
                 vpc=vpc,
                 instance_type=aws_ec2.InstanceType(ec2_instance_type or "t3.medium"),
-                machine_image=aws_ecs.EcsOptimizedImage.amazon_linux2(),
+                machine_image=machine_image,
                 desired_capacity=desired_count,
                 min_capacity=desired_count,
                 max_capacity=max(desired_count * 2, 2),
@@ -262,9 +274,6 @@ class EcsService(Construct):
             )
 
         container_kwargs: dict[str, Any] = {
-            "image": aws_ecs.ContainerImage.from_ecr_repository(
-                ecr_repo, tag=f"{env_name}-latest"
-            ),
             "logging": aws_ecs.LogDrivers.aws_logs(
                 stream_prefix=service_name,
                 log_group=log_group,
@@ -273,6 +282,16 @@ class EcsService(Construct):
             "secrets": ecs_secrets,
             "container_name": service_name,
         }
+
+        # Container image: external registry or ECR
+        if container_image:
+            container_kwargs["image"] = aws_ecs.ContainerImage.from_registry(
+                container_image
+            )
+        else:
+            container_kwargs["image"] = aws_ecs.ContainerImage.from_ecr_repository(
+                ecr_repo, tag=f"{env_name}-latest"
+            )
 
         # EC2 tasks need explicit cpu/memory on the container
         if launch_type == "ec2":
@@ -283,6 +302,35 @@ class EcsService(Construct):
             container_kwargs["command"] = shlex.split(command)
 
         container = task_def.add_container("Container", **container_kwargs)
+
+        # Apply ulimits
+        for ulimit in ulimits:
+            ulimit_name_map = {
+                "core": aws_ecs.UlimitName.CORE,
+                "cpu": aws_ecs.UlimitName.CPU,
+                "data": aws_ecs.UlimitName.DATA,
+                "fsize": aws_ecs.UlimitName.FSIZE,
+                "locks": aws_ecs.UlimitName.LOCKS,
+                "memlock": aws_ecs.UlimitName.MEMLOCK,
+                "msgqueue": aws_ecs.UlimitName.MSGQUEUE,
+                "nice": aws_ecs.UlimitName.NICE,
+                "nofile": aws_ecs.UlimitName.NOFILE,
+                "nproc": aws_ecs.UlimitName.NPROC,
+                "rss": aws_ecs.UlimitName.RSS,
+                "rtprio": aws_ecs.UlimitName.RTPRIO,
+                "rttime": aws_ecs.UlimitName.RTTIME,
+                "sigpending": aws_ecs.UlimitName.SIGPENDING,
+                "stack": aws_ecs.UlimitName.STACK,
+            }
+            ecs_ulimit_name = ulimit_name_map.get(ulimit["name"])
+            if ecs_ulimit_name is not None:
+                container.add_ulimits(
+                    aws_ecs.Ulimit(
+                        name=ecs_ulimit_name,
+                        soft_limit=ulimit["soft_limit"],
+                        hard_limit=ulimit["hard_limit"],
+                    )
+                )
 
         if container_port is not None:
             container.add_port_mappings(
@@ -357,3 +405,7 @@ class EcsService(Construct):
                 health_check_path=health_check_path,
                 host_header=domain,
             )
+
+        # Expose the service and container port for external wiring
+        self.service = service
+        self.container_port = container_port

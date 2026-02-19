@@ -72,6 +72,12 @@
             "description": "Docker build context path, relative to project root.",
             "default": "."
           },
+          "image": {
+            "type": ["string", "null"],
+            "description": "External container image URI (e.g. \"docker.elastic.co/elasticsearch/elasticsearch:8.12.0\"). When set, ECR repo creation and Docker build/push are skipped.",
+            "default": null,
+            "examples": ["docker.elastic.co/elasticsearch/elasticsearch:8.12.0", "redis:7-alpine"]
+          },
           "port": {
             "type": ["integer", "null"],
             "description": "Container port exposed to the ALB. Omit or set to null for background workers.",
@@ -109,7 +115,7 @@
           },
           "domain": {
             "type": ["string", "null"],
-            "description": "Hostname for ALB host-header routing. Required when port is set.",
+            "description": "Hostname for ALB host-header routing. When port is set but domain is omitted the service is internal-only (no ALB target).",
             "default": null
           },
           "secrets": {
@@ -131,6 +137,33 @@
             "description": "Static environment variables passed to the container.",
             "additionalProperties": { "type": "string" }
           },
+          "ulimits": {
+            "type": "array",
+            "description": "Linux ulimits to set on the container.",
+            "items": {
+              "type": "object",
+              "required": ["name", "soft_limit", "hard_limit"],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Ulimit name.",
+                  "enum": ["core", "cpu", "data", "fsize", "locks", "memlock", "msgqueue", "nice", "nofile", "nproc", "rss", "rtprio", "rttime", "sigpending", "stack"]
+                },
+                "soft_limit": {
+                  "type": "integer",
+                  "description": "Soft limit value.",
+                  "minimum": 0
+                },
+                "hard_limit": {
+                  "type": "integer",
+                  "description": "Hard limit value.",
+                  "minimum": 0
+                }
+              }
+            },
+            "default": []
+          },
           "enable_exec": {
             "type": "boolean",
             "description": "Enable ECS Exec for interactive shell access.",
@@ -146,7 +179,13 @@
             "type": ["string", "null"],
             "description": "EC2 instance type (required when launch_type is \"ec2\").",
             "default": null,
-            "examples": ["t3.medium", "t3.large", "m5.large", "c5.xlarge"]
+            "examples": ["t3.medium", "t3.large", "m5.large", "c5.xlarge", "t4g.small", "m7g.medium"]
+          },
+          "architecture": {
+            "type": ["string", "null"],
+            "description": "CPU architecture — \"x86_64\" or \"arm64\". Auto-detected from ec2_instance_type when omitted.",
+            "enum": ["x86_64", "arm64", null],
+            "default": null
           },
           "user_data_script": {
             "type": ["string", "null"],
@@ -189,6 +228,12 @@
                   "description": "EBS volume type.",
                   "default": "gp3",
                   "enum": ["gp2", "gp3", "io1", "io2", "st1", "sc1"]
+                },
+                "filesystem_type": {
+                  "type": "string",
+                  "description": "Filesystem to format the volume with.",
+                  "default": "ext4",
+                  "enum": ["ext4", "xfs"]
                 }
               }
             },

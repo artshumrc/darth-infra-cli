@@ -10,6 +10,7 @@ from textual.widgets import Button, Static
 from ...config.models import (
     AlbConfig,
     AlbMode,
+    Architecture,
     EbsVolumeConfig,
     LaunchType,
     ProjectConfig,
@@ -18,6 +19,7 @@ from ...config.models import (
     SecretConfig,
     SecretSource,
     ServiceConfig,
+    UlimitConfig,
 )
 
 
@@ -54,8 +56,12 @@ class ReviewScreen(Screen):
             if svc.get("launch_type") == "ec2":
                 lt_info = f" [EC2: {svc.get('ec2_instance_type', '?')}]"
             disc_info = " [discovery]" if svc.get("enable_service_discovery") else ""
+            image_info = f" [image: {svc['image']}]" if svc.get("image") else ""
             lines.append(
-                f"  • {svc['name']}{port_info}{domain_info}{lt_info}{disc_info}"
+                f"  • {svc['name']}{port_info}{domain_info}{lt_info}{disc_info}{image_info}"
+            )
+            lines.append(
+                f"    CPU: {svc.get('cpu', 256)} | Memory: {svc.get('memory_mib', 512)} MiB"
             )
             if svc.get("user_data_script"):
                 lines.append(f"    User data: {svc['user_data_script']}")
@@ -63,7 +69,14 @@ class ReviewScreen(Screen):
                 for vol in svc["ebs_volumes"]:
                     lines.append(
                         f"    EBS: {vol['name']} "
-                        f"({vol['size_gb']}G → {vol['mount_path']})"
+                        f"({vol['size_gb']}G → {vol['mount_path']}, "
+                        f"{vol.get('filesystem_type', 'ext4')})"
+                    )
+            if svc.get("ulimits"):
+                for ul in svc["ulimits"]:
+                    lines.append(
+                        f"    Ulimit: {ul['name']} "
+                        f"(soft={ul['soft_limit']}, hard={ul['hard_limit']})"
                     )
 
         if s.get("rds"):
@@ -114,9 +127,12 @@ class ReviewScreen(Screen):
                 name=svc["name"],
                 dockerfile=svc.get("dockerfile", "Dockerfile"),
                 build_context=svc.get("build_context", "."),
+                image=svc.get("image"),
                 port=svc.get("port"),
                 domain=svc.get("domain"),
                 health_check_path=svc.get("health_check_path", "/health"),
+                cpu=svc.get("cpu", 256),
+                memory_mib=svc.get("memory_mib", 512),
                 command=svc.get("command"),
                 launch_type=LaunchType(svc.get("launch_type", "fargate")),
                 ec2_instance_type=svc.get("ec2_instance_type"),
@@ -128,8 +144,17 @@ class ReviewScreen(Screen):
                         mount_path=v["mount_path"],
                         device_name=v.get("device_name", "/dev/xvdf"),
                         volume_type=v.get("volume_type", "gp3"),
+                        filesystem_type=v.get("filesystem_type", "ext4"),
                     )
                     for v in svc.get("ebs_volumes", [])
+                ],
+                ulimits=[
+                    UlimitConfig(
+                        name=u["name"],
+                        soft_limit=u["soft_limit"],
+                        hard_limit=u["hard_limit"],
+                    )
+                    for u in svc.get("ulimits", [])
                 ],
                 enable_service_discovery=svc.get("enable_service_discovery", False),
             )

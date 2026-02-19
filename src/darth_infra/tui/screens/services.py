@@ -27,6 +27,8 @@ class ServicesScreen(Screen):
         self._editing_index: int | None = None
         self._ebs_volumes: list[dict] = []
         self._editing_ebs_index: int | None = None
+        self._ulimits: list[dict] = []
+        self._editing_ulimit_index: int | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="screen-layout"):
@@ -48,6 +50,15 @@ class ServicesScreen(Screen):
                 yield Input(placeholder=".", id="svc_context", value=".")
 
                 yield Label(
+                    "External image (leave empty to build from Dockerfile):",
+                    classes="section-label",
+                )
+                yield Input(
+                    placeholder="docker.elastic.co/elasticsearch/elasticsearch:8.12.0",
+                    id="svc_image",
+                )
+
+                yield Label(
                     "Container port (leave empty for workers):",
                     classes="section-label",
                 )
@@ -60,6 +71,12 @@ class ServicesScreen(Screen):
 
                 yield Label("Health check path:", classes="section-label")
                 yield Input(placeholder="/health", id="svc_health", value="/health")
+
+                yield Label("CPU units:", classes="section-label")
+                yield Input(placeholder="256", id="svc_cpu", value="256")
+
+                yield Label("Memory (MiB):", classes="section-label")
+                yield Input(placeholder="512", id="svc_memory", value="512")
 
                 yield Label("Command override (optional):", classes="section-label")
                 yield Input(placeholder="", id="svc_command")
@@ -89,6 +106,25 @@ class ServicesScreen(Screen):
                         id="svc_user_data_script",
                     )
 
+                    # --- Ulimits sub-section ---
+                    yield Static("Container Ulimits", classes="title")
+                    yield ListView(id="ulimit-list")
+
+                    yield Label("Ulimit name:", classes="section-label")
+                    yield Input(placeholder="nofile", id="ulimit_name")
+
+                    yield Label("Soft limit:", classes="section-label")
+                    yield Input(placeholder="65536", id="ulimit_soft")
+
+                    yield Label("Hard limit:", classes="section-label")
+                    yield Input(placeholder="65536", id="ulimit_hard")
+
+                    with Horizontal(classes="button-row"):
+                        yield Button("+ Add Ulimit", id="ulimit_add", variant="success")
+                        yield Button(
+                            "Remove Ulimit", id="ulimit_remove", variant="error"
+                        )
+
                     # --- EBS volumes sub-section ---
                     yield Static("EBS Volumes", classes="title")
                     yield ListView(id="ebs-list")
@@ -109,6 +145,13 @@ class ServicesScreen(Screen):
                         value="/dev/xvdf",
                     )
 
+                    yield Label("Filesystem type:", classes="section-label")
+                    yield Input(
+                        placeholder="ext4",
+                        id="ebs_fs_type",
+                        value="ext4",
+                    )
+
                     with Horizontal(classes="button-row"):
                         yield Button("+ Add Volume", id="ebs_add", variant="success")
                         yield Button("Remove Volume", id="ebs_remove", variant="error")
@@ -124,6 +167,7 @@ class ServicesScreen(Screen):
         self._refresh_sidebar()
         self._update_mode()
         self._toggle_ec2_fields()
+        self._refresh_ulimit_sidebar()
 
     def _refresh_sidebar(self) -> None:
         """Rebuild the sidebar list from current state."""
@@ -143,6 +187,19 @@ class ServicesScreen(Screen):
             lv.append(
                 ListItem(
                     Static(f"{vol['name']} ({vol['size_gb']}G → {vol['mount_path']})")
+                )
+            )
+
+    def _refresh_ulimit_sidebar(self) -> None:
+        """Rebuild the ulimit list."""
+        lv = self.query_one("#ulimit-list", ListView)
+        lv.clear()
+        for ul in self._ulimits:
+            lv.append(
+                ListItem(
+                    Static(
+                        f"{ul['name']} (soft={ul['soft_limit']}, hard={ul['hard_limit']})"
+                    )
                 )
             )
 
@@ -177,6 +234,23 @@ class ServicesScreen(Screen):
                 self.query_one("#ebs_device", Input).value = vol.get(
                     "device_name", "/dev/xvdf"
                 )
+                self.query_one("#ebs_fs_type", Input).value = vol.get(
+                    "filesystem_type", "ext4"
+                )
+            return
+
+        if event.list_view.id == "ulimit-list":
+            idx = event.list_view.index
+            if idx is not None and idx < len(self._ulimits):
+                self._editing_ulimit_index = idx
+                ul = self._ulimits[idx]
+                self.query_one("#ulimit_name", Input).value = ul.get("name", "")
+                self.query_one("#ulimit_soft", Input).value = str(
+                    ul.get("soft_limit", "")
+                )
+                self.query_one("#ulimit_hard", Input).value = str(
+                    ul.get("hard_limit", "")
+                )
             return
 
         idx = event.list_view.index
@@ -196,7 +270,10 @@ class ServicesScreen(Screen):
             self.query_one("#svc_health", Input).value = svc.get(
                 "health_check_path", "/health"
             )
+            self.query_one("#svc_cpu", Input).value = str(svc.get("cpu", 256))
+            self.query_one("#svc_memory", Input).value = str(svc.get("memory_mib", 512))
             self.query_one("#svc_command", Input).value = svc.get("command") or ""
+            self.query_one("#svc_image", Input).value = svc.get("image") or ""
 
             # Service discovery
             self.query_one("#svc_discovery", Checkbox).value = svc.get(
@@ -222,6 +299,11 @@ class ServicesScreen(Screen):
             self._editing_ebs_index = None
             self._refresh_ebs_sidebar()
 
+            # Ulimits
+            self._ulimits = [dict(u) for u in svc.get("ulimits", [])]
+            self._editing_ulimit_index = None
+            self._refresh_ulimit_sidebar()
+
             self._update_mode()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -237,6 +319,10 @@ class ServicesScreen(Screen):
             self._add_ebs_volume()
         elif event.button.id == "ebs_remove":
             self._remove_ebs_volume()
+        elif event.button.id == "ulimit_add":
+            self._add_ulimit()
+        elif event.button.id == "ulimit_remove":
+            self._remove_ulimit()
         elif event.button.id == "next":
             name = self.query_one("#svc_name", Input).value.strip()
             if name and self._editing_index is None:
@@ -271,6 +357,8 @@ class ServicesScreen(Screen):
             "mount_path": mount,
             "device_name": device,
             "volume_type": "gp3",
+            "filesystem_type": self.query_one("#ebs_fs_type", Input).value.strip()
+            or "ext4",
         }
 
         if self._editing_ebs_index is not None:
@@ -299,7 +387,61 @@ class ServicesScreen(Screen):
         self.query_one("#ebs_size", Input).value = ""
         self.query_one("#ebs_mount", Input).value = ""
         self.query_one("#ebs_device", Input).value = "/dev/xvdf"
+        self.query_one("#ebs_fs_type", Input).value = "ext4"
         self._editing_ebs_index = None
+
+    def _add_ulimit(self) -> None:
+        """Add a ulimit to the current service being edited."""
+        name = self.query_one("#ulimit_name", Input).value.strip()
+        soft_str = self.query_one("#ulimit_soft", Input).value.strip()
+        hard_str = self.query_one("#ulimit_hard", Input).value.strip()
+
+        if not name or not soft_str or not hard_str:
+            self.notify(
+                "Ulimit name, soft limit, and hard limit are required",
+                severity="error",
+            )
+            return
+
+        try:
+            soft_limit = int(soft_str)
+            hard_limit = int(hard_str)
+        except ValueError:
+            self.notify("Limits must be integers", severity="error")
+            return
+
+        ul = {
+            "name": name,
+            "soft_limit": soft_limit,
+            "hard_limit": hard_limit,
+        }
+
+        if self._editing_ulimit_index is not None:
+            self._ulimits[self._editing_ulimit_index] = ul
+            self._editing_ulimit_index = None
+        else:
+            self._ulimits.append(ul)
+
+        self._clear_ulimit_form()
+        self._refresh_ulimit_sidebar()
+        self.notify(f"Added ulimit '{name}'")
+
+    def _remove_ulimit(self) -> None:
+        """Remove the selected ulimit."""
+        if self._editing_ulimit_index is not None:
+            name = self._ulimits[self._editing_ulimit_index]["name"]
+            del self._ulimits[self._editing_ulimit_index]
+            self._editing_ulimit_index = None
+            self._clear_ulimit_form()
+            self._refresh_ulimit_sidebar()
+            self.notify(f"Removed ulimit '{name}'")
+
+    def _clear_ulimit_form(self) -> None:
+        """Reset ulimit form fields."""
+        self.query_one("#ulimit_name", Input).value = ""
+        self.query_one("#ulimit_soft", Input).value = ""
+        self.query_one("#ulimit_hard", Input).value = ""
+        self._editing_ulimit_index = None
 
     def _read_form(self) -> dict | None:
         """Read and validate the form fields."""
@@ -312,9 +454,20 @@ class ServicesScreen(Screen):
         port = int(port_str) if port_str else None
         domain = self.query_one("#svc_domain", Input).value.strip() or None
         command = self.query_one("#svc_command", Input).value.strip() or None
+        image = self.query_one("#svc_image", Input).value.strip() or None
 
-        if port is not None and not domain:
-            self.notify("Domain is required when port is set", severity="error")
+        cpu_str = self.query_one("#svc_cpu", Input).value.strip()
+        try:
+            cpu = int(cpu_str) if cpu_str else 256
+        except ValueError:
+            self.notify("CPU must be an integer", severity="error")
+            return None
+
+        memory_str = self.query_one("#svc_memory", Input).value.strip()
+        try:
+            memory_mib = int(memory_str) if memory_str else 512
+        except ValueError:
+            self.notify("Memory must be an integer", severity="error")
             return None
 
         # Launch type
@@ -340,15 +493,20 @@ class ServicesScreen(Screen):
             )
             ebs_volumes = list(self._ebs_volumes)
 
+        ulimits = list(self._ulimits)
+
         return {
             "name": name,
             "dockerfile": self.query_one("#svc_dockerfile", Input).value.strip()
             or "Dockerfile",
             "build_context": self.query_one("#svc_context", Input).value.strip() or ".",
+            "image": image,
             "port": port,
             "domain": domain,
             "health_check_path": self.query_one("#svc_health", Input).value.strip()
             or "/health",
+            "cpu": cpu,
+            "memory_mib": memory_mib,
             "command": command,
             "enable_service_discovery": self.query_one(
                 "#svc_discovery", Checkbox
@@ -357,6 +515,7 @@ class ServicesScreen(Screen):
             "ec2_instance_type": ec2_instance_type,
             "user_data_script": user_data_script,
             "ebs_volumes": ebs_volumes,
+            "ulimits": ulimits,
         }
 
     def _add_service(self) -> None:
@@ -397,7 +556,10 @@ class ServicesScreen(Screen):
         self.query_one("#svc_port", Input).value = "8000"
         self.query_one("#svc_domain", Input).value = ""
         self.query_one("#svc_health", Input).value = "/health"
+        self.query_one("#svc_cpu", Input).value = "256"
+        self.query_one("#svc_memory", Input).value = "512"
         self.query_one("#svc_command", Input).value = ""
+        self.query_one("#svc_image", Input).value = ""
         self.query_one("#lt_fargate", RadioButton).value = True
         self.query_one("#lt_ec2", RadioButton).value = False
         self.query_one("#svc_discovery", Checkbox).value = False
@@ -407,5 +569,9 @@ class ServicesScreen(Screen):
         self._editing_ebs_index = None
         self._clear_ebs_form()
         self._refresh_ebs_sidebar()
+        self._ulimits = []
+        self._editing_ulimit_index = None
+        self._clear_ulimit_form()
+        self._refresh_ulimit_sidebar()
         self._toggle_ec2_fields()
         self._update_mode()

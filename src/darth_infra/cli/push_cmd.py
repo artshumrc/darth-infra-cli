@@ -50,6 +50,12 @@ def push(env_name: str, service_name: str | None) -> None:
         raise SystemExit(1)
 
     for svc in services:
+        if svc.image:
+            console.print(
+                f"[dim]Skipping {svc.name} — uses external image: {svc.image}[/dim]"
+            )
+            continue
+
         local_tag = f"{config.project_name}-{svc.name}:latest"
         ecr_repo = f"{registry}/{config.project_name}/{svc.name}"
         remote_tag = f"{ecr_repo}:{env_name}-latest"

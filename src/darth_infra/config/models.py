@@ -27,6 +27,47 @@ class LaunchType(str, Enum):
     EC2 = "ec2"
 
 
+class Architecture(str, Enum):
+    """CPU architecture for EC2-backed ECS tasks."""
+
+    X86_64 = "x86_64"
+    ARM64 = "arm64"
+
+
+# Graviton / ARM-based instance type prefixes
+_ARM_PREFIXES = (
+    "a1",
+    "t4g",
+    "m6g",
+    "m6gd",
+    "m7g",
+    "m7gd",
+    "c6g",
+    "c6gd",
+    "c6gn",
+    "c7g",
+    "c7gd",
+    "c7gn",
+    "r6g",
+    "r6gd",
+    "r7g",
+    "r7gd",
+    "x2gd",
+    "im4gn",
+    "is4gen",
+    "g5g",
+    "hpc7g",
+)
+
+
+def detect_architecture(instance_type: str) -> Architecture:
+    """Infer CPU architecture from an EC2 instance type string."""
+    family = instance_type.split(".")[0]
+    if family in _ARM_PREFIXES:
+        return Architecture.ARM64
+    return Architecture.X86_64
+
+
 @dataclass
 class SecretConfig:
     """A secret to inject into containers as an environment variable.
@@ -86,6 +127,21 @@ class RdsConfig:
 
 
 @dataclass
+class UlimitConfig:
+    """A Linux ulimit to set on the container.
+
+    Attributes:
+        name: Ulimit name (e.g. "nofile", "memlock").
+        soft_limit: Soft limit value.
+        hard_limit: Hard limit value.
+    """
+
+    name: str
+    soft_limit: int
+    hard_limit: int
+
+
+@dataclass
 class EbsVolumeConfig:
     """An EBS volume to attach to an EC2-backed ECS task.
 
@@ -95,6 +151,7 @@ class EbsVolumeConfig:
         mount_path: Container filesystem mount path (e.g. "/data").
         device_name: Linux block device name (e.g. "/dev/xvdf").
         volume_type: EBS volume type.
+        filesystem_type: Filesystem to format the volume with (e.g. "ext4", "xfs").
     """
 
     name: str
@@ -102,6 +159,7 @@ class EbsVolumeConfig:
     mount_path: str
     device_name: str = "/dev/xvdf"
     volume_type: str = "gp3"
+    filesystem_type: str = "ext4"
 
 
 @dataclass
@@ -128,19 +186,25 @@ class ServiceConfig:
         name: Logical service name (e.g. "django", "celery-worker").
         dockerfile: Path to the Dockerfile, relative to project root.
         build_context: Docker build context path, relative to project root.
+        image: External container image URI (e.g. "docker.elastic.co/...:8.12.0").
+            When set, ECR repo creation and Docker build/push are skipped.
         port: Container port exposed to the ALB. None for background workers.
         health_check_path: ALB health check endpoint.
         cpu: Task CPU units. Fargate supports 256-4096; EC2 is unconstrained.
         memory_mib: Task memory in MiB.
         desired_count: Number of running tasks.
         command: Override the container CMD.
-        domain: Hostname for ALB host-header routing. Required when port is set.
+        domain: Hostname for ALB host-header routing. When port is set but domain
+            is omitted the service is internal-only (no ALB target).
         secrets: Names of ``SecretConfig`` entries to inject into this container.
         s3_access: Names of ``S3BucketConfig`` entries to grant read/write.
         environment_variables: Static env vars passed to the container.
+        ulimits: Linux ulimits to set on the container (e.g. nofile).
         enable_exec: Enable ECS Exec for interactive shell access.
         launch_type: ECS launch type — "fargate" or "ec2".
         ec2_instance_type: EC2 instance type (required when launch_type is "ec2").
+        architecture: CPU architecture — "x86_64" or "arm64". Auto-detected from
+            ec2_instance_type when omitted.
         user_data_script: Path to a shell script for EC2 user data (optional).
         ebs_volumes: EBS volumes to attach (EC2 launch type only).
         enable_service_discovery: Register with Cloud Map for inter-service DNS
@@ -150,6 +214,7 @@ class ServiceConfig:
     name: str
     dockerfile: str = "Dockerfile"
     build_context: str = "."
+    image: str | None = None
     port: int | None = 8000
     health_check_path: str = "/health"
     cpu: int = 256
@@ -160,9 +225,11 @@ class ServiceConfig:
     secrets: list[str] = field(default_factory=list)
     s3_access: list[str] = field(default_factory=list)
     environment_variables: dict[str, str] = field(default_factory=dict)
+    ulimits: list[UlimitConfig] = field(default_factory=list)
     enable_exec: bool = True
     launch_type: LaunchType = LaunchType.FARGATE
     ec2_instance_type: str | None = None
+    architecture: Architecture | None = None
     user_data_script: str | None = None
     ebs_volumes: list[EbsVolumeConfig] = field(default_factory=list)
     enable_service_discovery: bool = False
@@ -227,11 +294,6 @@ class ProjectConfig:
             raise ValueError("Service names must be unique")
 
         for svc in self.services:
-            if svc.port is not None and svc.domain is None:
-                raise ValueError(
-                    f"Service '{svc.name}' exposes port {svc.port} "
-                    f"but has no domain configured"
-                )
             if svc.launch_type == LaunchType.EC2 and not svc.ec2_instance_type:
                 raise ValueError(
                     f"Service '{svc.name}' uses EC2 launch type "
@@ -242,6 +304,14 @@ class ProjectConfig:
                     f"Service '{svc.name}' uses Fargate launch type "
                     f"but has ebs_volumes configured (EBS is EC2-only)"
                 )
+
+            # Auto-detect architecture from instance type when not set
+            if (
+                svc.launch_type == LaunchType.EC2
+                and svc.ec2_instance_type
+                and svc.architecture is None
+            ):
+                svc.architecture = detect_architecture(svc.ec2_instance_type)
 
         bucket_names = [b.name for b in self.s3_buckets]
         if len(bucket_names) != len(set(bucket_names)):

@@ -50,6 +50,7 @@ class _ServiceCfg:
     name: str
     dockerfile: str = "Dockerfile"
     build_context: str = "."
+    image: str | None = None
     port: int | None = 8000
     health_check_path: str = "/health"
     cpu: int = 256
@@ -60,9 +61,11 @@ class _ServiceCfg:
     secrets: list[str] = field(default_factory=list)
     s3_access: list[str] = field(default_factory=list)
     environment_variables: dict[str, str] = field(default_factory=dict)
+    ulimits: list[dict[str, Any]] = field(default_factory=list)
     enable_exec: bool = True
     launch_type: str = "fargate"
     ec2_instance_type: str | None = None
+    architecture: str | None = None
     user_data_script: str | None = None
     ebs_volumes: list[dict[str, Any]] = field(default_factory=list)
     enable_service_discovery: bool = False
@@ -178,14 +181,16 @@ class MainStack(Stack):
         )
 
         # ECR repositories — shared across environments (one per service)
+        # Services with an external image skip ECR repo creation.
         ecr_repos: dict[str, EcrRepository] = {}
         for svc in config.services:
-            ecr_repos[svc.name] = EcrRepository(
-                self,
-                f"Ecr-{svc.name}",
-                project_name=config.project_name,
-                service_name=svc.name,
-            )
+            if not svc.image:
+                ecr_repos[svc.name] = EcrRepository(
+                    self,
+                    f"Ecr-{svc.name}",
+                    project_name=config.project_name,
+                    service_name=svc.name,
+                )
 
         self._deploy_environment(vpc, config, target_env, ecr_repos)
 
@@ -346,7 +351,8 @@ class MainStack(Stack):
                 project_name=config.project_name,
                 env_name=env_name,
                 service_name=svc.name,
-                ecr_repo=ecr_repos[svc.name].repository,
+                ecr_repo=ecr_repos[svc.name].repository if svc.name in ecr_repos else None,
+                container_image=svc.image,
                 container_port=svc.port,
                 health_check_path=svc.health_check_path,
                 cpu=svc.cpu,
@@ -358,9 +364,11 @@ class MainStack(Stack):
                 secret_arns={**secrets_provider.get_arns_for(svc.secrets), **db_secret_arns},
                 s3_bucket_arns=s3_bucket_arns,
                 alb_provider=alb_provider,
+                ulimits=svc.ulimits,
                 enable_exec=svc.enable_exec,
                 launch_type=svc.launch_type,
                 ec2_instance_type=self._resolve_ec2_instance_type(config, svc.name, env_name),
+                architecture=svc.architecture,
                 user_data_script=svc.user_data_script,
                 ebs_volumes=svc.ebs_volumes,
                 {% if has_ec2 %}
