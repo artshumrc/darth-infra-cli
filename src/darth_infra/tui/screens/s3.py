@@ -7,6 +7,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, ListItem, ListView, Static, Switch
 
+from ..step_rail import StepRail
+
 
 class S3Screen(Screen):
     """Optional: configure S3 buckets."""
@@ -16,36 +18,66 @@ class S3Screen(Screen):
         self._state = state
         self._editing_index: int | None = None
 
+    def _draft(self) -> dict:
+        d = self._state.setdefault("_wizard_draft", {})
+        return d.setdefault("s3", {})
+
     def compose(self) -> ComposeResult:
+        draft = self._draft()
         with Horizontal(classes="screen-layout"):
             with Vertical(classes="sidebar"):
                 yield Static("Added Buckets", classes="title")
                 yield ListView(id="item-list")
             with VerticalScroll(classes="form-container"):
+                yield StepRail("s3")
                 yield Static("S3 Bucket Details (Optional)", classes="title")
 
                 yield Label("Bucket name (logical):", classes="section-label")
-                yield Input(placeholder="media", id="bucket_name")
+                yield Input(
+                    placeholder="media",
+                    id="bucket_name",
+                    value=str(draft.get("bucket_name", "")),
+                )
 
                 yield Label("Enable CloudFront?", classes="section-label")
-                yield Switch(id="bucket_cf", value=False)
+                yield Switch(id="bucket_cf", value=bool(draft.get("bucket_cf", False)))
 
                 yield Label("Enable CORS?", classes="section-label")
-                yield Switch(id="bucket_cors", value=False)
+                yield Switch(
+                    id="bucket_cors",
+                    value=bool(draft.get("bucket_cors", False)),
+                )
 
                 yield Label("Public read?", classes="section-label")
-                yield Switch(id="bucket_public", value=False)
+                yield Switch(
+                    id="bucket_public",
+                    value=bool(draft.get("bucket_public", False)),
+                )
 
                 with Vertical(classes="button-row"):
-                    yield Button("← Back", id="back", variant="default")
                     yield Button("+ Add", id="add", variant="success")
                     yield Button("Update", id="save", variant="success")
                     yield Button("Remove", id="remove", variant="error")
-                    yield Button("Next →", id="next", variant="primary")
 
     def on_mount(self) -> None:
         self._refresh_sidebar()
         self._update_mode()
+
+    def _capture_draft(self) -> None:
+        self._draft().update(
+            {
+                "bucket_name": self.query_one("#bucket_name", Input).value,
+                "bucket_cf": self.query_one("#bucket_cf", Switch).value,
+                "bucket_cors": self.query_one("#bucket_cors", Switch).value,
+                "bucket_public": self.query_one("#bucket_public", Switch).value,
+            }
+        )
+
+    def on_input_changed(self, _event: Input.Changed) -> None:
+        self._capture_draft()
+
+    def on_switch_changed(self, _event: Switch.Changed) -> None:
+        self._capture_draft()
 
     def _refresh_sidebar(self) -> None:
         """Rebuild the sidebar list from current state."""
@@ -77,7 +109,12 @@ class S3Screen(Screen):
             self._update_mode()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id.startswith("step_nav_"):
+            target = event.button.id.replace("step_nav_", "", 1)
+            self.app.go_to_step(target)
+            return
         if event.button.id == "back":
+            self._state["_wizard_last_screen"] = "rds"
             self.app.pop_screen()
         elif event.button.id == "add":
             self._add_bucket()
@@ -86,10 +123,18 @@ class S3Screen(Screen):
         elif event.button.id == "remove":
             self._remove_bucket()
         elif event.button.id == "next":
-            name = self.query_one("#bucket_name", Input).value.strip()
-            if name and self._editing_index is None:
-                self._add_bucket()
-            self.app.advance_to("alb")
+            self._persist_for_navigation()
+            self.app.advance_to("secrets")
+
+    def before_step_navigation(self, _target: str) -> bool:
+        self._persist_for_navigation()
+        return True
+
+    def _persist_for_navigation(self) -> None:
+        self._capture_draft()
+        name = self.query_one("#bucket_name", Input).value.strip()
+        if name and self._editing_index is None:
+            self._add_bucket()
 
     def _read_form(self) -> dict | None:
         """Read and validate the form fields."""

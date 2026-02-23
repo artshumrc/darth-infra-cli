@@ -14,8 +14,14 @@ uv tool install .
 # Interactive project setup
 darth-infra init
 
+# Resume a previously cancelled/incomplete wizard session
+darth-infra init --seed wizard-export.json
+
 # Deploy production
 darth-infra deploy --env prod
+
+# Regenerate CloudFormation templates from darth-infra.toml (no deploy)
+darth-infra render
 
 # Deploy a feature environment
 darth-infra deploy --env feature-xyz
@@ -27,6 +33,7 @@ darth-infra push --env prod
 # Operations
 darth-infra logs django --env prod -f
 darth-infra exec django --env prod
+darth-infra secret DJANGO_SECRET_KEY --env prod
 darth-infra status --env prod
 darth-infra destroy --env dev
 ```
@@ -35,15 +42,15 @@ darth-infra destroy --env dev
 
 1. **`darth-infra init`** — Interactive Textual TUI that walks you through project setup:
    - Project name, region, VPC
-   - ECS services (name, Dockerfile, port, domain)
+   - ECS services (name, Dockerfile, port)
    - Optional RDS PostgreSQL database
    - Optional S3 buckets (with optional CloudFront)
-   - ALB mode (shared or dedicated)
+   - ALB mode and cluster routing (shared or dedicated)
    - Secrets management (auto-generated or from env vars)
 
-2. The TUI scaffolds a **complete CDK Python project** that you own and can customize.
+2. The TUI scaffolds a **complete CloudFormation YAML project** that you own and can customize.
 
-3. **`darth-infra deploy --env <name>`** deploys via CDK under the hood. Prod must be deployed first.
+3. **`darth-infra deploy --env <name>`** deploys via CloudFormation change sets. Prod must be deployed first.
 
 4. Adding a new environment is as simple as editing `darth-infra.toml`:
    ```toml
@@ -56,7 +63,11 @@ darth-infra destroy --env dev
    - Clone RDS from the latest prod snapshot
    - Create fresh S3 buckets with the same config
    - Generate new secrets
-   - Get environment-prefixed domains (e.g., `dev-myapp.example.com`)
+   - Get environment-prefixed subdomains (e.g., `dev.myapp.example.com`)
+
+The interactive wizard always writes a raw draft/export file (`wizard-export.json` by default),
+including incomplete values, so sessions can be resumed later.
+Full wizard answers (including incomplete draft values) live in `wizard-export.json`.
 
 ## Configuration
 
@@ -73,7 +84,6 @@ environments = ["prod", "dev"]
 name = "django"
 dockerfile = "Dockerfile"
 port = 8000
-domain = "myapp.example.com"
 secrets = ["DJANGO_SECRET_KEY"]
 s3_access = ["media"]
 
@@ -88,6 +98,9 @@ cloudfront = true
 
 [alb]
 mode = "shared"
+domain = "myapp.example.com"
+default_target_service = "django"
+default_listener_priority = 100
 
 [[secrets]]
 name = "DJANGO_SECRET_KEY"
@@ -101,19 +114,13 @@ Each scaffolded project contains:
 ```
 my-webapp-infra/
   darth-infra.toml        # Config (source of truth)
-  app.py                  # CDK app entrypoint
-  cdk.json                # CDK config (uses uv run)
-  pyproject.toml           # CDK project dependencies
-  stacks/
-    main_stack.py          # Orchestrator: loops envs, creates constructs
-    constructs/
-      ecs_service.py       # Fargate service + ALB integration
-      rds_database.py      # PostgreSQL RDS (optional)
-      s3_bucket.py         # S3 buckets (optional)
-      cloudfront_distribution.py  # CloudFront for S3 (optional)
-      ecr_repository.py    # ECR repos (shared across envs)
-      alb.py               # ALB shared lookup or dedicated
-      secrets.py           # Secrets Manager integration
+  templates/
+    generated/
+      root.yaml            # Regenerated from TOML
+      services/
+        <service>.yaml     # Regenerated service templates
+    custom/
+      overrides.yaml       # User-owned CFN overrides (not overwritten)
 ```
 
 ## Contributing

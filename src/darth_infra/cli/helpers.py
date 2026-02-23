@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -41,14 +40,6 @@ def require_prod_deployed(config: ProjectConfig, env: str) -> None:
             f"deploying '{env}'. Run: darth-infra deploy --env prod[/red]"
         )
         sys.exit(1)
-
-
-def run_cdk(args: list[str], project_dir: Path) -> int:
-    """Run a CDK command inside the project directory."""
-    cmd = ["uv", "run", "cdk", *args]
-    console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
-    result = subprocess.run(cmd, cwd=str(project_dir))
-    return result.returncode
 
 
 def get_cluster_name(project_name: str, env: str) -> str:

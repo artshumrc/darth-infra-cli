@@ -1,0 +1,245 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: darth-infra root stack for {{ project_name }}
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: {{ project_name }}
+  EnvironmentName:
+    Type: String
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  VpcCidr:
+    Type: String
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+  PublicSubnetIds:
+    Type: CommaDelimitedList
+  AlbMode:
+    Type: String
+    AllowedValues: [shared, dedicated]
+    Default: {{ alb.mode.value }}
+  SharedAlbListenerArn:
+    Type: String
+    Default: ''
+  SharedAlbSecurityGroupId:
+    Type: String
+    Default: ''
+  CertificateArn:
+    Type: String
+    Default: '{{ alb.certificate_arn or "" }}'
+  ClusterDomain:
+    Type: String
+    Default: '{{ alb.domain or "" }}'
+{% if has_rds %}
+  RdsSnapshotIdentifier:
+    Type: String
+    Default: ''
+  RdsInstanceType:
+    Type: String
+    Default: {{ rds.instance_type }}
+{% endif %}
+{% for secret in secrets if secret.source.value == 'env' %}
+  EnvSecretArn{{ secret.name | replace('_', '') | replace('-', '') }}:
+    Type: String
+{% endfor %}
+
+Conditions:
+  IsProd: !Equals [!Ref EnvironmentName, prod]
+  UseDedicatedAlb: !Equals [!Ref AlbMode, dedicated]
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
+{% if has_rds %}
+  HasRdsSnapshot: !Not [!Equals [!Ref RdsSnapshotIdentifier, '']]
+{% endif %}
+
+Resources:
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${ProjectName}-${EnvironmentName}'
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+{% if has_service_discovery %}
+  ServiceNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: local
+      Vpc: !Ref VpcId
+{% endif %}
+
+  DedicatedAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Condition: UseDedicatedAlb
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-alb'
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref DedicatedAlbSecurityGroup
+      Subnets: !Ref PublicSubnetIds
+      Type: application
+
+  DedicatedAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: UseDedicatedAlb
+    Properties:
+      GroupDescription: !Sub '${ProjectName}-${EnvironmentName} alb'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  DedicatedAlbListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: UseDedicatedAlb
+    Properties:
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: '404'
+            ContentType: text/plain
+            MessageBody: Not Found
+      LoadBalancerArn: !Ref DedicatedAlb
+      Port: 80
+      Protocol: HTTP
+
+{% for secret in secrets if secret.source.value == 'generate' %}
+  Secret{{ secret.name | replace('_', '') | replace('-', '') }}:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-{{ secret.name.lower().replace('_', '-') }}'
+      GenerateSecretString:
+        PasswordLength: {{ secret.length }}
+        ExcludePunctuation: true
+{% endfor %}
+
+{% if has_s3 %}
+{% for b in s3_buckets %}
+  Bucket{{ b.name | replace('-', '') }}:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-${EnvironmentName}-{{ b.name }}'
+{% if b.cors %}
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT, POST, DELETE, HEAD]
+            AllowedOrigins: ['*']
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if has_cloudfront %}
+{% for b in s3_buckets if b.cloudfront %}
+  CloudFront{{ b.name | replace('-', '') }}:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Origins:
+          - DomainName: !GetAtt Bucket{{ b.name | replace('-', '') }}.RegionalDomainName
+            Id: S3{{ b.name | replace('-', '') }}Origin
+            S3OriginConfig: {}
+        DefaultCacheBehavior:
+          TargetOriginId: S3{{ b.name | replace('-', '') }}Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        PriceClass: PriceClass_100
+{% endfor %}
+{% endif %}
+
+{% if has_rds %}
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${ProjectName}-${EnvironmentName} rds'
+      VpcId: !Ref VpcId
+
+  RdsSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub '${ProjectName}-${EnvironmentName} DB subnets'
+      SubnetIds: !Ref PrivateSubnetIds
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${ProjectName}-${EnvironmentName}-db'
+      DBInstanceClass: !Ref RdsInstanceType
+      Engine: postgres
+      EngineVersion: '{{ rds.engine_version }}'
+      MasterUsername: '{{ rds.database_name }}'
+      ManageMasterUserPassword: true
+      AllocatedStorage: '{{ rds.allocated_storage_gb }}'
+      BackupRetentionPeriod: {{ rds.backup_retention_days }}
+      DBName: !If [HasRdsSnapshot, !Ref 'AWS::NoValue', '{{ rds.database_name }}']
+      DBSnapshotIdentifier: !If [HasRdsSnapshot, !Ref RdsSnapshotIdentifier, !Ref 'AWS::NoValue']
+      VPCSecurityGroups:
+        - !Ref RdsSecurityGroup
+      DBSubnetGroupName: !Ref RdsSubnetGroup
+      PubliclyAccessible: false
+      DeletionProtection: !If [IsProd, true, false]
+      StorageType: gp3
+{% endif %}
+
+{% for svc_ctx in services_ctx %}
+  Service{{ svc_ctx.name_pascal }}:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: services/{{ svc_ctx.name }}.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        EnvironmentName: !Ref EnvironmentName
+        VpcId: !Ref VpcId
+        VpcCidr: !Ref VpcCidr
+        PrivateSubnetIds: !Join [",", !Ref PrivateSubnetIds]
+        ClusterName: !Ref EcsCluster
+        ClusterArn: !GetAtt EcsCluster.Arn
+        AlbListenerArn: !If [UseDedicatedAlb, !Ref DedicatedAlbListener, !Ref SharedAlbListenerArn]
+        AlbSecurityGroupId: !If [UseDedicatedAlb, !Ref DedicatedAlbSecurityGroup, !Ref SharedAlbSecurityGroupId]
+{% if has_service_discovery and svc_ctx.svc.enable_service_discovery %}
+        CloudMapNamespaceId: !Ref ServiceNamespace
+{% endif %}
+{% if svc_ctx.has_rds %}
+        RdsEndpoint: !GetAtt Database.Endpoint.Address
+        RdsPort: !GetAtt Database.Endpoint.Port
+        RdsDatabaseName: '{{ rds.database_name }}'
+        RdsSecretArn: !GetAtt Database.MasterUserSecret.SecretArn
+{% endif %}
+{% for sec in svc_ctx.secret_params %}
+{% set sec_name = sec.secret_name %}
+{% set sec_source = (secrets | selectattr('name', 'equalto', sec_name) | list | first).source.value %}
+{% if sec_source == 'generate' %}
+        {{ sec.param_name }}: !Ref Secret{{ sec_name | replace('_', '') | replace('-', '') }}
+{% else %}
+        {{ sec.param_name }}: !Ref EnvSecretArn{{ sec_name | replace('_', '') | replace('-', '') }}
+{% endif %}
+{% endfor %}
+{% for s3 in svc_ctx.s3_vars %}
+        {{ s3.param_name }}: !Ref Bucket{{ s3.bucket_name | replace('-', '') }}
+        {{ s3.arn_param_name }}: !GetAtt Bucket{{ s3.bucket_name | replace('-', '') }}.Arn
+{% endfor %}
+
+{% endfor %}
+
+  CustomOverrides:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ../custom/overrides.yaml
+Outputs:
+  ClusterName:
+    Value: !Ref EcsCluster
+  StackEnvironment:
+    Value: !Ref EnvironmentName
+  AlbListenerArn:
+    Value: !If [UseDedicatedAlb, !Ref DedicatedAlbListener, !Ref SharedAlbListenerArn]

@@ -33,6 +33,27 @@
           "description": "Name tag of the existing VPC to deploy into.",
           "default": "artshumrc-prod-standard"
         },
+        "vpc_id": {
+          "type": ["string", "null"],
+          "description": "Explicit VPC ID to deploy into. When set, vpc_name lookup is skipped.",
+          "default": null,
+          "pattern": "^vpc-[0-9a-f]+$",
+          "examples": ["vpc-0abc1234def567890"]
+        },
+        "private_subnet_ids": {
+          "type": "array",
+          "description": "Explicit private subnet IDs for ECS tasks/RDS. When omitted, subnets are looked up from the VPC.",
+          "items": { "type": "string", "pattern": "^subnet-[a-z0-9]+$" },
+          "default": [],
+          "uniqueItems": true
+        },
+        "public_subnet_ids": {
+          "type": "array",
+          "description": "Explicit public subnet IDs for dedicated ALB. When omitted, subnets are looked up from the VPC.",
+          "items": { "type": "string", "pattern": "^subnet-[a-z0-9]+$" },
+          "default": [],
+          "uniqueItems": true
+        },
         "environments": {
           "type": "array",
           "description": "Environment names. \"prod\" must be included and will be placed first.",
@@ -90,6 +111,47 @@
             "description": "ALB health check endpoint.",
             "default": "/health"
           },
+          "health_check_http_codes": {
+            "type": "string",
+            "description": "ALB health check success HTTP code matcher.",
+            "default": "200-399",
+            "examples": ["200-399", "200-401", "200,302", "200-499"]
+          },
+          "health_check_timeout_seconds": {
+            "type": "integer",
+            "description": "ALB health check timeout in seconds.",
+            "default": 5,
+            "minimum": 2,
+            "maximum": 120
+          },
+          "health_check_interval_seconds": {
+            "type": "integer",
+            "description": "ALB health check interval in seconds.",
+            "default": 30,
+            "minimum": 5,
+            "maximum": 300
+          },
+          "healthy_threshold_count": {
+            "type": "integer",
+            "description": "Consecutive successful health checks required to mark target healthy.",
+            "default": 5,
+            "minimum": 2,
+            "maximum": 10
+          },
+          "unhealthy_threshold_count": {
+            "type": "integer",
+            "description": "Consecutive failed health checks required to mark target unhealthy.",
+            "default": 2,
+            "minimum": 2,
+            "maximum": 10
+          },
+          "health_check_grace_period_seconds": {
+            "type": ["integer", "null"],
+            "description": "ECS service grace period in seconds before load balancer health checks are enforced.",
+            "default": null,
+            "minimum": 0,
+            "maximum": 7200
+          },
           "cpu": {
             "type": "integer",
             "description": "Task CPU units. Fargate supports 256/512/1024/2048/4096; EC2 is unconstrained.",
@@ -111,11 +173,6 @@
           "command": {
             "type": ["string", "null"],
             "description": "Override the container CMD.",
-            "default": null
-          },
-          "domain": {
-            "type": ["string", "null"],
-            "description": "Hostname for ALB host-header routing. When port is set but domain is omitted the service is internal-only (no ALB target).",
             "default": null
           },
           "secrets": {
@@ -189,8 +246,17 @@
           },
           "user_data_script": {
             "type": ["string", "null"],
-            "description": "Path to a shell script for EC2 user data, relative to project root.",
-            "default": null
+            "description": "Legacy path to a shell script for EC2 user data, relative to project root. Prefer user_data_script_content for inline TUI-managed scripts.",
+            "default": null,
+            "examples": ["scripts/user_data.sh"]
+          },
+          "user_data_script_content": {
+            "type": ["string", "null"],
+            "description": "Inline multiline shell script content appended to EC2 user data (preferred over user_data_script).",
+            "default": null,
+            "examples": [
+              "#!/bin/bash\nsysctl -w vm.max_map_count=262144"
+            ]
           },
           "enable_service_discovery": {
             "type": "boolean",
@@ -333,11 +399,70 @@
           "description": "Name of the existing shared ALB to look up. Used when mode is \"shared\".",
           "default": ""
         },
+        "shared_listener_arn": {
+          "type": ["string", "null"],
+          "description": "Explicit shared ALB listener ARN. When set with shared_alb_security_group_id, name lookup is skipped.",
+          "default": null,
+          "pattern": "^arn:aws:elasticloadbalancing:[a-z0-9-]+:\\d{12}:listener/.+$"
+        },
+        "shared_alb_security_group_id": {
+          "type": ["string", "null"],
+          "description": "Security group ID attached to the shared ALB listener.",
+          "default": null,
+          "pattern": "^sg-[a-z0-9]+$"
+        },
         "certificate_arn": {
           "type": ["string", "null"],
           "description": "ACM certificate ARN. Required when mode is \"dedicated\".",
           "default": null,
           "pattern": "^arn:aws:acm:[a-z0-9-]+:\\d{12}:certificate/[a-f0-9-]+$"
+        },
+        "domain": {
+          "type": ["string", "null"],
+          "description": "Cluster hostname for ALB host-header routing.",
+          "default": null
+        },
+        "default_target_service": {
+          "type": ["string", "null"],
+          "description": "Service name to receive the default host-header rule.",
+          "default": null
+        },
+        "default_listener_priority": {
+          "type": ["integer", "null"],
+          "description": "Listener rule priority for the default host-header rule.",
+          "default": null,
+          "minimum": 1,
+          "maximum": 50000
+        },
+        "path_rules": {
+          "type": "array",
+          "description": "Additional host+path listener rules.",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": ["name", "path_pattern", "target_service", "priority"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Rule name identifier."
+              },
+              "path_pattern": {
+                "type": "string",
+                "description": "ALB path pattern (for example /kibana/*)."
+              },
+              "target_service": {
+                "type": "string",
+                "description": "Service name that receives requests for this path."
+              },
+              "priority": {
+                "type": "integer",
+                "description": "Listener rule priority.",
+                "minimum": 1,
+                "maximum": 50000
+              }
+            }
+          }
         }
       }
     },
@@ -382,11 +507,6 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "domain_overrides": {
-            "type": "object",
-            "description": "Map of service name to domain override for this environment.",
-            "additionalProperties": { "type": "string" }
-          },
           "instance_type_override": {
             "type": ["string", "null"],
             "description": "Override RDS instance type for this environment.",

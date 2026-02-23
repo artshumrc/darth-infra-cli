@@ -7,9 +7,12 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Static
 
+from ..step_rail import StepRail
+
 from ...config.models import (
     AlbConfig,
     AlbMode,
+    AlbPathRule,
     Architecture,
     EbsVolumeConfig,
     LaunchType,
@@ -32,39 +35,55 @@ class ReviewScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="form-container"):
+            yield StepRail("review")
             yield Static("Review & Confirm", classes="title")
             with VerticalScroll():
                 yield Static(self._build_summary(), id="summary")
             with Vertical(classes="button-row"):
-                yield Button("← Back", id="back", variant="default")
                 yield Button("Create Project ✓", id="confirm", variant="primary")
 
     def _build_summary(self) -> str:
         s = self._state
+        resolved_service_secrets = self._resolve_service_secrets()
         lines = [
             f"[bold]Project:[/bold] {s['project_name']}",
             f"[bold]Region:[/bold]  {s['aws_region']}",
             f"[bold]VPC:[/bold]     {s['vpc_name']}",
+            f"[bold]VPC ID:[/bold]  {s.get('vpc_id') or '(auto)'}",
             f"[bold]Envs:[/bold]    {', '.join(s['environments'])}",
             "",
             f"[bold]Services ({len(s['services'])}):[/bold]",
         ]
         for svc in s["services"]:
             port_info = f":{svc['port']}" if svc.get("port") else " (worker)"
-            domain_info = f" → {svc['domain']}" if svc.get("domain") else ""
             lt_info = ""
             if svc.get("launch_type") == "ec2":
                 lt_info = f" [EC2: {svc.get('ec2_instance_type', '?')}]"
             disc_info = " [discovery]" if svc.get("enable_service_discovery") else ""
             image_info = f" [image: {svc['image']}]" if svc.get("image") else ""
             lines.append(
-                f"  • {svc['name']}{port_info}{domain_info}{lt_info}{disc_info}{image_info}"
+                f"  • {svc['name']}{port_info}{lt_info}{disc_info}{image_info}"
             )
             lines.append(
                 f"    CPU: {svc.get('cpu', 256)} | Memory: {svc.get('memory_mib', 512)} MiB"
             )
+            lines.append(
+                f"    Health check: {svc.get('health_check_path', '/health')} "
+                f"[{svc.get('health_check_http_codes', '200-399')}]"
+            )
+            lines.append(
+                "    Health timing: "
+                f"timeout={svc.get('health_check_timeout_seconds', 5)}s "
+                f"interval={svc.get('health_check_interval_seconds', 30)}s "
+                f"healthy={svc.get('healthy_threshold_count', 5)} "
+                f"unhealthy={svc.get('unhealthy_threshold_count', 2)} "
+                f"grace={svc.get('health_check_grace_period_seconds') or 0}s"
+            )
             if svc.get("user_data_script"):
                 lines.append(f"    User data: {svc['user_data_script']}")
+            if svc.get("user_data_script_content"):
+                line_count = len(str(svc["user_data_script_content"]).splitlines())
+                lines.append(f"    User data inline script: {line_count} lines")
             if svc.get("ebs_volumes"):
                 for vol in svc["ebs_volumes"]:
                     lines.append(
@@ -81,6 +100,9 @@ class ReviewScreen(Screen):
             if svc.get("environment_variables"):
                 for k, v in svc["environment_variables"].items():
                     lines.append(f"    Env: {k}={v}")
+            service_secrets = resolved_service_secrets.get(svc["name"], [])
+            if service_secrets:
+                lines.append(f"    Service secrets: {', '.join(service_secrets)}")
 
         if s.get("rds"):
             rds = s["rds"]
@@ -106,17 +128,67 @@ class ReviewScreen(Screen):
 
         lines.append("")
         lines.append(f"[bold]ALB:[/bold] {s.get('alb_mode', 'shared')}")
+        lines.append(f"  Cluster domain: {s.get('alb_domain') or '(none)'}")
+        lines.append(
+            f"  Default target: {s.get('default_target_service') or '(none)'}"
+        )
+        lines.append(
+            f"  Default priority: {s.get('default_listener_priority') or '(none)'}"
+        )
+        if s.get("alb_path_rules"):
+            lines.append("  Path rules:")
+            for rule in s.get("alb_path_rules", []):
+                lines.append(
+                    f"    - {rule.get('name')}: {rule.get('path_pattern')} -> "
+                    f"{rule.get('target_service')} ({rule.get('priority')})"
+                )
+        if s.get("alb_mode", "shared") == "shared":
+            lines.append(
+                f"  Name: {s.get('shared_alb_name') or '(auto)'}"
+            )
+            lines.append(
+                f"  Listener: {s.get('shared_listener_arn') or '(auto)'}"
+            )
+            lines.append(
+                f"  ALB SG: {s.get('shared_alb_security_group_id') or '(auto)'}"
+            )
 
         if s.get("secrets"):
             lines.append("")
             lines.append(f"[bold]Secrets ({len(s['secrets'])}):[/bold]")
             for sec in s["secrets"]:
-                lines.append(f"  • {sec['name']} ({sec['source']})")
+                expose = sec.get("expose_to", [])
+                expose_suffix = f" -> {', '.join(expose)}" if expose else ""
+                lines.append(f"  • {sec['name']} ({sec['source']}){expose_suffix}")
 
         return "\n".join(lines)
 
+    def _resolve_service_secrets(self) -> dict[str, list[str]]:
+        """Resolve per-service secret attachments from both screens."""
+        service_names = [svc["name"] for svc in self._state.get("services", [])]
+        out: dict[str, list[str]] = {
+            name: [str(sec) for sec in svc.get("secrets", [])]
+            for name, svc in ((svc["name"], svc) for svc in self._state.get("services", []))
+        }
+
+        for sec in self._state.get("secrets", []):
+            sec_name = str(sec.get("name", "")).strip()
+            if not sec_name:
+                continue
+            for svc_name in sec.get("expose_to", []):
+                if svc_name not in service_names:
+                    continue
+                if sec_name not in out[svc_name]:
+                    out[svc_name].append(sec_name)
+        return out
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id.startswith("step_nav_"):
+            target = event.button.id.replace("step_nav_", "", 1)
+            self.app.go_to_step(target)
+            return
         if event.button.id == "back":
+            self._state["_wizard_last_screen"] = "secrets"
             self.app.pop_screen()
         elif event.button.id == "confirm":
             config = self._build_config()
@@ -124,6 +196,7 @@ class ReviewScreen(Screen):
 
     def _build_config(self) -> ProjectConfig:
         s = self._state
+        resolved_service_secrets = self._resolve_service_secrets()
 
         services = [
             ServiceConfig(
@@ -132,14 +205,29 @@ class ReviewScreen(Screen):
                 build_context=svc.get("build_context", "."),
                 image=svc.get("image"),
                 port=svc.get("port"),
-                domain=svc.get("domain"),
                 health_check_path=svc.get("health_check_path", "/health"),
+                health_check_http_codes=svc.get(
+                    "health_check_http_codes", "200-399"
+                ),
+                health_check_timeout_seconds=svc.get(
+                    "health_check_timeout_seconds", 5
+                ),
+                health_check_interval_seconds=svc.get(
+                    "health_check_interval_seconds", 30
+                ),
+                healthy_threshold_count=svc.get("healthy_threshold_count", 5),
+                unhealthy_threshold_count=svc.get("unhealthy_threshold_count", 2),
+                health_check_grace_period_seconds=svc.get(
+                    "health_check_grace_period_seconds"
+                ),
                 cpu=svc.get("cpu", 256),
                 memory_mib=svc.get("memory_mib", 512),
                 command=svc.get("command"),
+                secrets=resolved_service_secrets.get(svc["name"], []),
                 launch_type=LaunchType(svc.get("launch_type", "fargate")),
                 ec2_instance_type=svc.get("ec2_instance_type"),
                 user_data_script=svc.get("user_data_script"),
+                user_data_script_content=svc.get("user_data_script_content"),
                 ebs_volumes=[
                     EbsVolumeConfig(
                         name=v["name"],
@@ -198,13 +286,39 @@ class ReviewScreen(Screen):
         alb = AlbConfig(
             mode=AlbMode(s.get("alb_mode", "shared")),
             shared_alb_name=s.get("shared_alb_name", ""),
+            shared_listener_arn=s.get("shared_listener_arn"),
+            shared_alb_security_group_id=s.get("shared_alb_security_group_id"),
             certificate_arn=s.get("certificate_arn"),
+            domain=s.get("alb_domain"),
+            default_target_service=s.get("default_target_service"),
+            default_listener_priority=(
+                int(s["default_listener_priority"])
+                if s.get("default_listener_priority") is not None
+                and str(s.get("default_listener_priority")).strip() != ""
+                else None
+            ),
+            path_rules=[
+                AlbPathRule(
+                    name=rule["name"],
+                    path_pattern=rule["path_pattern"],
+                    target_service=rule["target_service"],
+                    priority=int(rule["priority"]),
+                )
+                for rule in s.get("alb_path_rules", [])
+            ],
         )
 
         return ProjectConfig(
             project_name=s["project_name"],
             aws_region=s["aws_region"],
             vpc_name=s["vpc_name"],
+            vpc_id=(
+                None
+                if s.get("vpc_id") in {None, "", False, "Select.NULL", "Select.BLANK"}
+                else str(s.get("vpc_id"))
+            ),
+            private_subnet_ids=s.get("private_subnet_ids", []),
+            public_subnet_ids=s.get("public_subnet_ids", []),
             environments=s["environments"],
             services=services,
             rds=rds,

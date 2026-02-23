@@ -68,6 +68,11 @@ def detect_architecture(instance_type: str) -> Architecture:
     return Architecture.X86_64
 
 
+def _rule_param_suffix(value: str) -> str:
+    cleaned = "".join(ch for ch in value if ch.isalnum())
+    return cleaned or "Rule"
+
+
 @dataclass
 class SecretConfig:
     """A secret to inject into containers as an environment variable.
@@ -163,6 +168,16 @@ class EbsVolumeConfig:
 
 
 @dataclass
+class AlbPathRule:
+    """Optional host+path listener rule targeting a service."""
+
+    name: str
+    path_pattern: str
+    target_service: str
+    priority: int
+
+
+@dataclass
 class AlbConfig:
     """Application Load Balancer configuration.
 
@@ -175,7 +190,13 @@ class AlbConfig:
 
     mode: AlbMode = AlbMode.SHARED
     shared_alb_name: str = ""
+    shared_listener_arn: str | None = None
+    shared_alb_security_group_id: str | None = None
     certificate_arn: str | None = None
+    domain: str | None = None
+    default_target_service: str | None = None
+    default_listener_priority: int | None = None
+    path_rules: list[AlbPathRule] = field(default_factory=list)
 
 
 @dataclass
@@ -190,12 +211,16 @@ class ServiceConfig:
             When set, ECR repo creation and Docker build/push are skipped.
         port: Container port exposed to the ALB. None for background workers.
         health_check_path: ALB health check endpoint.
+        health_check_http_codes: ALB success HTTP code matcher (e.g. "200-399", "200-401").
+        health_check_timeout_seconds: ALB health check timeout in seconds.
+        health_check_interval_seconds: ALB health check interval in seconds.
+        healthy_threshold_count: ALB healthy threshold count.
+        unhealthy_threshold_count: ALB unhealthy threshold count.
+        health_check_grace_period_seconds: ECS service grace period before health checks count.
         cpu: Task CPU units. Fargate supports 256-4096; EC2 is unconstrained.
         memory_mib: Task memory in MiB.
         desired_count: Number of running tasks.
         command: Override the container CMD.
-        domain: Hostname for ALB host-header routing. When port is set but domain
-            is omitted the service is internal-only (no ALB target).
         secrets: Names of ``SecretConfig`` entries to inject into this container.
         s3_access: Names of ``S3BucketConfig`` entries to grant read/write.
         environment_variables: Static env vars passed to the container.
@@ -206,6 +231,7 @@ class ServiceConfig:
         architecture: CPU architecture — "x86_64" or "arm64". Auto-detected from
             ec2_instance_type when omitted.
         user_data_script: Path to a shell script for EC2 user data (optional).
+        user_data_script_content: Inline EC2 user data shell script content.
         ebs_volumes: EBS volumes to attach (EC2 launch type only).
         enable_service_discovery: Register with Cloud Map for inter-service DNS
             discovery (``<service-name>.local``).
@@ -217,11 +243,16 @@ class ServiceConfig:
     image: str | None = None
     port: int | None = 8000
     health_check_path: str = "/health"
+    health_check_http_codes: str = "200-399"
+    health_check_timeout_seconds: int = 5
+    health_check_interval_seconds: int = 30
+    healthy_threshold_count: int = 5
+    unhealthy_threshold_count: int = 2
+    health_check_grace_period_seconds: int | None = None
     cpu: int = 256
     memory_mib: int = 512
     desired_count: int = 1
     command: str | None = None
-    domain: str | None = None
     secrets: list[str] = field(default_factory=list)
     s3_access: list[str] = field(default_factory=list)
     environment_variables: dict[str, str] = field(default_factory=dict)
@@ -231,6 +262,7 @@ class ServiceConfig:
     ec2_instance_type: str | None = None
     architecture: Architecture | None = None
     user_data_script: str | None = None
+    user_data_script_content: str | None = None
     ebs_volumes: list[EbsVolumeConfig] = field(default_factory=list)
     enable_service_discovery: bool = False
 
@@ -241,9 +273,6 @@ class EnvironmentOverride:
 
     Any field set to None inherits from the service default.
     """
-
-    domain_overrides: dict[str, str] = field(default_factory=dict)
-    """Map of service name -> domain override for this environment."""
 
     instance_type_override: str | None = None
     """Override RDS instance type for this environment."""
@@ -275,6 +304,9 @@ class ProjectConfig:
     environments: list[str] = field(default_factory=lambda: ["prod"])
     aws_region: str = "us-east-1"
     vpc_name: str = "artshumrc-prod-standard"
+    vpc_id: str | None = None
+    private_subnet_ids: list[str] = field(default_factory=list)
+    public_subnet_ids: list[str] = field(default_factory=list)
     rds: RdsConfig | None = None
     s3_buckets: list[S3BucketConfig] = field(default_factory=list)
     alb: AlbConfig = field(default_factory=AlbConfig)
@@ -290,6 +322,7 @@ class ProjectConfig:
             self.environments.insert(0, "prod")
 
         service_names = [s.name for s in self.services]
+        service_ports = {s.name: s.port for s in self.services}
         if len(service_names) != len(set(service_names)):
             raise ValueError("Service names must be unique")
 
@@ -344,20 +377,82 @@ class ProjectConfig:
                         f"Service '{svc.name}' references unknown secret '{sec_name}'"
                     )
 
-    def get_domain_for_service(self, service_name: str, env: str) -> str | None:
-        """Resolve the domain for a service in a given environment."""
-        svc = next((s for s in self.services if s.name == service_name), None)
-        if svc is None or svc.domain is None:
+        if self.alb.domain:
+            if not self.alb.default_target_service:
+                raise ValueError(
+                    "alb.default_target_service is required when alb.domain is set"
+                )
+            if self.alb.default_target_service not in service_ports:
+                raise ValueError(
+                    f"alb.default_target_service references unknown service "
+                    f"'{self.alb.default_target_service}'"
+                )
+            if service_ports[self.alb.default_target_service] is None:
+                raise ValueError(
+                    f"alb.default_target_service '{self.alb.default_target_service}' "
+                    "must target a service with a container port"
+                )
+            if self.alb.default_listener_priority is None:
+                raise ValueError(
+                    "alb.default_listener_priority is required when alb.domain is set"
+                )
+
+        if self.alb.default_listener_priority is not None and not (
+            1 <= self.alb.default_listener_priority <= 50000
+        ):
+            raise ValueError("alb.default_listener_priority must be between 1 and 50000")
+
+        seen_rule_names: set[str] = set()
+        seen_rule_param_suffixes: set[str] = set()
+        seen_priorities: set[int] = set()
+        if self.alb.default_listener_priority is not None:
+            seen_priorities.add(self.alb.default_listener_priority)
+        for rule in self.alb.path_rules:
+            if rule.name in seen_rule_names:
+                raise ValueError(f"Duplicate alb.path_rules name '{rule.name}'")
+            seen_rule_names.add(rule.name)
+            suffix = _rule_param_suffix(rule.name)
+            if suffix in seen_rule_param_suffixes:
+                raise ValueError(
+                    f"alb.path_rules names must map to unique parameter keys; "
+                    f"'{rule.name}' collides after normalization"
+                )
+            seen_rule_param_suffixes.add(suffix)
+
+            if rule.target_service not in service_ports:
+                raise ValueError(
+                    f"alb.path_rules '{rule.name}' references unknown service "
+                    f"'{rule.target_service}'"
+                )
+            if service_ports[rule.target_service] is None:
+                raise ValueError(
+                    f"alb.path_rules '{rule.name}' target '{rule.target_service}' "
+                    "must have a container port"
+                )
+            if not (1 <= rule.priority <= 50000):
+                raise ValueError(
+                    f"alb.path_rules '{rule.name}' priority must be between 1 and 50000"
+                )
+            if rule.priority in seen_priorities:
+                raise ValueError(
+                    f"Duplicate ALB listener priority '{rule.priority}' in routing rules"
+                )
+            seen_priorities.add(rule.priority)
+
+        if self.alb.default_target_service and not self.alb.domain:
+            raise ValueError("alb.domain is required when alb.default_target_service is set")
+        if self.alb.default_listener_priority is not None and not self.alb.domain:
+            raise ValueError("alb.domain is required when alb.default_listener_priority is set")
+        if self.alb.path_rules and not self.alb.domain:
+            raise ValueError("alb.domain is required when alb.path_rules are configured")
+
+    def get_cluster_domain(self, env: str) -> str | None:
+        """Resolve cluster host domain for a given environment."""
+        if not self.alb.domain:
             return None
-
-        overrides = self.environment_overrides.get(env)
-        if overrides and service_name in overrides.domain_overrides:
-            return overrides.domain_overrides[service_name]
-
         if env == "prod":
-            return svc.domain
-
-        return f"{env}-{svc.domain}"
+            return self.alb.domain
+        return f"{env}.{self.alb.domain}"
 
     def get_rds_instance_type(self, env: str) -> str:
         """Resolve the RDS instance type for a given environment."""

@@ -1,0 +1,9 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: User-managed CloudFormation overrides for {{ project_name }}
+
+Resources:
+  # Placeholder so this nested stack is valid before custom resources are added.
+  NoopHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
+
+Outputs: {}

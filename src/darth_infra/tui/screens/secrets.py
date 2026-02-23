@@ -13,8 +13,11 @@ from textual.widgets import (
     ListView,
     RadioButton,
     RadioSet,
+    SelectionList,
     Static,
 )
+
+from ..step_rail import StepRail
 
 
 class SecretsScreen(Screen):
@@ -24,38 +27,101 @@ class SecretsScreen(Screen):
         super().__init__()
         self._state = state
         self._editing_index: int | None = None
+        self._expose_to: list[str] = []
+
+    def _draft(self) -> dict:
+        d = self._state.setdefault("_wizard_draft", {})
+        return d.setdefault("secrets", {})
+
+    def _service_names(self) -> list[str]:
+        names: list[str] = []
+        for svc in self._state.get("services", []):
+            name = str(svc.get("name", "")).strip()
+            if not name or name in names:
+                continue
+            names.append(name)
+        return names
 
     def compose(self) -> ComposeResult:
+        draft = self._draft()
+        expose_draft = {str(v) for v in draft.get("sec_expose_to", [])}
         with Horizontal(classes="screen-layout"):
             with Vertical(classes="sidebar"):
                 yield Static("Added Secrets", classes="title")
                 yield ListView(id="item-list")
             with VerticalScroll(classes="form-container"):
+                yield StepRail("secrets")
                 yield Static("Secret Details (Optional)", classes="title")
 
                 yield Label("Secret name (env var):", classes="section-label")
-                yield Input(placeholder="DJANGO_SECRET_KEY", id="sec_name")
+                yield Input(
+                    placeholder="DJANGO_SECRET_KEY",
+                    id="sec_name",
+                    value=str(draft.get("sec_name", "")),
+                )
 
                 yield Label("Source:", classes="section-label")
                 with RadioSet(id="sec_source"):
                     yield RadioButton(
-                        "Generate (random value)", value=True, id="src_gen"
+                        "Generate (random value)",
+                        value=draft.get("sec_source", "generate") == "generate",
+                        id="src_gen",
                     )
-                    yield RadioButton("Environment variable", id="src_env")
+                    yield RadioButton(
+                        "Environment variable",
+                        value=draft.get("sec_source", "generate") == "env",
+                        id="src_env",
+                    )
 
                 yield Label("Length (for generated):", classes="section-label")
-                yield Input(placeholder="50", id="sec_length", value="50")
+                yield Input(
+                    placeholder="50",
+                    id="sec_length",
+                    value=str(draft.get("sec_length", "50")),
+                )
+
+                yield Label("Expose to services:", classes="section-label")
+                yield Static(
+                    "No services yet. Add services first, then return here.",
+                    id="sec-expose-empty",
+                )
+                yield SelectionList[str](id="sec-expose-services")
 
                 with Vertical(classes="button-row"):
-                    yield Button("← Back", id="back", variant="default")
                     yield Button("+ Add", id="add", variant="success")
                     yield Button("Update", id="save", variant="success")
                     yield Button("Remove", id="remove", variant="error")
-                    yield Button("Next →", id="next", variant="primary")
 
     def on_mount(self) -> None:
+        self._restore_from_draft()
+        self._refresh_expose_services()
         self._refresh_sidebar()
         self._update_mode()
+
+    def _restore_from_draft(self) -> None:
+        draft = self._draft()
+        if isinstance(draft.get("sec_expose_to"), list):
+            self._expose_to = [str(v) for v in draft.get("sec_expose_to", [])]
+
+    def _capture_draft(self) -> None:
+        self._expose_to = self._read_expose_checkboxes()
+        radio_set = self.query_one("#sec_source", RadioSet)
+        pressed = radio_set.pressed_button
+        source = "env" if pressed and pressed.id == "src_env" else "generate"
+        self._draft().update(
+            {
+                "sec_name": self.query_one("#sec_name", Input).value,
+                "sec_source": source,
+                "sec_length": self.query_one("#sec_length", Input).value,
+                "sec_expose_to": list(self._expose_to),
+            }
+        )
+
+    def on_input_changed(self, _event: Input.Changed) -> None:
+        self._capture_draft()
+
+    def on_radio_set_changed(self, _event: RadioSet.Changed) -> None:
+        self._capture_draft()
 
     def _refresh_sidebar(self) -> None:
         """Rebuild the sidebar list from current state."""
@@ -80,16 +146,24 @@ class SecretsScreen(Screen):
             secret = secrets[idx]
             self.query_one("#sec_name", Input).value = secret.get("name", "")
             self.query_one("#sec_length", Input).value = str(secret.get("length", 50))
+            self._expose_to = [str(s) for s in secret.get("expose_to", [])]
+            self._refresh_expose_services()
             # Select the correct radio button
-            radio_set = self.query_one("#sec_source", RadioSet)
             if secret.get("source") == "env":
-                radio_set.pressed_index = 1
+                self.query_one("#src_env", RadioButton).value = True
+                self.query_one("#src_gen", RadioButton).value = False
             else:
-                radio_set.pressed_index = 0
+                self.query_one("#src_gen", RadioButton).value = True
+                self.query_one("#src_env", RadioButton).value = False
             self._update_mode()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id.startswith("step_nav_"):
+            target = event.button.id.replace("step_nav_", "", 1)
+            self.app.go_to_step(target)
+            return
         if event.button.id == "back":
+            self._state["_wizard_last_screen"] = "s3"
             self.app.pop_screen()
         elif event.button.id == "add":
             self._add_secret()
@@ -98,10 +172,20 @@ class SecretsScreen(Screen):
         elif event.button.id == "remove":
             self._remove_secret()
         elif event.button.id == "next":
-            name = self.query_one("#sec_name", Input).value.strip()
-            if name and self._editing_index is None:
-                self._add_secret()
+            self._persist_for_navigation()
             self.app.advance_to("review")
+
+    def before_step_navigation(self, _target: str) -> bool:
+        self._persist_for_navigation()
+        return True
+
+    def _persist_for_navigation(self) -> None:
+        self._capture_draft()
+        name = self.query_one("#sec_name", Input).value.strip()
+        if self._editing_index is not None:
+            self._save_secret()
+        elif name:
+            self._add_secret()
 
     def _read_form(self) -> dict | None:
         """Read and validate the form fields."""
@@ -115,13 +199,35 @@ class SecretsScreen(Screen):
         source = "env" if pressed and pressed.id == "src_env" else "generate"
 
         length = int(self.query_one("#sec_length", Input).value.strip() or "50")
+        self._expose_to = self._read_expose_checkboxes()
 
         return {
             "name": name,
             "source": source,
             "length": length,
             "generate_once": True,
+            "expose_to": list(self._expose_to),
         }
+
+    def _read_expose_checkboxes(self) -> list[str]:
+        selection = self.query_one("#sec-expose-services", SelectionList)
+        return [str(v) for v in selection.selected]
+
+    def _refresh_expose_services(self) -> None:
+        service_names = self._service_names()
+        selected = set(self._expose_to)
+        empty = self.query_one("#sec-expose-empty", Static)
+        selection = self.query_one("#sec-expose-services", SelectionList)
+        selection.clear_options()
+        if service_names:
+            selection.add_options(
+                [(name, name, name in selected) for name in service_names]
+            )
+            selection.display = True
+            empty.display = False
+        else:
+            selection.display = False
+            empty.display = True
 
     def _add_secret(self) -> None:
         secret = self._read_form()
@@ -157,4 +263,8 @@ class SecretsScreen(Screen):
         self._editing_index = None
         self.query_one("#sec_name", Input).value = ""
         self.query_one("#sec_length", Input).value = "50"
+        self.query_one("#src_gen", RadioButton).value = True
+        self.query_one("#src_env", RadioButton).value = False
+        self._expose_to = []
+        self._refresh_expose_services()
         self._update_mode()

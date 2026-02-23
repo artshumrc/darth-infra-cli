@@ -8,8 +8,10 @@ from .build_cmd import build
 from .push_cmd import push
 from .logs_cmd import logs
 from .exec_cmd import exec_cmd
+from .secret_cmd import secret_cmd
 from .destroy_cmd import destroy
 from .status_cmd import status
+from .render_cmd import render_cmd
 
 
 @click.group()
@@ -24,8 +26,10 @@ cli.add_command(build)
 cli.add_command(push)
 cli.add_command(logs)
 cli.add_command(exec_cmd, name="exec")
+cli.add_command(secret_cmd)
 cli.add_command(destroy)
 cli.add_command(status)
+cli.add_command(render_cmd)
 
 
 if __name__ == "__main__":

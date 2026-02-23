@@ -14,6 +14,7 @@ else:
 from .models import (
     AlbConfig,
     AlbMode,
+    AlbPathRule,
     Architecture,
     EbsVolumeConfig,
     EnvironmentOverride,
@@ -33,6 +34,15 @@ CONFIG_FILENAME = "darth-infra.toml"
 def _toml_escape(value: str) -> str:
     """Escape a string value for safe inclusion in TOML double quotes."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _toml_multiline(value: str) -> str:
+    """Render a string as a TOML multiline basic string."""
+    return '"""\n' + value.replace('"""', '\\"""') + '\n"""'
+
+
+def _enum_value(value: object) -> str:
+    return getattr(value, "value", str(value))
 
 
 def find_config(start: Path | None = None) -> Path:
@@ -84,6 +94,9 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
         project_name=project["name"],
         aws_region=project.get("aws_region", "us-east-1"),
         vpc_name=project.get("vpc_name", "artshumrc-prod-standard"),
+        vpc_id=project.get("vpc_id"),
+        private_subnet_ids=project.get("private_subnet_ids", []),
+        public_subnet_ids=project.get("public_subnet_ids", []),
         environments=project.get("environments", ["prod"]),
         tags=project.get("tags", {}),
         services=services,
@@ -96,6 +109,10 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
 
 
 def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
+    if "domain" in raw:
+        raise ValueError(
+            "services[].domain is no longer supported; use alb.domain and alb routing fields"
+        )
     # Port defaults to None if not explicitly set (background workers have no port)
     port = raw.get("port")
     launch_type_str = raw.get("launch_type", "fargate")
@@ -129,11 +146,16 @@ def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
         image=raw.get("image"),
         port=port,
         health_check_path=raw.get("health_check_path", "/health"),
+        health_check_http_codes=raw.get("health_check_http_codes", "200-399"),
+        health_check_timeout_seconds=raw.get("health_check_timeout_seconds", 5),
+        health_check_interval_seconds=raw.get("health_check_interval_seconds", 30),
+        healthy_threshold_count=raw.get("healthy_threshold_count", 5),
+        unhealthy_threshold_count=raw.get("unhealthy_threshold_count", 2),
+        health_check_grace_period_seconds=raw.get("health_check_grace_period_seconds"),
         cpu=raw.get("cpu", 256),
         memory_mib=raw.get("memory_mib", 512),
         desired_count=raw.get("desired_count", 1),
         command=raw.get("command"),
-        domain=raw.get("domain"),
         secrets=raw.get("secrets", []),
         s3_access=raw.get("s3_access", []),
         environment_variables=raw.get("environment_variables", {}),
@@ -143,6 +165,7 @@ def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
         ec2_instance_type=raw.get("ec2_instance_type"),
         architecture=architecture,
         user_data_script=raw.get("user_data_script"),
+        user_data_script_content=raw.get("user_data_script_content"),
         ebs_volumes=ebs_volumes,
         enable_service_discovery=raw.get("enable_service_discovery", False),
     )
@@ -150,7 +173,7 @@ def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
 
 def _parse_rds(raw: dict[str, Any]) -> RdsConfig:
     return RdsConfig(
-        database_name=raw["database_name"],
+        database_name=raw.get("database_name", "app"),
         instance_type=raw.get("instance_type", "t4g.micro"),
         allocated_storage_gb=raw.get("allocated_storage_gb", 20),
         expose_to=raw.get("expose_to", []),
@@ -173,7 +196,21 @@ def _parse_alb(raw: dict[str, Any]) -> AlbConfig:
     return AlbConfig(
         mode=AlbMode(mode_str),
         shared_alb_name=raw.get("shared_alb_name", ""),
+        shared_listener_arn=raw.get("shared_listener_arn"),
+        shared_alb_security_group_id=raw.get("shared_alb_security_group_id"),
         certificate_arn=raw.get("certificate_arn"),
+        domain=raw.get("domain"),
+        default_target_service=raw.get("default_target_service"),
+        default_listener_priority=raw.get("default_listener_priority"),
+        path_rules=[
+            AlbPathRule(
+                name=str(rule["name"]),
+                path_pattern=str(rule["path_pattern"]),
+                target_service=str(rule["target_service"]),
+                priority=int(rule["priority"]),
+            )
+            for rule in raw.get("path_rules", [])
+        ],
     )
 
 
@@ -189,7 +226,6 @@ def _parse_secret(raw: dict[str, Any]) -> SecretConfig:
 
 def _parse_env_override(raw: dict[str, Any]) -> EnvironmentOverride:
     return EnvironmentOverride(
-        domain_overrides=raw.get("domain_overrides", {}),
         instance_type_override=raw.get("instance_type_override"),
         ec2_instance_type_override=raw.get("ec2_instance_type_override", {}),
     )
@@ -200,11 +236,25 @@ def dump_config(config: ProjectConfig) -> str:
     lines: list[str] = []
 
     lines.append("#:schema darth-infra.schema.json")
+    lines.append("#")
+    lines.append("# darth-infra config")
+    lines.append("#")
+    lines.append("# Full wizard answers and incomplete draft input are stored in")
+    lines.append("# wizard-export.json. This TOML remains the main editable config.")
     lines.append("")
+    lines.append("# [deploy-live] project and network lookup settings")
     lines.append("[project]")
     lines.append(f'name = "{config.project_name}"')
     lines.append(f'aws_region = "{config.aws_region}"')
     lines.append(f'vpc_name = "{config.vpc_name}"')
+    if config.vpc_id:
+        lines.append(f'vpc_id = "{config.vpc_id}"')
+    if config.private_subnet_ids:
+        subnet_list = ", ".join(f'"{s}"' for s in config.private_subnet_ids)
+        lines.append(f"private_subnet_ids = [{subnet_list}]")
+    if config.public_subnet_ids:
+        subnet_list = ", ".join(f'"{s}"' for s in config.public_subnet_ids)
+        lines.append(f"public_subnet_ids = [{subnet_list}]")
     env_list = ", ".join(f'"{e}"' for e in config.environments)
     lines.append(f"environments = [{env_list}]")
     if config.tags:
@@ -214,6 +264,7 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append(f'"{k}" = "{v}"')
     lines.append("")
 
+    lines.append("# Service runtime settings")
     for svc in config.services:
         lines.append("[[services]]")
         lines.append(f'name = "{svc.name}"')
@@ -224,22 +275,33 @@ def dump_config(config: ProjectConfig) -> str:
         if svc.port is not None:
             lines.append(f"port = {svc.port}")
         else:
-            lines.append("# port not set — this is a background worker")
+            lines.append("# port omitted for worker service")
         lines.append(f'health_check_path = "{svc.health_check_path}"')
+        lines.append(f'health_check_http_codes = "{svc.health_check_http_codes}"')
+        lines.append(f"health_check_timeout_seconds = {svc.health_check_timeout_seconds}")
+        lines.append(f"health_check_interval_seconds = {svc.health_check_interval_seconds}")
+        lines.append(f"healthy_threshold_count = {svc.healthy_threshold_count}")
+        lines.append(f"unhealthy_threshold_count = {svc.unhealthy_threshold_count}")
+        if svc.health_check_grace_period_seconds is not None:
+            lines.append(
+                f"health_check_grace_period_seconds = {svc.health_check_grace_period_seconds}"
+            )
         lines.append(f"cpu = {svc.cpu}")
         lines.append(f"memory_mib = {svc.memory_mib}")
         lines.append(f"desired_count = {svc.desired_count}")
         if svc.command:
-            lines.append(f'command = "{svc.command}"')
-        if svc.domain:
-            lines.append(f'domain = "{svc.domain}"')
-        lines.append(f'launch_type = "{svc.launch_type.value}"')
+            lines.append(f'command = "{_toml_escape(svc.command)}"')
+        lines.append(f'launch_type = "{_enum_value(svc.launch_type)}"')
         if svc.ec2_instance_type:
             lines.append(f'ec2_instance_type = "{svc.ec2_instance_type}"')
         if svc.architecture:
-            lines.append(f'architecture = "{svc.architecture.value}"')
+            lines.append(f'architecture = "{_enum_value(svc.architecture)}"')
         if svc.user_data_script:
             lines.append(f'user_data_script = "{svc.user_data_script}"')
+        if svc.user_data_script_content:
+            lines.append(
+                f"user_data_script_content = {_toml_multiline(svc.user_data_script_content)}"
+            )
         if svc.secrets:
             sec_list = ", ".join(f'"{s}"' for s in svc.secrets)
             lines.append(f"secrets = [{sec_list}]")
@@ -274,6 +336,7 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append("")
 
     if config.rds:
+        lines.append("# Optional RDS")
         lines.append("[rds]")
         lines.append(f'database_name = "{config.rds.database_name}"')
         lines.append(f'instance_type = "{config.rds.instance_type}"')
@@ -284,6 +347,8 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f"backup_retention_days = {config.rds.backup_retention_days}")
         lines.append("")
 
+    if config.s3_buckets:
+        lines.append("# Optional S3 buckets")
     for bucket in config.s3_buckets:
         lines.append("[[s3_buckets]]")
         lines.append(f'name = "{bucket.name}"')
@@ -292,28 +357,50 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f"cors = {str(bucket.cors).lower()}")
         lines.append("")
 
+    lines.append("# [deploy-live] ALB lookup/attachment behavior")
     lines.append("[alb]")
-    lines.append(f'mode = "{config.alb.mode.value}"')
+    lines.append(f'mode = "{_enum_value(config.alb.mode)}"')
     lines.append(f'shared_alb_name = "{config.alb.shared_alb_name}"')
+    if config.alb.shared_listener_arn:
+        lines.append(f'shared_listener_arn = "{config.alb.shared_listener_arn}"')
+    if config.alb.shared_alb_security_group_id:
+        lines.append(
+            f'shared_alb_security_group_id = "{config.alb.shared_alb_security_group_id}"'
+        )
     if config.alb.certificate_arn:
         lines.append(f'certificate_arn = "{config.alb.certificate_arn}"')
+    if config.alb.domain:
+        lines.append(f'domain = "{config.alb.domain}"')
+    if config.alb.default_target_service:
+        lines.append(f'default_target_service = "{config.alb.default_target_service}"')
+    if config.alb.default_listener_priority is not None:
+        lines.append(f"default_listener_priority = {config.alb.default_listener_priority}")
+    for rule in config.alb.path_rules:
+        lines.append("")
+        lines.append("[[alb.path_rules]]")
+        lines.append(f'name = "{rule.name}"')
+        lines.append(f'path_pattern = "{rule.path_pattern}"')
+        lines.append(f'target_service = "{rule.target_service}"')
+        lines.append(f"priority = {rule.priority}")
     lines.append("")
 
+    if config.secrets:
+        lines.append("# Secrets")
     for secret in config.secrets:
         lines.append("[[secrets]]")
         lines.append(f'name = "{secret.name}"')
-        lines.append(f'source = "{secret.source.value}"')
+        lines.append(f'source = "{_enum_value(secret.source)}"')
         lines.append(f"length = {secret.length}")
         lines.append(f"generate_once = {str(secret.generate_once).lower()}")
         lines.append("")
+    if not config.secrets:
+        lines.append("# No secrets configured")
+        lines.append("")
 
+    if config.environment_overrides:
+        lines.append("# [deploy-live] environment-specific runtime overrides")
     for env_name, override in config.environment_overrides.items():
         lines.append(f"[environments.{env_name}]")
-        if override.domain_overrides:
-            lines.append("")
-            lines.append(f"[environments.{env_name}.domain_overrides]")
-            for svc_name, domain in override.domain_overrides.items():
-                lines.append(f'{svc_name} = "{domain}"')
         if override.instance_type_override:
             lines.append(
                 f'instance_type_override = "{override.instance_type_override}"'
@@ -323,6 +410,9 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append(f"[environments.{env_name}.ec2_instance_type_override]")
             for svc_name, itype in override.ec2_instance_type_override.items():
                 lines.append(f'{svc_name} = "{itype}"')
+        lines.append("")
+    if not config.environment_overrides:
+        lines.append("# [deploy-live] no [environments.<name>] overrides configured")
         lines.append("")
 
     return "\n".join(lines) + "\n"

@@ -1,0 +1,454 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS service stack for {{ project_name }}/{{ name }}
+
+Parameters:
+  ProjectName:
+    Type: String
+  EnvironmentName:
+    Type: String
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  VpcCidr:
+    Type: String
+  PrivateSubnetIds:
+    Type: String
+  ClusterName:
+    Type: String
+  ClusterArn:
+    Type: String
+  AlbListenerArn:
+    Type: String
+  AlbSecurityGroupId:
+    Type: String
+{% if has_rds %}
+  RdsEndpoint:
+    Type: String
+  RdsPort:
+    Type: String
+  RdsDatabaseName:
+    Type: String
+  RdsSecretArn:
+    Type: String
+{% endif %}
+{% if svc.enable_service_discovery %}
+  CloudMapNamespaceId:
+    Type: String
+{% endif %}
+{% for sec in secret_params %}
+  {{ sec.param_name }}:
+    Type: String
+{% endfor %}
+{% for s3 in s3_vars %}
+  {{ s3.param_name }}:
+    Type: String
+  {{ s3.arn_param_name }}:
+    Type: String
+{% endfor %}
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}-${EnvironmentName}-{{ name }}'
+      RetentionInDays: 30
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${ProjectName}-${EnvironmentName}-{{ name }} ecs tasks'
+      VpcId: !Ref VpcId
+
+  TaskSgIngressFromAlb:
+{% if svc.port is not none %}
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TaskSecurityGroup
+      IpProtocol: tcp
+      FromPort: {{ svc.port }}
+      ToPort: {{ svc.port }}
+      SourceSecurityGroupId: !Ref AlbSecurityGroupId
+{% else %}
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref TaskSecurityGroup
+      IpProtocol: -1
+      CidrIp: 0.0.0.0/0
+{% endif %}
+{% if svc.port is not none and svc.enable_service_discovery %}
+
+  TaskSgIngressFromServiceDiscovery:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TaskSecurityGroup
+      IpProtocol: tcp
+      FromPort: {{ svc.port }}
+      ToPort: {{ svc.port }}
+      CidrIp: !Ref VpcCidr
+{% endif %}
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+{% if secret_params or has_rds %}
+      Policies:
+        - PolicyName: ReadSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+{% for sec in secret_params %}
+                  - !Ref {{ sec.param_name }}
+{% endfor %}
+{% if has_rds %}
+                  - !Ref RdsSecretArn
+{% endif %}
+{% else %}
+      Policies: []
+{% endif %}
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+{% if svc.enable_exec or s3_vars %}
+      Policies:
+{% if svc.enable_exec %}
+        - PolicyName: EcsExecSsm
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: '*'
+{% endif %}
+{% if s3_vars %}
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+{% for s3 in s3_vars %}
+                  - !Ref {{ s3.arn_param_name }}
+                  - !Join ['', [!Ref {{ s3.arn_param_name }}, '/*']]
+{% endfor %}
+{% endif %}
+{% else %}
+      Policies: []
+{% endif %}
+
+{% if launch_type == 'ec2' %}
+  Ec2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+
+  Ec2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref Ec2InstanceRole]
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Arn: !GetAtt Ec2InstanceProfile.Arn
+        ImageId: '{{ "{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2/arm64/recommended/image_id}}" if architecture == "arm64" else "{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id}}" }}'
+        InstanceType: {{ svc.ec2_instance_type or 't3.medium' }}
+        SecurityGroupIds:
+          - !Ref TaskSecurityGroup
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo "ECS_CLUSTER=${ProjectName}-${EnvironmentName}" >> /etc/ecs/ecs.config
+            echo "ECS_ENABLE_TASK_IAM_ROLE=true" >> /etc/ecs/ecs.config
+{% for vol in ebs_params %}
+            if ! blkid {{ vol.device_name }}; then
+              mkfs.{{ vol.filesystem_type }} {{ vol.device_name }}
+            fi
+            mkdir -p {{ vol.mount_path }}
+            echo "{{ vol.device_name }} {{ vol.mount_path }} {{ vol.filesystem_type }} defaults,nofail 0 2" >> /etc/fstab
+            mount {{ vol.mount_path }}
+{% endfor %}
+{% if user_data_script_content %}
+{{ user_data_script_content | indent(12, true) }}
+{% endif %}
+        BlockDeviceMappings:
+{% if ebs_params %}
+{% for vol in ebs_params %}
+          - DeviceName: {{ vol.device_name }}
+            Ebs:
+              VolumeType: {{ vol.volume_type }}
+              VolumeSize: {{ vol.size_gb }}
+              DeleteOnTermination: false
+{% endfor %}
+{% else %}
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: 30
+{% endif %}
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Split [',', !Ref PrivateSubnetIds]
+      MinSize: '{{ svc.desired_count }}'
+      MaxSize: '{{ [svc.desired_count * 2, 2] | max }}'
+      DesiredCapacity: '{{ svc.desired_count }}'
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-{{ name }}'
+          PropagateAtLaunch: true
+        - Key: Project
+          Value: !Ref ProjectName
+          PropagateAtLaunch: true
+        - Key: Environment
+          Value: !Ref EnvironmentName
+          PropagateAtLaunch: true
+        - Key: Service
+          Value: {{ name }}
+          PropagateAtLaunch: true
+{% endif %}
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-${EnvironmentName}-{{ name }}'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [{{ 'EC2' if launch_type == 'ec2' else 'FARGATE' }}]
+{% if launch_type == 'fargate' %}
+      Cpu: '{{ svc.cpu }}'
+      Memory: '{{ svc.memory_mib }}'
+{% endif %}
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+{% if launch_type == 'ec2' and ebs_params %}
+      Volumes:
+{% for vol in ebs_params %}
+        - Name: {{ vol.name }}
+          Host:
+            SourcePath: {{ vol.mount_path }}
+{% endfor %}
+{% endif %}
+      ContainerDefinitions:
+        - Name: {{ name }}
+{% if svc.image %}
+          Image: {{ svc.image }}
+{% else %}
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}/{{ name }}:${EnvironmentName}-latest'
+{% endif %}
+          Essential: !!bool true
+{% if svc.command %}
+          Command:
+            - sh
+            - -c
+            - '{{ svc.command | replace("'", "''") }}'
+{% endif %}
+{% if launch_type == 'ec2' %}
+          Cpu: {{ svc.cpu }}
+          Memory: {{ svc.memory_mib }}
+{% endif %}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: {{ name }}
+          Environment:
+            - Name: ENVIRONMENT
+              Value: !Ref EnvironmentName
+            - Name: SERVICE_NAME
+              Value: {{ name }}
+{% for k, v in svc.environment_variables.items() %}
+            - Name: {{ k }}
+              Value: '{{ v }}'
+{% endfor %}
+{% if has_rds %}
+            - Name: DB_HOST
+              Value: !Ref RdsEndpoint
+            - Name: DB_PORT
+              Value: !Ref RdsPort
+            - Name: DB_NAME
+              Value: !Ref RdsDatabaseName
+            - Name: DB_USER
+              Value: !Ref RdsDatabaseName
+{% endif %}
+{% for s3 in s3_vars %}
+            - Name: {{ s3.env_key }}
+              Value: !Ref {{ s3.param_name }}
+{% endfor %}
+{% if secret_params or has_rds %}
+          Secrets:
+{% for sec in secret_params %}
+            - Name: {{ sec.secret_name }}
+              ValueFrom: !Ref {{ sec.param_name }}
+{% endfor %}
+{% if has_rds %}
+            - Name: DB_PASSWORD
+              ValueFrom: !Ref RdsSecretArn
+{% endif %}
+{% endif %}
+{% if svc.port is not none %}
+          PortMappings:
+            - ContainerPort: !!int {{ svc.port }}
+              Protocol: tcp
+{% endif %}
+{% if launch_type == 'ec2' and ebs_params %}
+          MountPoints:
+{% for vol in ebs_params %}
+            - ContainerPath: {{ vol.mount_path }}
+              SourceVolume: {{ vol.name }}
+              ReadOnly: false
+{% endfor %}
+{% endif %}
+
+{% if svc.enable_service_discovery %}
+  CloudMapService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: {{ name }}
+      NamespaceId: !Ref CloudMapNamespaceId
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: 10
+
+{% endif %}
+{% if svc.port is not none %}
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: {{ svc.port }}
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      HealthCheckPath: {{ svc.health_check_path }}
+      HealthCheckTimeoutSeconds: {{ svc.health_check_timeout_seconds }}
+      HealthCheckIntervalSeconds: {{ svc.health_check_interval_seconds }}
+      HealthyThresholdCount: {{ svc.healthy_threshold_count }}
+      UnhealthyThresholdCount: {{ svc.unhealthy_threshold_count }}
+      Matcher:
+        HttpCode: {{ svc.health_check_http_codes }}
+
+{% endif %}
+{% if svc.port is not none and has_cluster_routing_rules %}
+{% if is_default_listener_target %}
+  DefaultHostHeaderRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      Conditions:
+        - Field: host-header
+          HostHeaderConfig:
+            Values: ['{{ cluster_domain }}']
+      ListenerArn: !Ref AlbListenerArn
+      Priority: {{ default_listener_priority }}
+
+{% endif %}
+{% for rule in service_path_rules %}
+  PathRule{{ rule.name_pascal }}:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      Conditions:
+        - Field: host-header
+          HostHeaderConfig:
+            Values: ['{{ cluster_domain }}']
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: ['{{ rule.path_pattern }}']
+      ListenerArn: !Ref AlbListenerArn
+      Priority: {{ rule.priority }}
+
+{% endfor %}
+{% endif %}
+
+  EcsService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - TaskDefinition
+{% if svc.port is not none and is_default_listener_target %}
+      - DefaultHostHeaderRule
+{% endif %}
+{% if svc.port is not none %}
+{% for rule in service_path_rules %}
+      - PathRule{{ rule.name_pascal }}
+{% endfor %}
+{% endif %}
+    Properties:
+      ServiceName: !Sub '${ProjectName}-${EnvironmentName}-{{ name }}'
+      Cluster: !Ref ClusterArn
+      DesiredCount: {{ svc.desired_count }}
+      EnableExecuteCommand: {{ 'true' if svc.enable_exec else 'false' }}
+      LaunchType: {{ 'EC2' if launch_type == 'ec2' else 'FARGATE' }}
+      TaskDefinition: !Ref TaskDefinition
+{% if svc.port is not none and svc.health_check_grace_period_seconds is not none %}
+      HealthCheckGracePeriodSeconds: {{ svc.health_check_grace_period_seconds }}
+{% endif %}
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups: [!Ref TaskSecurityGroup]
+          Subnets: !Split [',', !Ref PrivateSubnetIds]
+{% if svc.enable_service_discovery %}
+      ServiceRegistries:
+        - RegistryArn: !GetAtt CloudMapService.Arn
+{% endif %}
+{% if svc.port is not none %}
+      LoadBalancers:
+        - ContainerName: {{ name }}
+          ContainerPort: !!int {{ svc.port }}
+          TargetGroupArn: !Ref TargetGroup
+{% endif %}
+
+Outputs:
+  ServiceName:
+    Value: !Ref EcsService
+{% if svc.port is not none %}
+  TargetGroupArn:
+    Value: !Ref TargetGroup
+{% endif %}

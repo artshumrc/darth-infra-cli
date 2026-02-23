@@ -5,15 +5,16 @@ from __future__ import annotations
 import boto3
 import click
 
-from .helpers import console, require_config, run_cdk
+from .cfn import delete_stack
+from .helpers import console, require_config
 
 
 @click.command()
 @click.option("--env", "env_name", required=True, help="Environment to destroy.")
 @click.option("--force", is_flag=True, help="Skip confirmation prompt.")
 def destroy(env_name: str, force: bool) -> None:
-    """Destroy the CDK stack for a given environment."""
-    config, project_dir = require_config()
+    """Destroy the CloudFormation stack for a given environment."""
+    config, _ = require_config()
 
     if env_name == "prod":
         # Verify no non-prod envs still exist
@@ -42,11 +43,7 @@ def destroy(env_name: str, force: bool) -> None:
         f"environment [cyan]{env_name}[/cyan]...[/bold]"
     )
 
-    stack_name = f"{config.project_name}-ecs-{env_name}"
-    rc = run_cdk(
-        ["destroy", stack_name, "--force", "-c", f"target_env={env_name}"],
-        project_dir,
-    )
+    rc = delete_stack(config, env_name)
 
     if rc == 0:
         console.print(f"[green]✓ Destroyed {env_name}[/green]")
