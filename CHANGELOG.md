@@ -1,5 +1,17 @@
 # darth-infra
 
+## 0.3.0
+
+### Minor Changes
+
+- [`60f980f`](https://github.com/artshumrc/darth-infra-cli/commit/60f980fba95701f21f106ef29b3889e044752e72) Thanks [@d-flood](https://github.com/d-flood)! - Major refactor of TUI, additional commands, and ECS fixes
+
+- [`1e83857`](https://github.com/artshumrc/darth-infra-cli/commit/1e83857e873a8fa53332445c103cbaca508d4e2e) Thanks [@d-flood](https://github.com/d-flood)! - Major refactoring and fixing in order to get BTA deployed. Now does s3, cloudfront, rds, secrets, env vars, etc. and add live view output instead of constant streaming
+
+### Patch Changes
+
+- [`002663c`](https://github.com/artshumrc/darth-infra-cli/commit/002663cc3c4e5ff9adf16baa55ae57474403ff83) Thanks [@d-flood](https://github.com/d-flood)! - add container env vars to tui
+
 ## 0.2.0
 
 ### Minor Changes
