@@ -14,6 +14,10 @@ from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
+from rich.console import Group
+from rich.live import Live
+from rich.panel import Panel
+from rich.table import Table
 
 from ..config.models import ProjectConfig
 from .helpers import console, get_cluster_name, get_service_name
@@ -861,46 +865,60 @@ def _monitor_stack_deploy(
     )
 
     last_stack_status: str | None = None
+    final_status: str = "UNKNOWN"
+    final_reason: str = ""
+    success = False
 
-    while True:
-        stack_status, stack_reason = _get_stack_status(cf, stack_name)
-        if stack_status != last_stack_status:
-            if stack_reason:
-                console.print(
-                    f"[bold]Stack status:[/bold] [cyan]{stack_status}[/cyan] - {stack_reason}"
+    with Live(console=console, refresh_per_second=4, transient=False) as live:
+        while True:
+            stack_status, stack_reason = _get_stack_status(cf, stack_name)
+            if stack_status != last_stack_status:
+                last_stack_status = stack_status
+
+            stack_events = _collect_new_stack_events(cf, stack_name, state)
+            incomplete = _collect_incomplete_resources(cf, stack_name)
+            ecs_snapshot = _collect_ecs_deploy_observability(
+                config=config,
+                env_name=env_name,
+                ecs=ecs,
+                logs=logs,
+                state=state,
+            )
+
+            live.update(
+                _render_deploy_live_view(
+                    stack_name=stack_name,
+                    stack_status=stack_status,
+                    stack_reason=stack_reason,
+                    stack_events=stack_events,
+                    incomplete_resources=incomplete,
+                    ecs_snapshot=ecs_snapshot,
                 )
-            else:
-                console.print(f"[bold]Stack status:[/bold] [cyan]{stack_status}[/cyan]")
-            last_stack_status = stack_status
+            )
 
-        _print_new_stack_events(cf, stack_name, state)
-        _print_incomplete_resource_summary(cf, stack_name, state)
-        _print_ecs_deploy_observability(
-            config=config,
-            env_name=env_name,
-            ecs=ecs,
-            logs=logs,
-            state=state,
+            if _is_stack_terminal(stack_status):
+                final_status = stack_status
+                final_reason = stack_reason
+                success = _is_stack_success(stack_status)
+                break
+
+            time.sleep(poll_interval_seconds)
+
+    if success:
+        console.print(
+            f"[green]Stack reached terminal success state: {final_status}[/green]"
         )
+        return True
 
-        if _is_stack_terminal(stack_status):
-            if _is_stack_success(stack_status):
-                console.print(
-                    f"[green]Stack reached terminal success state: {stack_status}[/green]"
-                )
-                return True
-
-            if stack_reason:
-                console.print(
-                    f"[red]Stack reached terminal failure state: {stack_status} - {stack_reason}[/red]"
-                )
-            else:
-                console.print(
-                    f"[red]Stack reached terminal failure state: {stack_status}[/red]"
-                )
-            return False
-
-        time.sleep(poll_interval_seconds)
+    if final_reason:
+        console.print(
+            f"[red]Stack reached terminal failure state: {final_status} - {final_reason}[/red]"
+        )
+    else:
+        console.print(
+            f"[red]Stack reached terminal failure state: {final_status}[/red]"
+        )
+    return False
 
 
 def _get_stack_status(cf, stack_name: str) -> tuple[str, str]:
@@ -931,18 +949,17 @@ def _is_stack_success(status: str) -> bool:
     }
 
 
-def _print_new_stack_events(
+def _collect_new_stack_events(
     cf,
     stack_name: str,
     state: DeployMonitorState,
     *,
     max_events: int = 12,
-) -> None:
+) -> list[dict[str, str]]:
     try:
         events = cf.describe_stack_events(StackName=stack_name).get("StackEvents", [])
     except ClientError as exc:
-        console.print(f"[yellow]Could not load stack events: {exc}[/yellow]")
-        return
+        return [{"summary": f"Could not load stack events: {exc}", "style": "yellow"}]
 
     new_events: list[dict[str, Any]] = []
     for event in events:
@@ -953,21 +970,32 @@ def _print_new_stack_events(
         new_events.append(event)
 
     if not new_events:
-        return
+        return []
 
     new_events.sort(key=lambda event: _event_datetime_sort_key(event.get("Timestamp")))
     trimmed = new_events[-max_events:]
 
-    console.print("[bold]New CloudFormation events:[/bold]")
+    output: list[dict[str, str]] = []
     for event in trimmed:
         logical_id = event.get("LogicalResourceId", "?")
         resource_type = event.get("ResourceType", "?")
         status = event.get("ResourceStatus", "?")
         reason = event.get("ResourceStatusReason")
         if reason:
-            console.print(f"- {logical_id} ({resource_type}) [{status}] - {reason}")
+            output.append(
+                {
+                    "summary": f"{logical_id} ({resource_type}) [{status}] - {reason}",
+                    "style": "red" if "FAILED" in str(status) else "white",
+                }
+            )
         else:
-            console.print(f"- {logical_id} ({resource_type}) [{status}]")
+            output.append(
+                {
+                    "summary": f"{logical_id} ({resource_type}) [{status}]",
+                    "style": "red" if "FAILED" in str(status) else "white",
+                }
+            )
+    return output
 
 
 def _print_incomplete_resource_summary(
@@ -1081,16 +1109,16 @@ def _is_resource_incomplete(status: str) -> bool:
     return status != "DELETE_COMPLETE"
 
 
-def _print_ecs_deploy_observability(
+def _collect_ecs_deploy_observability(
     *,
     config: ProjectConfig,
     env_name: str,
     ecs,
     logs,
     state: DeployMonitorState,
-) -> None:
+) -> dict[str, Any]:
     if not config.services:
-        return
+        return {"rows": [], "messages": []}
 
     cluster = get_cluster_name(config.project_name, env_name)
     short_to_full_service_name = {
@@ -1110,16 +1138,41 @@ def _print_ecs_deploy_observability(
                 if name:
                     services_by_name[name] = service
     except ClientError as exc:
-        console.print(f"[yellow]Could not load ECS service status: {exc}[/yellow]")
-        return
+        return {
+            "rows": [],
+            "messages": [
+                {
+                    "key": "ECS status",
+                    "value": f"Could not load ECS service status: {exc}",
+                    "style": "yellow",
+                }
+            ],
+        }
 
-    console.print("[bold]ECS deploy progress:[/bold]")
+    rows: list[dict[str, str]] = []
+    messages: list[dict[str, str]] = []
     for service_cfg in config.services:
         short_name = service_cfg.name
         full_name = short_to_full_service_name[short_name]
         service = services_by_name.get(full_name)
         if not service:
-            console.print(f"- {short_name}: [yellow]service not found yet[/yellow]")
+            rows.append(
+                {
+                    "service": short_name,
+                    "status": "NOT_FOUND",
+                    "running": "0",
+                    "desired": "0",
+                    "pending": "0",
+                    "deployments": "0",
+                }
+            )
+            messages.append(
+                {
+                    "key": f"{short_name} service",
+                    "value": "Service not found yet",
+                    "style": "yellow",
+                }
+            )
             continue
 
         running = int(service.get("runningCount", 0))
@@ -1127,8 +1180,15 @@ def _print_ecs_deploy_observability(
         pending = int(service.get("pendingCount", 0))
         status = str(service.get("status", "UNKNOWN"))
         deployment_count = len(service.get("deployments", []))
-        console.print(
-            f"- {short_name}: status={status} running={running} desired={desired} pending={pending} deployments={deployment_count}"
+        rows.append(
+            {
+                "service": short_name,
+                "status": status,
+                "running": str(running),
+                "desired": str(desired),
+                "pending": str(pending),
+                "deployments": str(deployment_count),
+            }
         )
 
         deployments = service.get("deployments", [])
@@ -1145,32 +1205,50 @@ def _print_ecs_deploy_observability(
             )
             if rollout_reason:
                 line = f"{line} - {rollout_reason}"
-            console.print(line)
+            messages.append(
+                {
+                    "key": f"{short_name} deployment",
+                    "value": line.strip(),
+                    "style": "dim",
+                }
+            )
 
-        _print_new_ecs_service_events(short_name, service, state)
-        _print_recent_task_failures(cluster, full_name, short_name, ecs, state)
+        messages.extend(_collect_new_ecs_service_events(short_name, service, state))
+        messages.extend(
+            _collect_recent_task_failures(
+                cluster,
+                full_name,
+                short_name,
+                ecs,
+                state,
+            )
+        )
 
         is_deploying = pending > 0 or running < desired or deployment_count > 1
         if is_deploying:
-            _print_recent_service_logs(
-                config=config,
-                env_name=env_name,
-                service_name=short_name,
-                logs=logs,
-                state=state,
+            messages.extend(
+                _collect_recent_service_logs(
+                    config=config,
+                    env_name=env_name,
+                    service_name=short_name,
+                    logs=logs,
+                    state=state,
+                )
             )
 
+    return {"rows": rows, "messages": messages}
 
-def _print_new_ecs_service_events(
+
+def _collect_new_ecs_service_events(
     service_name: str,
     service: dict[str, Any],
     state: DeployMonitorState,
     *,
     max_events: int = 5,
-) -> None:
+) -> list[dict[str, str]]:
     raw_events = service.get("events", [])
     if not isinstance(raw_events, list):
-        return
+        return []
 
     new_events: list[dict[str, Any]] = []
     for event in raw_events:
@@ -1185,9 +1263,10 @@ def _print_new_ecs_service_events(
         new_events.append(event)
 
     if not new_events:
-        return
+        return []
 
     new_events.sort(key=lambda event: _event_datetime_sort_key(event.get("createdAt")))
+    output: list[dict[str, str]] = []
     for event in new_events[-max_events:]:
         message = str(event.get("message", "")).strip()
         lowered = message.lower()
@@ -1196,16 +1275,20 @@ def _print_new_ecs_service_events(
             if any(k in lowered for k in ("error", "failed", "unable", "unhealthy"))
             else "yellow"
         )
-        console.print(f"  [{style}]event: {message}[/{style}]")
+        output.append(
+            {"key": f"{service_name} event", "value": message, "style": style}
+        )
+    return output
 
 
-def _print_recent_task_failures(
+def _collect_recent_task_failures(
     cluster: str,
     full_service_name: str,
     short_service_name: str,
     ecs,
     state: DeployMonitorState,
-) -> None:
+) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
     try:
         stopped_tasks = ecs.list_tasks(
             cluster=cluster,
@@ -1214,17 +1297,17 @@ def _print_recent_task_failures(
             maxResults=5,
         ).get("taskArns", [])
     except ClientError:
-        return
+        return output
 
     if not stopped_tasks:
-        return
+        return output
 
     try:
         described = ecs.describe_tasks(cluster=cluster, tasks=stopped_tasks).get(
             "tasks", []
         )
     except ClientError:
-        return
+        return output
 
     for task in described:
         task_arn = str(task.get("taskArn", ""))
@@ -1236,8 +1319,12 @@ def _print_recent_task_failures(
             key = f"{task_arn}|{stopped_reason}"
             if key not in state.seen_task_failure_keys:
                 state.seen_task_failure_keys.add(key)
-                console.print(
-                    f"  [red]task stopped ({short_service_name}/{task_id}): {stopped_reason}[/red]"
+                output.append(
+                    {
+                        "key": f"{short_service_name} task",
+                        "value": f"stopped ({task_id}): {stopped_reason}",
+                        "style": "red",
+                    }
                 )
 
         containers = task.get("containers", [])
@@ -1250,12 +1337,17 @@ def _print_recent_task_failures(
             if key in state.seen_task_failure_keys:
                 continue
             state.seen_task_failure_keys.add(key)
-            console.print(
-                f"  [red]container issue ({short_service_name}/{task_id}/{name}): {reason}[/red]"
+            output.append(
+                {
+                    "key": f"{short_service_name} container",
+                    "value": f"issue ({task_id}/{name}): {reason}",
+                    "style": "red",
+                }
             )
+    return output
 
 
-def _print_recent_service_logs(
+def _collect_recent_service_logs(
     *,
     config: ProjectConfig,
     env_name: str,
@@ -1263,7 +1355,8 @@ def _print_recent_service_logs(
     logs,
     state: DeployMonitorState,
     max_events: int = 20,
-) -> None:
+) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
     log_group = f"/ecs/{config.project_name}-{env_name}-{service_name}"
     now_ms = int(time.time() * 1000)
     since_ms = state.log_since_ms_by_service.get(service_name, now_ms - 120000)
@@ -1277,18 +1370,21 @@ def _print_recent_service_logs(
     except ClientError as exc:
         code = str(exc.response.get("Error", {}).get("Code", ""))
         if code == "ResourceNotFoundException":
-            return
-        console.print(
-            f"[yellow]Could not read logs for {service_name} ({log_group}): {exc}[/yellow]"
+            return output
+        output.append(
+            {
+                "key": f"{service_name} logs",
+                "value": f"Could not read logs ({log_group}): {exc}",
+                "style": "yellow",
+            }
         )
-        return
+        return output
 
     events = response.get("events", [])
     if not events:
-        return
+        return output
 
     max_seen_timestamp = since_ms
-    console.print(f"  [bold]recent logs ({service_name}):[/bold]")
     for event in events:
         timestamp = int(event.get("timestamp", since_ms))
         message = str(event.get("message", "")).rstrip()
@@ -1306,9 +1402,117 @@ def _print_recent_service_logs(
             )
             else "dim"
         )
-        console.print(f"  [{style}]{message}[/{style}]")
+        output.append(
+            {
+                "key": f"{service_name} log",
+                "value": message,
+                "style": style,
+            }
+        )
 
     state.log_since_ms_by_service[service_name] = max_seen_timestamp + 1
+    return output
+
+
+def _render_deploy_live_view(
+    *,
+    stack_name: str,
+    stack_status: str,
+    stack_reason: str,
+    stack_events: list[dict[str, str]],
+    incomplete_resources: list[dict[str, str]],
+    ecs_snapshot: dict[str, Any],
+) -> Group:
+    stack_kv = _build_key_value_table(
+        "Stack",
+        [
+            ("Name", stack_name, "cyan"),
+            ("Status", stack_status, "cyan"),
+            (
+                "Reason",
+                stack_reason if stack_reason else "-",
+                "dim" if not stack_reason else "white",
+            ),
+            ("Pending resources", str(len(incomplete_resources)), "yellow"),
+        ],
+    )
+
+    ecs_table = Table(title="ECS Deploy Progress", expand=True)
+    ecs_table.add_column("Service", style="cyan")
+    ecs_table.add_column("Status")
+    ecs_table.add_column("Running", justify="right")
+    ecs_table.add_column("Desired", justify="right")
+    ecs_table.add_column("Pending", justify="right")
+    ecs_table.add_column("Deployments", justify="right")
+
+    for row in ecs_snapshot.get("rows", []):
+        status_value = str(row.get("status", "UNKNOWN"))
+        status_style = "green" if status_value == "ACTIVE" else "yellow"
+        ecs_table.add_row(
+            str(row.get("service", "-")),
+            f"[{status_style}]{status_value}[/{status_style}]",
+            str(row.get("running", "0")),
+            str(row.get("desired", "0")),
+            str(row.get("pending", "0")),
+            str(row.get("deployments", "0")),
+        )
+
+    if not ecs_snapshot.get("rows"):
+        ecs_table.add_row("-", "-", "0", "0", "0", "0")
+
+    events_rows: list[tuple[str, str, str]] = []
+    if stack_events:
+        for event in stack_events[-8:]:
+            events_rows.append(
+                ("Stack event", event.get("summary", ""), event.get("style", "white"))
+            )
+    else:
+        events_rows.append(("Stack event", "No new events", "dim"))
+
+    for item in incomplete_resources[:8]:
+        reason = str(item.get("reason", "")).strip()
+        summary = f"[{item.get('stack', '?')}] {item.get('logical_id', '?')} ({item.get('type', '?')}) [{item.get('status', '?')}]"
+        if reason:
+            summary = f"{summary} - {reason}"
+        events_rows.append(("Pending", summary, "yellow"))
+
+    if len(incomplete_resources) > 8:
+        events_rows.append(
+            (
+                "Pending",
+                f"... and {len(incomplete_resources) - 8} more resources",
+                "dim",
+            )
+        )
+
+    for message in ecs_snapshot.get("messages", [])[-16:]:
+        events_rows.append(
+            (
+                str(message.get("key", "Info")),
+                str(message.get("value", "")),
+                str(message.get("style", "white")),
+            )
+        )
+
+    activity_kv = _build_key_value_table("Activity", events_rows)
+
+    return Group(
+        Panel(stack_kv, border_style="cyan"),
+        Panel(ecs_table, border_style="green"),
+        Panel(activity_kv, border_style="magenta"),
+    )
+
+
+def _build_key_value_table(
+    title: str,
+    rows: list[tuple[str, str, str]],
+) -> Table:
+    table = Table(title=title, expand=True, show_header=False)
+    table.add_column("Key", style="bold cyan", no_wrap=True, width=22)
+    table.add_column("Value", overflow="fold")
+    for key, value, style in rows:
+        table.add_row(key, f"[{style}]{value}[/{style}]")
+    return table
 
 
 def _event_datetime_sort_key(value: Any) -> float:
