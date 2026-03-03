@@ -14,6 +14,11 @@ from ...config.models import (
     AlbMode,
     AlbPathRule,
     Architecture,
+    CloudFrontCachedBehavior,
+    CloudFrontConfig,
+    CloudFrontConnection,
+    CloudFrontCookiesMode,
+    CloudFrontQueryStringsMode,
     EbsVolumeConfig,
     LaunchType,
     ProjectConfig,
@@ -176,6 +181,44 @@ def build_config_from_state(state: dict) -> ProjectConfig:
             for rule in s.get("alb_path_rules", [])
         ],
     )
+    cloudfront = CloudFrontConfig(
+        enabled=s.get("cloudfront_enabled", False),
+        origin_https_only=s.get("cloudfront_origin_https_only", False),
+        custom_domain=s.get("cloudfront_custom_domain"),
+        certificate_arn=s.get("cloudfront_certificate_arn"),
+        price_class=s.get("cloudfront_price_class", "PriceClass_100"),
+        comment=s.get("cloudfront_comment"),
+        connections=[
+            CloudFrontConnection(
+                service=conn["service"],
+                env_key=conn["env_key"],
+            )
+            for conn in s.get("cloudfront_connections", [])
+        ],
+        cached_behaviors=[
+            CloudFrontCachedBehavior(
+                name=behavior["name"],
+                path_pattern=behavior["path_pattern"],
+                compress=behavior.get("compress", True),
+                cache_by_origin_headers=behavior.get("cache_by_origin_headers", True),
+                min_ttl_seconds=int(behavior.get("min_ttl_seconds", 0)),
+                default_ttl_seconds=int(behavior.get("default_ttl_seconds", 3600)),
+                max_ttl_seconds=int(behavior.get("max_ttl_seconds", 31536000)),
+                query_strings=CloudFrontQueryStringsMode(
+                    behavior.get("query_strings", "all")
+                ),
+                query_string_allowlist=list(
+                    behavior.get("query_string_allowlist", [])
+                ),
+                cookies=CloudFrontCookiesMode(behavior.get("cookies", "none")),
+                cookie_allowlist=list(behavior.get("cookie_allowlist", [])),
+                forward_authorization_header=behavior.get(
+                    "forward_authorization_header", False
+                ),
+            )
+            for behavior in s.get("cloudfront_cached_behaviors", [])
+        ],
+    )
 
     return ProjectConfig(
         project_name=s["project_name"],
@@ -192,6 +235,7 @@ def build_config_from_state(state: dict) -> ProjectConfig:
         services=services,
         rds=rds,
         s3_buckets=s3_buckets,
+        cloudfront=cloudfront,
         alb=alb,
         secrets=secrets,
     )
@@ -347,6 +391,31 @@ class ReviewScreen(Screen):
             lines.append(f"  Listener: {s.get('shared_listener_arn') or '(auto)'}")
             lines.append(
                 f"  ALB SG: {s.get('shared_alb_security_group_id') or '(auto)'}"
+            )
+
+        lines.append("")
+        cf_enabled = bool(s.get("cloudfront_enabled", False))
+        lines.append(f"[bold]CloudFront:[/bold] {'enabled' if cf_enabled else 'disabled'}")
+        if cf_enabled:
+            lines.append(
+                "  ALB origin protocol: "
+                f"{'https-only' if s.get('cloudfront_origin_https_only', False) else 'http-only'}"
+            )
+            lines.append(
+                f"  Custom domain: {s.get('cloudfront_custom_domain') or '(none)'}"
+            )
+            lines.append(
+                f"  Certificate ARN: {s.get('cloudfront_certificate_arn') or '(none)'}"
+            )
+            lines.append(
+                f"  Price class: {s.get('cloudfront_price_class', 'PriceClass_100')}"
+            )
+            lines.append(f"  Comment: {s.get('cloudfront_comment') or '(none)'}")
+            lines.append(
+                f"  Service connections: {len(s.get('cloudfront_connections', []))}"
+            )
+            lines.append(
+                f"  Cached behaviors: {len(s.get('cloudfront_cached_behaviors', []))}"
             )
 
         if s.get("secrets"):

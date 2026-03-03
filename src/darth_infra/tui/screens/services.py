@@ -538,13 +538,16 @@ class ServicesScreen(Screen):
             if alb_pressed and alb_pressed.id == "alb_mode_dedicated"
             else "shared"
         )
+        prev_listener_arn = self._state.get("shared_listener_arn")
+        listener_arn = self.query_one("#shared_listener_arn", Input).value.strip() or None
         self._state["alb_mode"] = mode
         self._state["shared_alb_name"] = self.query_one(
             "#shared_alb_name", Input
         ).value.strip()
-        self._state["shared_listener_arn"] = (
-            self.query_one("#shared_listener_arn", Input).value.strip() or None
-        )
+        self._state["shared_listener_arn"] = listener_arn
+        if listener_arn != prev_listener_arn:
+            self._state["shared_listener_protocol"] = None
+            self._state["shared_listener_port"] = None
         self._state["shared_alb_security_group_id"] = (
             self.query_one("#shared_alb_sg_id", Input).value.strip() or None
         )
@@ -884,15 +887,21 @@ class ServicesScreen(Screen):
                 self._alb_fetch_complete,
                 preferred["ListenerArn"],
                 alb_sg,
+                str(preferred.get("Protocol") or "").strip() or None,
+                int(preferred.get("Port", 0)) or None,
                 None,
             )
         except (ClientError, BotoCoreError, RuntimeError) as exc:
-            self.app.call_from_thread(self._alb_fetch_complete, "", "", str(exc))
+            self.app.call_from_thread(
+                self._alb_fetch_complete, "", "", None, None, str(exc)
+            )
 
     def _alb_fetch_complete(
         self,
         shared_listener_arn: str,
         shared_alb_security_group_id: str,
+        shared_listener_protocol: str | None,
+        shared_listener_port: int | None,
         err: str | None,
     ) -> None:
         self._alb_fetch_inflight = False
@@ -903,6 +912,8 @@ class ServicesScreen(Screen):
 
         self.query_one("#shared_listener_arn", Input).value = shared_listener_arn
         self.query_one("#shared_alb_sg_id", Input).value = shared_alb_security_group_id
+        self._state["shared_listener_protocol"] = shared_listener_protocol
+        self._state["shared_listener_port"] = shared_listener_port
         self._capture_draft()
         self._persist_alb_to_state()
         self.notify("Fetched shared ALB values from AWS", severity="information")

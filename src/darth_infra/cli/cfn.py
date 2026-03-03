@@ -31,6 +31,7 @@ class ResolvedLookupData:
     public_subnet_ids: list[str]
     shared_listener_arn: str
     shared_alb_security_group_id: str
+    shared_alb_dns_name: str
     default_listener_priority: int | None
     path_rule_priorities: dict[str, int]
     rds_snapshot_identifier: str
@@ -54,7 +55,7 @@ def resolve_lookup_data(config: ProjectConfig, env_name: str) -> ResolvedLookupD
     route53 = boto3.client("route53")
 
     vpc_id, vpc_cidr, private_subnets, public_subnets = _resolve_network(config, ec2)
-    listener_arn, alb_sg = _resolve_shared_alb(config, elbv2)
+    listener_arn, alb_sg, alb_dns_name = _resolve_shared_alb(config, elbv2)
     default_priority, path_priorities = _resolve_listener_priorities(
         config, env_name, elbv2, listener_arn
     )
@@ -71,6 +72,7 @@ def resolve_lookup_data(config: ProjectConfig, env_name: str) -> ResolvedLookupD
         public_subnet_ids=public_subnets,
         shared_listener_arn=listener_arn,
         shared_alb_security_group_id=alb_sg,
+        shared_alb_dns_name=alb_dns_name,
         default_listener_priority=default_priority,
         path_rule_priorities=path_priorities,
         rds_snapshot_identifier=snapshot,
@@ -134,6 +136,14 @@ def _validate_resolved_lookup_data(
         raise RuntimeError(
             f"Expected one listener for ARN '{listener_arn}', found {len(listeners)}"
         )
+    listener_protocol = str(listeners[0].get("Protocol", "")).strip().upper()
+    listener_port = listeners[0].get("Port")
+    if config.cloudfront.enabled and config.cloudfront.origin_https_only:
+        if listener_protocol != "HTTPS" or listener_port != 443:
+            raise RuntimeError(
+                "cloudfront.origin_https_only requires shared ALB listener HTTPS:443, "
+                f"but resolved listener is {listener_protocol or 'unknown'}:{listener_port}"
+            )
 
     load_balancer_arn = str(listeners[0].get("LoadBalancerArn", "")).strip()
     if not load_balancer_arn:
@@ -177,6 +187,10 @@ def _validate_resolved_lookup_data(
     if sg_id not in lb_security_groups:
         raise RuntimeError(
             f"Shared ALB security group '{sg_id}' is not attached to load balancer '{load_balancer_arn}'"
+        )
+    if config.cloudfront.enabled and not lookups.shared_alb_dns_name:
+        raise RuntimeError(
+            "CloudFront is enabled but shared ALB DNS name could not be resolved"
         )
 
 
@@ -1672,14 +1686,38 @@ def _resolve_network(
     return vpc_id, vpc_cidr, private_subnets, public_subnets
 
 
-def _resolve_shared_alb(config: ProjectConfig, elbv2) -> tuple[str, str]:
+def _resolve_shared_alb(config: ProjectConfig, elbv2) -> tuple[str, str, str]:
     if config.alb.mode.value != "shared":
-        return "", ""
+        return "", "", ""
 
     listener_arn = config.alb.shared_listener_arn
     alb_sg = config.alb.shared_alb_security_group_id
     if listener_arn and alb_sg:
-        return listener_arn, alb_sg
+        listeners = elbv2.describe_listeners(ListenerArns=[listener_arn]).get(
+            "Listeners", []
+        )
+        if len(listeners) != 1:
+            raise RuntimeError(
+                f"Expected one listener for ARN {listener_arn}, found {len(listeners)}"
+            )
+        listener = listeners[0]
+        listener_protocol = str(listener.get("Protocol", "")).strip().upper()
+        listener_port = listener.get("Port")
+        if config.cloudfront.enabled and config.cloudfront.origin_https_only:
+            if listener_protocol != "HTTPS" or listener_port != 443:
+                raise RuntimeError(
+                    "cloudfront.origin_https_only requires shared ALB listener HTTPS:443, "
+                    f"but resolved listener is {listener_protocol or 'unknown'}:{listener_port}"
+                )
+        lb_arn = listener.get("LoadBalancerArn")
+        lbs = elbv2.describe_load_balancers(LoadBalancerArns=[lb_arn]).get(
+            "LoadBalancers", []
+        )
+        if len(lbs) != 1:
+            raise RuntimeError(
+                f"Expected one ALB for listener {listener_arn}, found {len(lbs)}"
+            )
+        return listener_arn, alb_sg, lbs[0].get("DNSName", "")
 
     if not config.alb.shared_alb_name:
         raise RuntimeError("alb.shared_alb_name is required in shared mode")
@@ -1701,12 +1739,18 @@ def _resolve_shared_alb(config: ProjectConfig, elbv2) -> tuple[str, str]:
         (l for l in listeners if l.get("Protocol") == "HTTPS" and l.get("Port") == 443),
         None,
     )
-    if not preferred:
+    if not preferred and not (
+        config.cloudfront.enabled and config.cloudfront.origin_https_only
+    ):
         preferred = next((l for l in listeners if l.get("Port") in {80, 443}), None)
     if not preferred:
+        if config.cloudfront.enabled and config.cloudfront.origin_https_only:
+            raise RuntimeError(
+                "cloudfront.origin_https_only requires a shared ALB HTTPS listener on port 443"
+            )
         raise RuntimeError("Could not find an ALB listener to attach rules")
 
-    return preferred["ListenerArn"], alb_sg
+    return preferred["ListenerArn"], alb_sg, alb.get("DNSName", "")
 
 
 def _resolve_listener_priorities(
@@ -1997,6 +2041,10 @@ def _build_parameters(
         {
             "ParameterKey": "SharedAlbSecurityGroupId",
             "ParameterValue": lookups.shared_alb_security_group_id,
+        },
+        {
+            "ParameterKey": "SharedAlbDnsName",
+            "ParameterValue": lookups.shared_alb_dns_name,
         },
         {
             "ParameterKey": "CertificateArn",

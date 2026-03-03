@@ -25,6 +25,9 @@ Parameters:
   SharedAlbSecurityGroupId:
     Type: String
     Default: ''
+  SharedAlbDnsName:
+    Type: String
+    Default: ''
   CertificateArn:
     Type: String
     Default: '{{ alb.certificate_arn or "" }}'
@@ -53,6 +56,8 @@ Conditions:
   IsProd: !Equals [!Ref EnvironmentName, prod]
   UseDedicatedAlb: !Equals [!Ref AlbMode, dedicated]
   HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
+  UseDedicatedAlbWithCert: !And [!Condition UseDedicatedAlb, !Condition HasCertificate]
+  UseDedicatedAlbNoCert: !And [!Condition UseDedicatedAlb, !Not [!Condition HasCertificate]]
 {% if has_rds %}
   HasRdsSnapshot: !Not [!Equals [!Ref RdsSnapshotIdentifier, '']]
 {% endif %}
@@ -101,11 +106,41 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
+        - !If
+          - UseDedicatedAlbWithCert
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: 0.0.0.0/0
+          - !Ref 'AWS::NoValue'
 
-  DedicatedAlbListener:
+  DedicatedAlbHttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Condition: UseDedicatedAlb
     Properties:
+      DefaultActions:
+        - !If
+          - UseDedicatedAlbWithCert
+          - Type: redirect
+            RedirectConfig:
+              Protocol: HTTPS
+              Port: '443'
+              StatusCode: HTTP_301
+          - Type: fixed-response
+            FixedResponseConfig:
+              StatusCode: '404'
+              ContentType: text/plain
+              MessageBody: Not Found
+      LoadBalancerArn: !Ref DedicatedAlb
+      Port: 80
+      Protocol: HTTP
+
+  DedicatedAlbHttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: UseDedicatedAlbWithCert
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
       DefaultActions:
         - Type: fixed-response
           FixedResponseConfig:
@@ -113,8 +148,95 @@ Resources:
             ContentType: text/plain
             MessageBody: Not Found
       LoadBalancerArn: !Ref DedicatedAlb
-      Port: 80
-      Protocol: HTTP
+      Port: 443
+      Protocol: HTTPS
+
+{% if has_alb_cloudfront %}
+  AlbCloudFront:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+{% if alb_cloudfront.comment %}
+        Comment: '{{ alb_cloudfront.comment | replace("'", "''") }}'
+{% endif %}
+        PriceClass: {{ alb_cloudfront.price_class }}
+{% if alb_cloudfront.custom_domain %}
+        Aliases:
+          - '{{ alb_cloudfront.custom_domain }}'
+{% endif %}
+        Origins:
+          - DomainName: !If [UseDedicatedAlb, !GetAtt DedicatedAlb.DNSName, !Ref SharedAlbDnsName]
+            Id: AlbOrigin
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: {{ 'https-only' if alb_cloudfront.origin_https_only else 'http-only' }}
+{% if alb_cloudfront.certificate_arn %}
+        ViewerCertificate:
+          AcmCertificateArn: '{{ alb_cloudfront.certificate_arn }}'
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+{% endif %}
+        DefaultCacheBehavior:
+          TargetOriginId: AlbOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD, OPTIONS]
+          Compress: true
+          MinTTL: 0
+          DefaultTTL: 0
+          MaxTTL: 0
+          ForwardedValues:
+            QueryString: true
+            Cookies:
+              Forward: all
+            Headers:
+              - '*'
+{% if alb_cloudfront.cached_behaviors %}
+        CacheBehaviors:
+{% for behavior in alb_cloudfront.cached_behaviors %}
+          - PathPattern: '{{ behavior.path_pattern }}'
+            TargetOriginId: AlbOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD, OPTIONS]
+            Compress: {{ 'true' if behavior.compress else 'false' }}
+            MinTTL: {{ behavior.min_ttl_seconds }}
+            DefaultTTL: {{ behavior.default_ttl_seconds }}
+            MaxTTL: {{ behavior.max_ttl_seconds }}
+            ForwardedValues:
+{% if behavior.query_strings == 'none' %}
+              QueryString: false
+{% else %}
+              QueryString: true
+{% if behavior.query_strings == 'allowlist' and behavior.query_string_allowlist %}
+              QueryStringCacheKeys:
+{% for key in behavior.query_string_allowlist %}
+                - '{{ key }}'
+{% endfor %}
+{% endif %}
+{% endif %}
+              Cookies:
+{% if behavior.cookies == 'all' %}
+                Forward: all
+{% elif behavior.cookies == 'allowlist' %}
+                Forward: whitelist
+                WhitelistedNames:
+{% for cookie in behavior.cookie_allowlist %}
+                  - '{{ cookie }}'
+{% endfor %}
+{% else %}
+                Forward: none
+{% endif %}
+              Headers:
+                - Host
+{% if behavior.forward_authorization_header %}
+                - Authorization
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}
 
 {% for secret in secrets if secret.source.value == 'generate' %}
   Secret{{ secret.name | replace('_', '') | replace('-', '') }}:
@@ -278,7 +400,8 @@ Resources:
         PrivateSubnetIds: !Join [",", !Ref PrivateSubnetIds]
         ClusterName: !Ref EcsCluster
         ClusterArn: !GetAtt EcsCluster.Arn
-        AlbListenerArn: !If [UseDedicatedAlb, !Ref DedicatedAlbListener, !Ref SharedAlbListenerArn]
+        ClusterDomain: !Ref ClusterDomain
+        AlbListenerArn: !If [UseDedicatedAlb, !If [UseDedicatedAlbWithCert, !Ref DedicatedAlbHttpsListener, !Ref DedicatedAlbHttpListener], !Ref SharedAlbListenerArn]
         AlbSecurityGroupId: !If [UseDedicatedAlb, !Ref DedicatedAlbSecurityGroup, !Ref SharedAlbSecurityGroupId]
 {% if has_service_discovery and svc_ctx.svc.enable_service_discovery %}        CloudMapNamespaceId: !If [HasExistingCloudMapNamespace, !Ref ExistingCloudMapNamespaceId, !Ref ServiceNamespace]
 {% endif %}
@@ -305,6 +428,9 @@ Resources:
 {% if s3.cf_param_name %}
         {{ s3.cf_param_name }}: !Sub 'https://${CloudFront{{ s3.bucket_name | replace('-', '') }}.DomainName}'
 {% endif %}
+{% endfor %}
+{% for cf in svc_ctx.cloudfront_vars %}
+        {{ cf.param_name }}: !Sub 'https://${AlbCloudFront.DomainName}'
 {% endfor %}
 
 {% endfor %}
@@ -333,4 +459,12 @@ Outputs:
   StackEnvironment:
     Value: !Ref EnvironmentName
   AlbListenerArn:
-    Value: !If [UseDedicatedAlb, !Ref DedicatedAlbListener, !Ref SharedAlbListenerArn]
+    Value: !If [UseDedicatedAlb, !If [UseDedicatedAlbWithCert, !Ref DedicatedAlbHttpsListener, !Ref DedicatedAlbHttpListener], !Ref SharedAlbListenerArn]
+{% if has_alb_cloudfront %}
+  CloudFrontDistributionId:
+    Value: !Ref AlbCloudFront
+  CloudFrontDomainName:
+    Value: !GetAtt AlbCloudFront.DomainName
+  CloudFrontUrl:
+    Value: !Sub 'https://${AlbCloudFront.DomainName}'
+{% endif %}

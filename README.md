@@ -58,6 +58,7 @@ darth-infra destroy --env dev
    - Optional RDS PostgreSQL database
    - Optional S3 buckets (with optional CloudFront)
   - Shared ALB and cluster routing
+  - Optional CloudFront distribution in front of ALB with allowlisted cached paths
    - Secrets management (auto-generated or from env vars)
 
 2. The TUI scaffolds a **complete CloudFormation YAML project** that you own and can customize.
@@ -126,10 +127,36 @@ domain = "myapp.example.com"
 default_target_service = "django"
 default_listener_priority = 100
 
+[cloudfront]
+enabled = true
+origin_https_only = true
+custom_domain = "cdn.myapp.example.com"
+certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/11111111-2222-3333-4444-555555555555"
+price_class = "PriceClass_100"
+
+[[cloudfront.connections]]
+service = "django"
+env_key = "APP_CDN_URL"
+
+[[cloudfront.cached_behaviors]]
+name = "images"
+path_pattern = "/images/*"
+query_strings = "all"
+cookies = "none"
+forward_authorization_header = false
+
 [[secrets]]
 name = "DJANGO_SECRET_KEY"
 source = "generate"
 ```
+
+Notes:
+- `cloudfront.custom_domain` and `cloudfront.certificate_arn` must be set together.
+- CloudFront certificates must be issued in `us-east-1`.
+- `cloudfront.origin_https_only = true` requires ALB origin HTTPS compatibility:
+  - shared mode: selected shared listener must be `HTTPS:443`
+  - dedicated mode: `alb.certificate_arn` must be set
+- Configure DNS for CloudFront custom domains externally (for example, Route53 alias to distribution).
 
 Generated secrets are named using:
 

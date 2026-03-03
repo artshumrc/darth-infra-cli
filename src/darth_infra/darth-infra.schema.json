@@ -442,6 +442,143 @@
       },
       "default": []
     },
+    "cloudfront": {
+      "type": "object",
+      "description": "Optional CloudFront distribution in front of ALB routing.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "When true, create a CloudFront distribution in front of the ALB routing domain.",
+          "default": false
+        },
+        "origin_https_only": {
+          "type": "boolean",
+          "description": "When true, CloudFront connects to the ALB origin using HTTPS only. In shared ALB mode this requires an HTTPS listener on port 443; in dedicated mode this requires alb.certificate_arn.",
+          "default": false
+        },
+        "custom_domain": {
+          "type": ["string", "null"],
+          "description": "Optional custom domain alias for the CloudFront distribution. Must be paired with certificate_arn and mapped in external DNS.",
+          "default": null
+        },
+        "certificate_arn": {
+          "type": ["string", "null"],
+          "description": "Optional ACM certificate ARN in us-east-1 for the CloudFront custom domain. Must be paired with custom_domain.",
+          "default": null
+        },
+        "price_class": {
+          "type": "string",
+          "description": "CloudFront price class.",
+          "enum": ["PriceClass_100", "PriceClass_200", "PriceClass_All"],
+          "default": "PriceClass_100"
+        },
+        "comment": {
+          "type": ["string", "null"],
+          "description": "Optional CloudFront distribution comment.",
+          "default": null
+        },
+        "connections": {
+          "type": "array",
+          "description": "Service env var connections for CloudFront URL injection.",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": ["service", "env_key"],
+            "additionalProperties": false,
+            "properties": {
+              "service": {
+                "type": "string",
+                "description": "Service name to receive a CloudFront URL env var."
+              },
+              "env_key": {
+                "type": "string",
+                "description": "Environment variable key for CloudFront URL/domain.",
+                "pattern": "^[A-Z][A-Z0-9_]*$"
+              }
+            }
+          }
+        },
+        "cached_behaviors": {
+          "type": "array",
+          "description": "Allowlisted cached path behaviors. Non-matching paths remain uncached by default.",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": ["name", "path_pattern"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Behavior identifier."
+              },
+              "path_pattern": {
+                "type": "string",
+                "description": "CloudFront path pattern to cache (for example /images/*)."
+              },
+              "compress": {
+                "type": "boolean",
+                "description": "Enable compression for this behavior.",
+                "default": true
+              },
+              "cache_by_origin_headers": {
+                "type": "boolean",
+                "description": "Honor origin cache headers (Cache-Control/Expires) for this behavior.",
+                "default": true
+              },
+              "min_ttl_seconds": {
+                "type": "integer",
+                "description": "Minimum TTL in seconds.",
+                "minimum": 0,
+                "default": 0
+              },
+              "default_ttl_seconds": {
+                "type": "integer",
+                "description": "Default TTL in seconds when origin headers are absent.",
+                "minimum": 0,
+                "default": 3600
+              },
+              "max_ttl_seconds": {
+                "type": "integer",
+                "description": "Maximum TTL in seconds.",
+                "minimum": 0,
+                "default": 31536000
+              },
+              "query_strings": {
+                "type": "string",
+                "description": "Query string forwarding mode.",
+                "enum": ["all", "none", "allowlist"],
+                "default": "all"
+              },
+              "query_string_allowlist": {
+                "type": "array",
+                "description": "Allowed query keys when query_strings is allowlist.",
+                "default": [],
+                "items": { "type": "string" }
+              },
+              "cookies": {
+                "type": "string",
+                "description": "Cookie forwarding mode.",
+                "enum": ["none", "all", "allowlist"],
+                "default": "none"
+              },
+              "cookie_allowlist": {
+                "type": "array",
+                "description": "Allowed cookie names when cookies is allowlist.",
+                "default": [],
+                "items": { "type": "string" }
+              },
+              "forward_authorization_header": {
+                "type": "boolean",
+                "description": "Forward Authorization header for this behavior.",
+                "default": false
+              }
+            }
+          }
+        }
+      },
+      "default": {}
+    },
     "alb": {
       "type": "object",
       "description": "Application Load Balancer configuration.",

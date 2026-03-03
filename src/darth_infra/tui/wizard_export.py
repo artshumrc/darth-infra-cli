@@ -17,9 +17,19 @@ def default_wizard_state() -> dict[str, Any]:
         "services": [],
         "rds": None,
         "s3_buckets": [],
+        "cloudfront_enabled": False,
+        "cloudfront_origin_https_only": False,
+        "cloudfront_custom_domain": None,
+        "cloudfront_certificate_arn": None,
+        "cloudfront_price_class": "PriceClass_100",
+        "cloudfront_comment": None,
+        "cloudfront_connections": [],
+        "cloudfront_cached_behaviors": [],
         "alb_mode": "shared",
         "shared_alb_name": "",
         "shared_listener_arn": None,
+        "shared_listener_protocol": None,
+        "shared_listener_port": None,
         "shared_alb_security_group_id": None,
         "certificate_arn": None,
         "alb_domain": None,
@@ -173,9 +183,42 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
                 }
             ),
             "s3_buckets": s3_buckets,
+            "cloudfront_enabled": config.cloudfront.enabled,
+            "cloudfront_origin_https_only": config.cloudfront.origin_https_only,
+            "cloudfront_custom_domain": config.cloudfront.custom_domain,
+            "cloudfront_certificate_arn": config.cloudfront.certificate_arn,
+            "cloudfront_price_class": config.cloudfront.price_class,
+            "cloudfront_comment": config.cloudfront.comment,
+            "cloudfront_connections": [
+                {"service": conn.service, "env_key": conn.env_key}
+                for conn in config.cloudfront.connections
+            ],
+            "cloudfront_cached_behaviors": [
+                {
+                    "name": behavior.name,
+                    "path_pattern": behavior.path_pattern,
+                    "compress": behavior.compress,
+                    "cache_by_origin_headers": behavior.cache_by_origin_headers,
+                    "min_ttl_seconds": behavior.min_ttl_seconds,
+                    "default_ttl_seconds": behavior.default_ttl_seconds,
+                    "max_ttl_seconds": behavior.max_ttl_seconds,
+                    "query_strings": str(
+                        getattr(behavior.query_strings, "value", behavior.query_strings)
+                    ),
+                    "query_string_allowlist": list(
+                        behavior.query_string_allowlist
+                    ),
+                    "cookies": str(getattr(behavior.cookies, "value", behavior.cookies)),
+                    "cookie_allowlist": list(behavior.cookie_allowlist),
+                    "forward_authorization_header": behavior.forward_authorization_header,
+                }
+                for behavior in config.cloudfront.cached_behaviors
+            ],
             "alb_mode": "shared",
             "shared_alb_name": config.alb.shared_alb_name,
             "shared_listener_arn": config.alb.shared_listener_arn,
+            "shared_listener_protocol": None,
+            "shared_listener_port": None,
             "shared_alb_security_group_id": config.alb.shared_alb_security_group_id,
             "certificate_arn": config.alb.certificate_arn,
             "alb_domain": config.alb.domain,

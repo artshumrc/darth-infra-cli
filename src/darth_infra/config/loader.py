@@ -16,6 +16,11 @@ from .models import (
     AlbMode,
     AlbPathRule,
     Architecture,
+    CloudFrontCachedBehavior,
+    CloudFrontConfig,
+    CloudFrontConnection,
+    CloudFrontCookiesMode,
+    CloudFrontQueryStringsMode,
     EbsVolumeConfig,
     EnvironmentOverride,
     LaunchType,
@@ -77,6 +82,7 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
     services_raw = raw.get("services", [])
     rds_raw = raw.get("rds")
     s3_raw = raw.get("s3_buckets", [])
+    cloudfront_raw = raw.get("cloudfront", {})
     alb_raw = raw.get("alb", {})
     secrets_raw = raw.get("secrets", [])
     env_overrides_raw = raw.get("environments", {})
@@ -84,6 +90,7 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
     services = [_parse_service(s) for s in services_raw]
     rds = _parse_rds(rds_raw) if rds_raw else None
     s3_buckets = [_parse_s3(b) for b in s3_raw]
+    cloudfront = _parse_cloudfront(cloudfront_raw)
     alb = _parse_alb(alb_raw)
     secrets = [_parse_secret(s) for s in secrets_raw]
     environment_overrides = {
@@ -104,6 +111,7 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
         services=services,
         rds=rds,
         s3_buckets=s3_buckets,
+        cloudfront=cloudfront,
         alb=alb,
         secrets=secrets,
         environment_overrides=environment_overrides,
@@ -227,6 +235,48 @@ def _parse_alb(raw: dict[str, Any]) -> AlbConfig:
                 priority=int(rule["priority"]),
             )
             for rule in raw.get("path_rules", [])
+        ],
+    )
+
+
+def _parse_cloudfront(raw: dict[str, Any]) -> CloudFrontConfig:
+    raw = raw or {}
+    return CloudFrontConfig(
+        enabled=raw.get("enabled", False),
+        origin_https_only=raw.get("origin_https_only", False),
+        custom_domain=raw.get("custom_domain"),
+        certificate_arn=raw.get("certificate_arn"),
+        price_class=raw.get("price_class", "PriceClass_100"),
+        comment=raw.get("comment"),
+        connections=[
+            CloudFrontConnection(
+                service=str(conn["service"]),
+                env_key=str(conn["env_key"]),
+            )
+            for conn in raw.get("connections", [])
+        ],
+        cached_behaviors=[
+            CloudFrontCachedBehavior(
+                name=str(behavior["name"]),
+                path_pattern=str(behavior["path_pattern"]),
+                compress=behavior.get("compress", True),
+                cache_by_origin_headers=behavior.get("cache_by_origin_headers", True),
+                min_ttl_seconds=behavior.get("min_ttl_seconds", 0),
+                default_ttl_seconds=behavior.get("default_ttl_seconds", 3600),
+                max_ttl_seconds=behavior.get("max_ttl_seconds", 31536000),
+                query_strings=CloudFrontQueryStringsMode(
+                    behavior.get("query_strings", "all")
+                ),
+                query_string_allowlist=list(
+                    behavior.get("query_string_allowlist", [])
+                ),
+                cookies=CloudFrontCookiesMode(behavior.get("cookies", "none")),
+                cookie_allowlist=list(behavior.get("cookie_allowlist", [])),
+                forward_authorization_header=behavior.get(
+                    "forward_authorization_header", False
+                ),
+            )
+            for behavior in raw.get("cached_behaviors", [])
         ],
     )
 
@@ -421,6 +471,69 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f'target_service = "{rule.target_service}"')
         lines.append(f"priority = {rule.priority}")
     lines.append("")
+
+    cloudfront = config.cloudfront
+    if (
+        cloudfront.enabled
+        or cloudfront.connections
+        or cloudfront.cached_behaviors
+        or cloudfront.comment
+        or cloudfront.origin_https_only
+        or cloudfront.custom_domain
+        or cloudfront.certificate_arn
+        or cloudfront.price_class != "PriceClass_100"
+    ):
+        lines.append("# [deploy-live] CloudFront distribution behavior")
+        lines.append("[cloudfront]")
+        lines.append(f"enabled = {str(cloudfront.enabled).lower()}")
+        if cloudfront.origin_https_only:
+            lines.append("origin_https_only = true")
+        if cloudfront.custom_domain:
+            lines.append(f'custom_domain = "{_toml_escape(cloudfront.custom_domain)}"')
+        if cloudfront.certificate_arn:
+            lines.append(
+                f'certificate_arn = "{_toml_escape(cloudfront.certificate_arn)}"'
+            )
+        lines.append(f'price_class = "{cloudfront.price_class}"')
+        if cloudfront.comment:
+            lines.append(f'comment = "{_toml_escape(cloudfront.comment)}"')
+        for conn in cloudfront.connections:
+            lines.append("")
+            lines.append("[[cloudfront.connections]]")
+            lines.append(f'service = "{_toml_escape(conn.service)}"')
+            lines.append(f'env_key = "{_toml_escape(conn.env_key)}"')
+        for behavior in cloudfront.cached_behaviors:
+            lines.append("")
+            lines.append("[[cloudfront.cached_behaviors]]")
+            lines.append(f'name = "{_toml_escape(behavior.name)}"')
+            lines.append(f'path_pattern = "{_toml_escape(behavior.path_pattern)}"')
+            lines.append(f"compress = {str(behavior.compress).lower()}")
+            lines.append(
+                "cache_by_origin_headers = "
+                f"{str(behavior.cache_by_origin_headers).lower()}"
+            )
+            lines.append(f"min_ttl_seconds = {behavior.min_ttl_seconds}")
+            lines.append(f"default_ttl_seconds = {behavior.default_ttl_seconds}")
+            lines.append(f"max_ttl_seconds = {behavior.max_ttl_seconds}")
+            lines.append(
+                f'query_strings = "{_enum_value(behavior.query_strings)}"'
+            )
+            if behavior.query_string_allowlist:
+                allowlist = ", ".join(
+                    f'"{_toml_escape(v)}"' for v in behavior.query_string_allowlist
+                )
+                lines.append(f"query_string_allowlist = [{allowlist}]")
+            lines.append(f'cookies = "{_enum_value(behavior.cookies)}"')
+            if behavior.cookie_allowlist:
+                allowlist = ", ".join(
+                    f'"{_toml_escape(v)}"' for v in behavior.cookie_allowlist
+                )
+                lines.append(f"cookie_allowlist = [{allowlist}]")
+            lines.append(
+                "forward_authorization_header = "
+                f"{str(behavior.forward_authorization_header).lower()}"
+            )
+        lines.append("")
 
     if config.secrets:
         lines.append("# Secrets")

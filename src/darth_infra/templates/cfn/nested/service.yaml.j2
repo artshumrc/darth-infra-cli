@@ -16,6 +16,8 @@ Parameters:
     Type: String
   ClusterArn:
     Type: String
+  ClusterDomain:
+    Type: String
   AlbListenerArn:
     Type: String
   AlbSecurityGroupId:
@@ -40,6 +42,10 @@ Parameters:
 {% endfor %}
 {% for s3 in s3_vars if s3.cf_param_name %}
   {{ s3.cf_param_name }}:
+    Type: String
+{% endfor %}
+{% for cf in cloudfront_vars %}
+  {{ cf.param_name }}:
     Type: String
 {% endfor %}
 
@@ -318,6 +324,10 @@ Resources:
               Value: !Ref {{ s3.cf_param_name }}
 {% endif %}
 {% endfor %}
+{% for cf in cloudfront_vars %}
+            - Name: {{ cf.env_key }}
+              Value: !Ref {{ cf.param_name }}
+{% endfor %}
 {% if secret_params or has_rds %}
           Secrets:
 {% for sec in secret_params %}
@@ -383,7 +393,14 @@ Resources:
       Conditions:
         - Field: host-header
           HostHeaderConfig:
-            Values: ['{{ cluster_domain }}']
+            Values:
+{% for host in listener_hostnames %}
+{% if host.is_ref %}
+              - !Ref {{ host.ref_name }}
+{% else %}
+              - '{{ host.value }}'
+{% endif %}
+{% endfor %}
       ListenerArn: !Ref AlbListenerArn
       Priority: {{ default_listener_priority }}
 
@@ -398,7 +415,14 @@ Resources:
       Conditions:
         - Field: host-header
           HostHeaderConfig:
-            Values: ['{{ cluster_domain }}']
+            Values:
+{% for host in listener_hostnames %}
+{% if host.is_ref %}
+              - !Ref {{ host.ref_name }}
+{% else %}
+              - '{{ host.value }}'
+{% endif %}
+{% endfor %}
         - Field: path-pattern
           PathPatternConfig:
             Values: ['{{ rule.path_pattern }}']

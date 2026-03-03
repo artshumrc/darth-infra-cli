@@ -238,6 +238,27 @@ def _build_context(config: ProjectConfig) -> dict:
             ),
         )
 
+    cloudfront_access_by_service: dict[str, list[dict[str, str]]] = {}
+    for conn in config.cloudfront.connections:
+        cloudfront_access_by_service.setdefault(conn.service, []).append(
+            {
+                "env_key": conn.env_key,
+                "param_name": f"CloudFrontUrl{_pascalize(conn.env_key)}",
+            }
+        )
+    for service_name, entries in cloudfront_access_by_service.items():
+        seen_param_names: set[str] = set()
+        deduped: list[dict[str, str]] = []
+        for entry in entries:
+            key = entry["param_name"]
+            if key in seen_param_names:
+                continue
+            seen_param_names.add(key)
+            deduped.append(entry)
+        cloudfront_access_by_service[service_name] = sorted(
+            deduped, key=lambda item: item["env_key"]
+        )
+
     for svc in config.services:
         has_alb_target = svc.port is not None and svc.name in routed_alb_target_services
         name_pascal = _pascalize(svc.name)
@@ -304,6 +325,7 @@ def _build_context(config: ProjectConfig) -> dict:
                 "has_rds": bool(config.rds)
                 and (svc.name in rds_expose_to or service_has_rds_secret),
                 "s3_vars": s3_access_by_service.get(svc.name, []),
+                "cloudfront_vars": cloudfront_access_by_service.get(svc.name, []),
                 "secret_params": secret_params,
                 "ebs_params": [
                     {
@@ -341,10 +363,17 @@ def _build_context(config: ProjectConfig) -> dict:
             and config.alb.default_target_service == svc_name
             and svc_ctx["has_alb_target"]
         )
-        svc_ctx["cluster_domain"] = config.alb.domain or ""
+        listener_hostnames: list[dict[str, object]] = []
+        if config.alb.domain:
+            listener_hostnames.append({"is_ref": True, "ref_name": "ClusterDomain"})
+            cf_custom_domain = (config.cloudfront.custom_domain or "").strip()
+            if cf_custom_domain and cf_custom_domain != config.alb.domain:
+                listener_hostnames.append({"is_ref": False, "value": cf_custom_domain})
+
         svc_ctx["default_listener_priority"] = config.alb.default_listener_priority
         svc_ctx["is_default_listener_target"] = is_default_listener_target
         svc_ctx["service_path_rules"] = svc_path_rules
+        svc_ctx["listener_hostnames"] = listener_hostnames
         svc_ctx["has_cluster_routing_rules"] = bool(
             config.alb.domain and (is_default_listener_target or svc_path_rules)
         )
@@ -365,6 +394,32 @@ def _build_context(config: ProjectConfig) -> dict:
         "has_cloudfront": any(
             b.cloudfront and b.mode.value != "existing" for b in config.s3_buckets
         ),
+        "has_alb_cloudfront": config.cloudfront.enabled,
+        "alb_cloudfront": {
+            "origin_https_only": config.cloudfront.origin_https_only,
+            "custom_domain": config.cloudfront.custom_domain,
+            "certificate_arn": config.cloudfront.certificate_arn,
+            "price_class": config.cloudfront.price_class,
+            "comment": config.cloudfront.comment,
+            "cached_behaviors": [
+                {
+                    "name": behavior.name,
+                    "name_pascal": _pascalize(behavior.name),
+                    "path_pattern": behavior.path_pattern,
+                    "compress": behavior.compress,
+                    "cache_by_origin_headers": behavior.cache_by_origin_headers,
+                    "min_ttl_seconds": behavior.min_ttl_seconds,
+                    "default_ttl_seconds": behavior.default_ttl_seconds,
+                    "max_ttl_seconds": behavior.max_ttl_seconds,
+                    "query_strings": _enum_value(behavior.query_strings),
+                    "query_string_allowlist": behavior.query_string_allowlist,
+                    "cookies": _enum_value(behavior.cookies),
+                    "cookie_allowlist": behavior.cookie_allowlist,
+                    "forward_authorization_header": behavior.forward_authorization_header,
+                }
+                for behavior in config.cloudfront.cached_behaviors
+            ],
+        },
         "has_ec2": any(_enum_value(s.launch_type) == "ec2" for s in config.services),
         "has_service_discovery": any(
             s.enable_service_discovery for s in config.services

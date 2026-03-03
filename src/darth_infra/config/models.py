@@ -45,6 +45,22 @@ class S3BucketMode(str, Enum):
     SEED_COPY = "seed-copy"
 
 
+class CloudFrontQueryStringsMode(str, Enum):
+    """How CloudFront handles query strings in cache key/origin request."""
+
+    ALL = "all"
+    NONE = "none"
+    ALLOWLIST = "allowlist"
+
+
+class CloudFrontCookiesMode(str, Enum):
+    """How CloudFront handles cookies in cache key/origin request."""
+
+    NONE = "none"
+    ALL = "all"
+    ALLOWLIST = "allowlist"
+
+
 # Graviton / ARM-based instance type prefixes
 _ARM_PREFIXES = (
     "a1",
@@ -166,6 +182,46 @@ class S3BucketConfig:
     cloudfront: bool = False
     cors: bool = False
     connections: list[S3BucketConnection] = field(default_factory=list)
+
+
+@dataclass
+class CloudFrontConnection:
+    """Inject CloudFront URL/domain into a service env var."""
+
+    service: str
+    env_key: str
+
+
+@dataclass
+class CloudFrontCachedBehavior:
+    """An allowlisted cached CloudFront behavior for ALB-backed origins."""
+
+    name: str
+    path_pattern: str
+    compress: bool = True
+    cache_by_origin_headers: bool = True
+    min_ttl_seconds: int = 0
+    default_ttl_seconds: int = 3600
+    max_ttl_seconds: int = 31536000
+    query_strings: CloudFrontQueryStringsMode = CloudFrontQueryStringsMode.ALL
+    query_string_allowlist: list[str] = field(default_factory=list)
+    cookies: CloudFrontCookiesMode = CloudFrontCookiesMode.NONE
+    cookie_allowlist: list[str] = field(default_factory=list)
+    forward_authorization_header: bool = False
+
+
+@dataclass
+class CloudFrontConfig:
+    """CloudFront distribution configuration in front of ALB routing."""
+
+    enabled: bool = False
+    origin_https_only: bool = False
+    custom_domain: str | None = None
+    certificate_arn: str | None = None
+    price_class: str = "PriceClass_100"
+    comment: str | None = None
+    connections: list[CloudFrontConnection] = field(default_factory=list)
+    cached_behaviors: list[CloudFrontCachedBehavior] = field(default_factory=list)
 
 
 @dataclass
@@ -353,6 +409,7 @@ class ProjectConfig:
         environments: Environment names. "prod" must be first.
         rds: Optional RDS database configuration.
         s3_buckets: Optional S3 buckets to provision per environment.
+        cloudfront: Optional CloudFront distribution in front of ALB.
         alb: ALB configuration.
         secrets: Additional secrets to inject into containers.
         environment_overrides: Per-environment configuration overrides.
@@ -369,6 +426,7 @@ class ProjectConfig:
     public_subnet_ids: list[str] = field(default_factory=list)
     rds: RdsConfig | None = None
     s3_buckets: list[S3BucketConfig] = field(default_factory=list)
+    cloudfront: CloudFrontConfig = field(default_factory=CloudFrontConfig)
     alb: AlbConfig = field(default_factory=AlbConfig)
     secrets: list[SecretConfig] = field(default_factory=list)
     environment_overrides: dict[str, EnvironmentOverride] = field(default_factory=dict)
@@ -543,6 +601,145 @@ class ProjectConfig:
                     )
                 if conn.cloudfront_env_key:
                     s3_cf_env_keys_by_service[service_name].add(conn.cloudfront_env_key)
+
+        if self.cloudfront.enabled:
+            if not self.alb.domain:
+                raise ValueError(
+                    "cloudfront.enabled requires alb.domain to be configured"
+                )
+            if (
+                self.cloudfront.origin_https_only
+                and self.alb.mode == AlbMode.DEDICATED
+                and not (self.alb.certificate_arn or "").strip()
+            ):
+                raise ValueError(
+                    "cloudfront.origin_https_only requires alb.certificate_arn when alb.mode='dedicated'"
+                )
+            if not self.cloudfront.cached_behaviors:
+                raise ValueError(
+                    "cloudfront.enabled requires at least one cloudfront.cached_behaviors entry"
+                )
+            cf_domain = (self.cloudfront.custom_domain or "").strip()
+            cf_cert_arn = (self.cloudfront.certificate_arn or "").strip()
+            if bool(cf_domain) != bool(cf_cert_arn):
+                raise ValueError(
+                    "cloudfront.custom_domain and cloudfront.certificate_arn must be set together"
+                )
+            if cf_domain:
+                if "://" in cf_domain or "/" in cf_domain:
+                    raise ValueError(
+                        "cloudfront.custom_domain must be a hostname without scheme/path"
+                    )
+        elif (
+            self.cloudfront.connections
+            or self.cloudfront.cached_behaviors
+            or self.cloudfront.origin_https_only
+            or self.cloudfront.custom_domain
+            or self.cloudfront.certificate_arn
+        ):
+            raise ValueError(
+                "cloudfront.connections, cloudfront.cached_behaviors, cloudfront.origin_https_only, "
+                "cloudfront.custom_domain, and cloudfront.certificate_arn require cloudfront.enabled=true"
+            )
+
+        if self.cloudfront.price_class not in {
+            "PriceClass_100",
+            "PriceClass_200",
+            "PriceClass_All",
+        }:
+            raise ValueError(
+                "cloudfront.price_class must be one of PriceClass_100, PriceClass_200, PriceClass_All"
+            )
+
+        seen_cf_behavior_names: set[str] = set()
+        seen_cf_behavior_paths: set[str] = set()
+        for behavior in self.cloudfront.cached_behaviors:
+            name = behavior.name.strip()
+            if not name:
+                raise ValueError("cloudfront.cached_behaviors[].name must not be empty")
+            if name in seen_cf_behavior_names:
+                raise ValueError(
+                    f"Duplicate cloudfront.cached_behaviors name '{behavior.name}'"
+                )
+            seen_cf_behavior_names.add(name)
+
+            path_pattern = behavior.path_pattern.strip()
+            if not path_pattern:
+                raise ValueError(
+                    "cloudfront.cached_behaviors[].path_pattern must not be empty"
+                )
+            if path_pattern in seen_cf_behavior_paths:
+                raise ValueError(
+                    "Duplicate cloudfront.cached_behaviors path_pattern "
+                    f"'{behavior.path_pattern}'"
+                )
+            seen_cf_behavior_paths.add(path_pattern)
+
+            if behavior.min_ttl_seconds < 0:
+                raise ValueError(
+                    f"cloudfront.cached_behaviors '{behavior.name}' min_ttl_seconds must be >= 0"
+                )
+            if behavior.default_ttl_seconds < behavior.min_ttl_seconds:
+                raise ValueError(
+                    f"cloudfront.cached_behaviors '{behavior.name}' default_ttl_seconds "
+                    "must be >= min_ttl_seconds"
+                )
+            if behavior.max_ttl_seconds < behavior.default_ttl_seconds:
+                raise ValueError(
+                    f"cloudfront.cached_behaviors '{behavior.name}' max_ttl_seconds "
+                    "must be >= default_ttl_seconds"
+                )
+
+            if (
+                behavior.query_strings == CloudFrontQueryStringsMode.ALLOWLIST
+                and not behavior.query_string_allowlist
+            ):
+                raise ValueError(
+                    "cloudfront.cached_behaviors "
+                    f"'{behavior.name}' query_string_allowlist is required when "
+                    "query_strings='allowlist'"
+                )
+            if (
+                behavior.query_strings != CloudFrontQueryStringsMode.ALLOWLIST
+                and behavior.query_string_allowlist
+            ):
+                raise ValueError(
+                    "cloudfront.cached_behaviors "
+                    f"'{behavior.name}' query_string_allowlist is only allowed when "
+                    "query_strings='allowlist'"
+                )
+
+            if (
+                behavior.cookies == CloudFrontCookiesMode.ALLOWLIST
+                and not behavior.cookie_allowlist
+            ):
+                raise ValueError(
+                    f"cloudfront.cached_behaviors '{behavior.name}' cookie_allowlist "
+                    "is required when cookies='allowlist'"
+                )
+            if (
+                behavior.cookies != CloudFrontCookiesMode.ALLOWLIST
+                and behavior.cookie_allowlist
+            ):
+                raise ValueError(
+                    f"cloudfront.cached_behaviors '{behavior.name}' cookie_allowlist "
+                    "is only allowed when cookies='allowlist'"
+                )
+
+        seen_cf_connection_pairs: set[tuple[str, str]] = set()
+        for conn in self.cloudfront.connections:
+            if conn.service not in service_names:
+                raise ValueError(
+                    "cloudfront.connections references unknown service "
+                    f"'{conn.service}'"
+                )
+            pair = (conn.service, conn.env_key)
+            if pair in seen_cf_connection_pairs:
+                raise ValueError(
+                    "Duplicate cloudfront.connections entry for service "
+                    f"'{conn.service}' env_key '{conn.env_key}'"
+                )
+            seen_cf_connection_pairs.add(pair)
 
         if self.alb.domain:
             if not self.alb.default_target_service:
