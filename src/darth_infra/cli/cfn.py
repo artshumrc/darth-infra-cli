@@ -46,6 +46,7 @@ class DeployMonitorState:
     seen_task_failure_keys: set[str]
     log_since_ms_by_service: dict[str, int]
     last_pending_signature: str
+    fatal_ecs_messages: list[str]
 
 
 def resolve_lookup_data(config: ProjectConfig, env_name: str) -> ResolvedLookupData:
@@ -191,6 +192,133 @@ def _validate_resolved_lookup_data(
     if config.cloudfront.enabled and not lookups.shared_alb_dns_name:
         raise RuntimeError(
             "CloudFront is enabled but shared ALB DNS name could not be resolved"
+        )
+
+
+def validate_rendered_deploy_templates(
+    project_dir: Path,
+    config: ProjectConfig,
+    env_name: str,
+    lookups: ResolvedLookupData,
+) -> None:
+    root_template = project_dir / "templates" / "generated" / "root.yaml"
+    if not root_template.is_file():
+        raise FileNotFoundError(f"Missing template file: {root_template}")
+
+    root_body = root_template.read_text()
+    service_dir = project_dir / "templates" / "generated" / "services"
+    secrets_by_name = {sec.name: sec for sec in config.secrets}
+    rds_key_by_env = {
+        "DATABASE_HOST": "host",
+        "DATABASE_PORT": "port",
+        "DATABASE_DB": "dbname",
+        "DATABASE_USER": "username",
+        "DATABASE_PASSWORD": "password",
+        "POSTGRES_HOST": "host",
+        "POSTGRES_PORT": "port",
+        "POSTGRES_DB": "dbname",
+        "POSTGRES_USER": "username",
+        "POSTGRES_PASSWORD": "password",
+    }
+
+    for service in config.services:
+        service_template = service_dir / f"{service.name}.yaml"
+        if not service_template.is_file():
+            raise FileNotFoundError(f"Missing service template file: {service_template}")
+        service_body = service_template.read_text()
+
+        expected_secret_names = list(service.secrets)
+        if config.rds and service.name in config.rds.expose_to:
+            for secret_name in (
+                "POSTGRES_DB",
+                "POSTGRES_USER",
+                "POSTGRES_PASSWORD",
+                "POSTGRES_HOST",
+                "POSTGRES_PORT",
+            ):
+                if secret_name not in expected_secret_names:
+                    expected_secret_names.append(secret_name)
+
+        expected_sources = set()
+        for secret_name in expected_secret_names:
+            secret_cfg = secrets_by_name.get(secret_name)
+            source = getattr(getattr(secret_cfg, "source", None), "value", None)
+            if source is None:
+                if (
+                    config.rds
+                    and service.name in config.rds.expose_to
+                    and secret_name in rds_key_by_env
+                ):
+                    source = "rds"
+                else:
+                    source = "generate"
+
+            if source == "rds":
+                expected_sources.add("RdsSecretArn")
+                json_key = rds_key_by_env.get(
+                    secret_name,
+                    str(secret_cfg.existing_secret_name).strip() if secret_cfg else "",
+                )
+                expected_value = f"ValueFrom: !Sub '${{RdsSecretArn}}:{json_key}::'"
+                if expected_value not in service_body:
+                    raise RuntimeError(
+                        f"Preflight validation failed for service '{service.name}': "
+                        f"secret '{secret_name}' is missing the expected RDS ValueFrom mapping"
+                    )
+                if f"- Name: {secret_name}" not in service_body:
+                    raise RuntimeError(
+                        f"Preflight validation failed for service '{service.name}': "
+                        f"secret '{secret_name}' is missing from the ECS task definition"
+                    )
+                continue
+
+            param_name = f"SecretArn{_secret_logical_suffix(secret_name)}"
+            if f"- Name: {secret_name}" not in service_body:
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    f"secret '{secret_name}' is missing from the ECS task definition"
+                )
+            if f"ValueFrom: !Ref {param_name}" not in service_body:
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    f"secret '{secret_name}' is missing the expected task ValueFrom reference"
+                )
+            if f"- !Ref {param_name}" not in service_body:
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    f"secret '{secret_name}' is missing from the task execution role policy"
+                )
+
+            if source == "generate":
+                expected_root_value = (
+                    f"{param_name}: !GetAtt Secret{_secret_logical_suffix(secret_name)}.Arn"
+                )
+            else:
+                expected_arn = lookups.external_secret_arns.get(secret_name, "").strip()
+                if not expected_arn:
+                    raise RuntimeError(
+                        f"Preflight validation failed: external secret '{secret_name}' did not resolve to an ARN"
+                    )
+                expected_root_value = (
+                    f"{param_name}: !Ref EnvSecretArn{_secret_logical_suffix(secret_name)}"
+                )
+
+            if expected_root_value not in root_body:
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    f"secret '{secret_name}' is missing from the root stack nested-service parameters"
+                )
+
+        for source_name in sorted(expected_sources):
+            if f"- !Ref {source_name}" not in service_body:
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    f"required secret source '{source_name}' is missing from the task execution role policy"
+                )
+
+    if config.rds and "RdsSecretArn: !GetAtt RdsCredentialsSecret.Arn" not in root_body:
+        raise RuntimeError(
+            "Preflight validation failed: root stack is missing the nested RDS secret ARN wiring"
         )
 
 
@@ -876,12 +1004,14 @@ def _monitor_stack_deploy(
         seen_task_failure_keys=set(),
         log_since_ms_by_service={},
         last_pending_signature="",
+        fatal_ecs_messages=[],
     )
 
     last_stack_status: str | None = None
     final_status: str = "UNKNOWN"
     final_reason: str = ""
     success = False
+    rollout_deadline = time.time() + 900
 
     with Live(console=console, refresh_per_second=4, transient=False) as live:
         while True:
@@ -914,7 +1044,18 @@ def _monitor_stack_deploy(
                 final_status = stack_status
                 final_reason = stack_reason
                 success = _is_stack_success(stack_status)
-                break
+                if not success:
+                    break
+                if state.fatal_ecs_messages:
+                    final_reason = state.fatal_ecs_messages[-1]
+                    success = False
+                    break
+                if _ecs_rollout_is_stable(ecs_snapshot):
+                    break
+                if time.time() >= rollout_deadline:
+                    final_reason = _ecs_rollout_timeout_reason(ecs_snapshot)
+                    success = False
+                    break
 
             time.sleep(poll_interval_seconds)
 
@@ -1289,6 +1430,8 @@ def _collect_new_ecs_service_events(
             if any(k in lowered for k in ("error", "failed", "unable", "unhealthy"))
             else "yellow"
         )
+        if _is_fatal_ecs_startup_message(message):
+            state.fatal_ecs_messages.append(f"{service_name}: {message}")
         output.append(
             {"key": f"{service_name} event", "value": message, "style": style}
         )
@@ -1333,6 +1476,10 @@ def _collect_recent_task_failures(
             key = f"{task_arn}|{stopped_reason}"
             if key not in state.seen_task_failure_keys:
                 state.seen_task_failure_keys.add(key)
+                if _is_fatal_ecs_startup_message(stopped_reason):
+                    state.fatal_ecs_messages.append(
+                        f"{short_service_name} task stopped ({task_id}): {stopped_reason}"
+                    )
                 output.append(
                     {
                         "key": f"{short_service_name} task",
@@ -1351,6 +1498,10 @@ def _collect_recent_task_failures(
             if key in state.seen_task_failure_keys:
                 continue
             state.seen_task_failure_keys.add(key)
+            if _is_fatal_ecs_startup_message(reason):
+                state.fatal_ecs_messages.append(
+                    f"{short_service_name} container issue ({task_id}/{name}): {reason}"
+                )
             output.append(
                 {
                     "key": f"{short_service_name} container",
@@ -1426,6 +1577,60 @@ def _collect_recent_service_logs(
 
     state.log_since_ms_by_service[service_name] = max_seen_timestamp + 1
     return output
+
+
+def _is_fatal_ecs_startup_message(message: str) -> bool:
+    lowered = message.lower()
+    if "resourceinitializationerror" in lowered:
+        return True
+    return any(
+        needle in lowered
+        for needle in (
+            "unable to pull secrets",
+            "unable to retrieve secret",
+            "accessdeniedexception",
+            "secretsmanager:getsecretvalue",
+            "pull secrets or registry auth",
+            "failed to fetch secret",
+        )
+    )
+
+
+def _ecs_rollout_is_stable(ecs_snapshot: dict[str, Any]) -> bool:
+    for row in ecs_snapshot.get("rows", []):
+        desired = int(row.get("desired", "0"))
+        running = int(row.get("running", "0"))
+        pending = int(row.get("pending", "0"))
+        deployments = int(row.get("deployments", "0"))
+        status = str(row.get("status", "UNKNOWN"))
+        if desired == 0:
+            continue
+        if status != "ACTIVE":
+            return False
+        if running < desired or pending > 0 or deployments > 1:
+            return False
+    return True
+
+
+def _ecs_rollout_timeout_reason(ecs_snapshot: dict[str, Any]) -> str:
+    unstable = []
+    for row in ecs_snapshot.get("rows", []):
+        desired = int(row.get("desired", "0"))
+        if desired == 0:
+            continue
+        running = int(row.get("running", "0"))
+        pending = int(row.get("pending", "0"))
+        deployments = int(row.get("deployments", "0"))
+        status = str(row.get("status", "UNKNOWN"))
+        if status == "ACTIVE" and running >= desired and pending == 0 and deployments <= 1:
+            continue
+        unstable.append(
+            f"{row.get('service', '?')} status={status} running={running}/{desired} "
+            f"pending={pending} deployments={deployments}"
+        )
+    if not unstable:
+        return "ECS rollout did not stabilize before timeout"
+    return "ECS rollout did not stabilize before timeout: " + "; ".join(unstable)
 
 
 def _render_deploy_live_view(

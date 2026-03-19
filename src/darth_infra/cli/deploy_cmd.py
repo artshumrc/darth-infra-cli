@@ -15,6 +15,7 @@ from .cfn import (
     package_template,
     resolve_lookup_data,
     run_seed_copy_tasks,
+    validate_rendered_deploy_templates,
 )
 from .helpers import (
     console,
@@ -115,6 +116,7 @@ def deploy(
         generate_project(config, project_dir)
 
         lookups = resolve_lookup_data(config, env_name)
+        validate_rendered_deploy_templates(project_dir, config, env_name, lookups)
         bucket = ensure_artifact_bucket(config)
         packaged_template = package_template(project_dir, config, env_name, bucket)
         rc = deploy_changeset(
@@ -168,6 +170,7 @@ def _prepare_images_for_deploy(config, project_dir, env_name: str) -> None:
 
         generate_project(bootstrap_config, project_dir)
         lookups = resolve_lookup_data(config, env_name)
+        validate_rendered_deploy_templates(project_dir, bootstrap_config, env_name, lookups)
         bucket = ensure_artifact_bucket(config)
         packaged_template = package_template(project_dir, config, env_name, bucket)
         bootstrap_rc = deploy_changeset(

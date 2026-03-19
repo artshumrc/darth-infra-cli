@@ -406,13 +406,13 @@ Resources:
 {% if has_service_discovery and svc_ctx.svc.enable_service_discovery %}        CloudMapNamespaceId: !If [HasExistingCloudMapNamespace, !Ref ExistingCloudMapNamespaceId, !Ref ServiceNamespace]
 {% endif %}
 {% if svc_ctx.has_rds %}
-        RdsSecretArn: !Ref RdsCredentialsSecret
+        RdsSecretArn: !GetAtt RdsCredentialsSecret.Arn
 {% endif %}
 {% for sec in svc_ctx.secret_params %}
 {% set sec_name = sec.secret_name %}
 {% set sec_source = sec.source %}
 {% if sec_source == 'generate' %}
-        {{ sec.param_name }}: !Ref Secret{{ sec_name | replace('_', '') | replace('-', '') }}
+        {{ sec.param_name }}: !GetAtt Secret{{ sec_name | replace('_', '') | replace('-', '') }}.Arn
 {% elif sec_source in ['env', 'existing'] %}
         {{ sec.param_name }}: !Ref EnvSecretArn{{ sec_name | replace('_', '') | replace('-', '') }}
 {% endif %}
