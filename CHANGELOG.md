@@ -1,5 +1,15 @@
 # darth-infra
 
+## 0.4.0
+
+### Minor Changes
+
+- [`e6ac91e`](https://github.com/artshumrc/darth-infra-cli/commit/e6ac91e1506e9fd7dcdb43adb6b5b0ad8ea76263) Thanks [@d-flood](https://github.com/d-flood)! - Add ses role permissions
+
+- [`8c40d47`](https://github.com/artshumrc/darth-infra-cli/commit/8c40d47b79550bc17b048ab5b30cf6eaa01c03fc) Thanks [@d-flood](https://github.com/d-flood)! - fail fast on deploy
+
+- [`5f51aa2`](https://github.com/artshumrc/darth-infra-cli/commit/5f51aa25284bb1999c7631b87510bafb4948c60f) Thanks [@d-flood](https://github.com/d-flood)! - Enable adding cloudfront in front of the alb
+
 ## 0.3.0
 
 ### Minor Changes
