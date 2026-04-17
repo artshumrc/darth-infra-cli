@@ -73,9 +73,14 @@ def merge_seed_state(seed: dict[str, Any] | None) -> dict[str, Any]:
 def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
     """Convert ProjectConfig into wizard state values for rehydration."""
     base = default_wizard_state()
+    secret_exposure_by_name: dict[str, list[str]] = {}
 
     services: list[dict[str, Any]] = []
     for svc in config.services:
+        for secret_name in svc.secrets:
+            attached_services = secret_exposure_by_name.setdefault(secret_name, [])
+            if svc.name not in attached_services:
+                attached_services.append(svc.name)
         services.append(
             {
                 "name": svc.name,
@@ -120,6 +125,7 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
                     for ul in svc.ulimits
                 ],
                 "environment_variables": dict(svc.environment_variables),
+                "enable_ses_send_email": svc.enable_ses_send_email,
                 "enable_service_discovery": svc.enable_service_discovery,
             }
         )
@@ -157,6 +163,7 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
                 "existing_secret_name": sec.existing_secret_name,
                 "length": sec.length,
                 "generate_once": sec.generate_once,
+                "expose_to": list(secret_exposure_by_name.get(sec.name, [])),
             }
         )
 

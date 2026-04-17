@@ -96,6 +96,7 @@ def build_config_from_state(state: dict) -> ProjectConfig:
                 for u in svc.get("ulimits", [])
             ],
             environment_variables=svc.get("environment_variables", {}),
+            enable_ses_send_email=svc.get("enable_ses_send_email", False),
             enable_service_discovery=svc.get("enable_service_discovery", False),
         )
         for svc in s["services"]

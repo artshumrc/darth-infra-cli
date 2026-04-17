@@ -132,7 +132,7 @@ Resources:
             Principal:
               Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
-{% if svc.enable_exec or s3_vars %}
+{% if svc.enable_exec or svc.enable_ses_send_email or s3_vars %}
       Policies:
 {% if svc.enable_exec %}
         - PolicyName: EcsExecSsm
@@ -145,6 +145,18 @@ Resources:
                   - ssmmessages:CreateDataChannel
                   - ssmmessages:OpenControlChannel
                   - ssmmessages:OpenDataChannel
+                Resource: '*'
+{% endif %}
+{% if svc.enable_ses_send_email %}
+        - PolicyName: SesSendEmail
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                  - ses:GetSendQuota
                 Resource: '*'
 {% endif %}
 {% if s3_vars %}

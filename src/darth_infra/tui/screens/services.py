@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from typing import Any
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -24,6 +25,16 @@ from textual.widgets import (
 )
 
 from ..step_rail import StepRail
+
+
+def merge_service_state(
+    existing_service: dict[str, Any],
+    edited_service: dict[str, Any],
+) -> dict[str, Any]:
+    """Preserve non-form keys when saving an edited service."""
+    merged = dict(existing_service)
+    merged.update(edited_service)
+    return merged
 
 
 class ServicesScreen(Screen):
@@ -163,6 +174,10 @@ class ServicesScreen(Screen):
                     yield Checkbox(
                         "Enable service discovery (Cloud Map DNS)",
                         id="svc_discovery",
+                    )
+                    yield Checkbox(
+                        "Allow sending email via Amazon SES",
+                        id="svc_ses_send_email",
                     )
 
                     yield Label("Launch type:", classes="section-label")
@@ -333,6 +348,10 @@ class ServicesScreen(Screen):
             self.query_one("#svc_discovery", Checkbox).value = bool(
                 draft.get("svc_discovery", False)
             )
+        if draft.get("svc_ses_send_email") is not None:
+            self.query_one("#svc_ses_send_email", Checkbox).value = bool(
+                draft.get("svc_ses_send_email", False)
+            )
         launch_type = draft.get("launch_type")
         if launch_type == "ec2":
             self._select_launch_type("ec2")
@@ -387,6 +406,9 @@ class ServicesScreen(Screen):
                 "svc_memory": self.query_one("#svc_memory", Input).value,
                 "svc_command": self.query_one("#svc_command", Input).value,
                 "svc_discovery": self.query_one("#svc_discovery", Checkbox).value,
+                "svc_ses_send_email": self.query_one(
+                    "#svc_ses_send_email", Checkbox
+                ).value,
                 "launch_type": lt,
                 "svc_ec2_instance_type": self.query_one(
                     "#svc_ec2_instance_type", Input
@@ -711,6 +733,9 @@ class ServicesScreen(Screen):
             # Service discovery
             self.query_one("#svc_discovery", Checkbox).value = svc.get(
                 "enable_service_discovery", False
+            )
+            self.query_one("#svc_ses_send_email", Checkbox).value = svc.get(
+                "enable_ses_send_email", False
             )
 
             # Launch type
@@ -1390,6 +1415,9 @@ class ServicesScreen(Screen):
             "enable_service_discovery": self.query_one(
                 "#svc_discovery", Checkbox
             ).value,
+            "enable_ses_send_email": self.query_one(
+                "#svc_ses_send_email", Checkbox
+            ).value,
             "launch_type": launch_type,
             "ec2_instance_type": ec2_instance_type,
             "user_data_script": None,
@@ -1415,7 +1443,8 @@ class ServicesScreen(Screen):
         svc = self._read_form()
         if svc is None:
             return False
-        self._state["services"][self._editing_index] = svc
+        existing = self._state["services"][self._editing_index]
+        self._state["services"][self._editing_index] = merge_service_state(existing, svc)
         self._clear_form()
         self._refresh_sidebar()
         self.notify(f"Updated service '{svc['name']}'")
@@ -1451,6 +1480,7 @@ class ServicesScreen(Screen):
         self.query_one("#svc_image", Input).value = ""
         self._select_launch_type("fargate")
         self.query_one("#svc_discovery", Checkbox).value = False
+        self.query_one("#svc_ses_send_email", Checkbox).value = False
         self.query_one("#svc_ec2_instance_type", Input).value = ""
         self.query_one("#svc_user_data_script_content", TextArea).text = ""
         self._ebs_volumes = []
