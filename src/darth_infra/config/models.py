@@ -341,6 +341,8 @@ class ServiceConfig:
         environment_variables: Static env vars passed to the container.
         ulimits: Linux ulimits to set on the container (e.g. nofile).
         enable_exec: Enable ECS Exec for interactive shell access.
+        enable_ses_send_email: Grant SES send and quota-read access from the
+            service task role.
         launch_type: ECS launch type — "fargate" or "ec2".
         ec2_instance_type: EC2 instance type (required when launch_type is "ec2").
         architecture: CPU architecture — "x86_64" or "arm64". Auto-detected from
@@ -374,6 +376,7 @@ class ServiceConfig:
     environment_variables: dict[str, str] = field(default_factory=dict)
     ulimits: list[UlimitConfig] = field(default_factory=list)
     enable_exec: bool = True
+    enable_ses_send_email: bool = False
     launch_type: LaunchType = LaunchType.FARGATE
     ec2_instance_type: str | None = None
     architecture: Architecture | None = None

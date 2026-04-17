@@ -227,6 +227,19 @@ def validate_rendered_deploy_templates(
             raise FileNotFoundError(f"Missing service template file: {service_template}")
         service_body = service_template.read_text()
 
+        if service.enable_ses_send_email:
+            for required_marker in (
+                "PolicyName: SesSendEmail",
+                "- ses:SendEmail",
+                "- ses:SendRawEmail",
+                "- ses:GetSendQuota",
+            ):
+                if required_marker not in service_body:
+                    raise RuntimeError(
+                        f"Preflight validation failed for service '{service.name}': "
+                        "SES task-role policy is missing required permissions"
+                    )
+
         expected_secret_names = list(service.secrets)
         if config.rds and service.name in config.rds.expose_to:
             for secret_name in (

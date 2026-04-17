@@ -172,6 +172,7 @@ def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
         environment_variables=raw.get("environment_variables", {}),
         ulimits=ulimits,
         enable_exec=raw.get("enable_exec", True),
+        enable_ses_send_email=raw.get("enable_ses_send_email", False),
         launch_type=LaunchType(launch_type_str),
         ec2_instance_type=raw.get("ec2_instance_type"),
         architecture=architecture,
@@ -385,6 +386,9 @@ def dump_config(config: ProjectConfig) -> str:
             )
             lines.append(f"environment_variables = {{ {env_inline} }}")
         lines.append(f"enable_exec = {str(svc.enable_exec).lower()}")
+        lines.append(
+            f"enable_ses_send_email = {str(svc.enable_ses_send_email).lower()}"
+        )
         lines.append(
             f"enable_service_discovery = {str(svc.enable_service_discovery).lower()}"
         )

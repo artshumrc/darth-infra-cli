@@ -38,13 +38,14 @@ def _lookups() -> ResolvedLookupData:
     )
 
 
-def _config() -> ProjectConfig:
+def _config(*, enable_ses_send_email: bool = False) -> ProjectConfig:
     return ProjectConfig(
         project_name="demo",
         services=[
             ServiceConfig(
                 name="web",
                 port=8000,
+                enable_ses_send_email=enable_ses_send_email,
                 secrets=[
                     "DJANGO_SECRET_KEY",
                     "POSTGRES_HOST",
@@ -92,6 +93,50 @@ def test_validate_rendered_templates_accepts_expected_secret_wiring(
     validate_rendered_deploy_templates(output_dir, _config(), "prod", _lookups())
 
 
+def test_service_template_includes_ses_task_role_policy_when_enabled(
+    tmp_path: Path,
+) -> None:
+    config = _config(enable_ses_send_email=True)
+    output_dir = generate_project(config, tmp_path / "out")
+    service_body = _read(output_dir / "templates" / "generated" / "services" / "web.yaml")
+
+    assert "PolicyName: SesSendEmail" in service_body
+    assert "- ses:SendEmail" in service_body
+    assert "- ses:SendRawEmail" in service_body
+    assert "- ses:GetSendQuota" in service_body
+
+
+def test_service_template_renders_valid_exec_task_role_policy_block(
+    tmp_path: Path,
+) -> None:
+    output_dir = generate_project(_config(), tmp_path / "out")
+    service_body = _read(output_dir / "templates" / "generated" / "services" / "web.yaml")
+
+    assert (
+        """        - PolicyName: EcsExecSsm
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: '*'"""
+        in service_body
+    )
+
+
+def test_validate_rendered_templates_accepts_expected_ses_wiring(
+    tmp_path: Path,
+) -> None:
+    config = _config(enable_ses_send_email=True)
+    output_dir = generate_project(config, tmp_path / "out")
+
+    validate_rendered_deploy_templates(output_dir, config, "prod", _lookups())
+
+
 def test_validate_rendered_templates_rejects_missing_execution_role_secret_access(
     tmp_path: Path,
 ) -> None:
@@ -104,6 +149,23 @@ def test_validate_rendered_templates_rejects_missing_execution_role_secret_acces
         validate_rendered_deploy_templates(output_dir, _config(), "prod", _lookups())
     except RuntimeError as exc:
         assert "DJANGO_SECRET_KEY" in str(exc)
+    else:
+        raise AssertionError("expected validate_rendered_deploy_templates() to fail")
+
+
+def test_validate_rendered_templates_rejects_missing_ses_task_role_access(
+    tmp_path: Path,
+) -> None:
+    config = _config(enable_ses_send_email=True)
+    output_dir = generate_project(config, tmp_path / "out")
+    service_template = output_dir / "templates" / "generated" / "services" / "web.yaml"
+    original = service_template.read_text()
+    service_template.write_text(original.replace("- ses:GetSendQuota\n", ""))
+
+    try:
+        validate_rendered_deploy_templates(output_dir, config, "prod", _lookups())
+    except RuntimeError as exc:
+        assert "SES task-role policy" in str(exc)
     else:
         raise AssertionError("expected validate_rendered_deploy_templates() to fail")
 
@@ -158,7 +220,18 @@ if __name__ == "__main__":
         test_validate_rendered_templates_accepts_expected_secret_wiring(tmp_path)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
+        test_service_template_includes_ses_task_role_policy_when_enabled(tmp_path)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        test_validate_rendered_templates_accepts_expected_ses_wiring(tmp_path)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
         test_validate_rendered_templates_rejects_missing_execution_role_secret_access(
+            tmp_path
+        )
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        test_validate_rendered_templates_rejects_missing_ses_task_role_access(
             tmp_path
         )
     test_rollout_stability_requires_active_single_deployment()

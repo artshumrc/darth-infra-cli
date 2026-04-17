@@ -232,6 +232,11 @@
             "description": "Enable ECS Exec for interactive shell access.",
             "default": true
           },
+          "enable_ses_send_email": {
+            "type": "boolean",
+            "description": "Grant this service Amazon SES send-email and quota-read permissions on its ECS task role.",
+            "default": false
+          },
           "launch_type": {
             "type": "string",
             "description": "ECS launch type. \"fargate\" (default) or \"ec2\".",
