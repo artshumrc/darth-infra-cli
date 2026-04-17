@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.4.1
+
+### Patch Changes
+
+- [`62c041e`](https://github.com/artshumrc/darth-infra-cli/commit/62c041ea8b63d609dfdcff1c1880b8210c6d5ddf) Thanks [@d-flood](https://github.com/d-flood)! - bump
+
 ## 0.4.0
 
 ### Minor Changes
