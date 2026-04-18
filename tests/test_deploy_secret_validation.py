@@ -83,7 +83,20 @@ def test_root_template_passes_secret_arns_to_nested_service(tmp_path: Path) -> N
     root = _read(output_dir / "templates" / "generated" / "root.yaml")
 
     assert "SecretArnDJANGOSECRETKEY: !Ref EnvSecretArnDJANGOSECRETKEY" in root
-    assert "RdsSecretArn: !GetAtt RdsCredentialsSecret.Arn" in root
+    assert "RdsSecretArn: !Ref RdsCredentialsSecret" in root
+
+
+def test_root_template_uses_ref_for_generated_secret_wiring(tmp_path: Path) -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000, secrets=["APP_SECRET"])],
+        secrets=[SecretConfig(name="APP_SECRET", source=SecretSource.GENERATE)],
+    )
+
+    output_dir = generate_project(config, tmp_path / "out")
+    root = _read(output_dir / "templates" / "generated" / "root.yaml")
+
+    assert "SecretArnAPPSECRET: !Ref SecretAPPSECRET" in root
 
 
 def test_validate_rendered_templates_accepts_expected_secret_wiring(

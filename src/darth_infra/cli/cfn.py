@@ -303,9 +303,7 @@ def validate_rendered_deploy_templates(
                 )
 
             if source == "generate":
-                expected_root_value = (
-                    f"{param_name}: !GetAtt Secret{_secret_logical_suffix(secret_name)}.Arn"
-                )
+                expected_root_value = f"{param_name}: !Ref Secret{_secret_logical_suffix(secret_name)}"
             else:
                 expected_arn = lookups.external_secret_arns.get(secret_name, "").strip()
                 if not expected_arn:
@@ -329,7 +327,7 @@ def validate_rendered_deploy_templates(
                     f"required secret source '{source_name}' is missing from the task execution role policy"
                 )
 
-    if config.rds and "RdsSecretArn: !GetAtt RdsCredentialsSecret.Arn" not in root_body:
+    if config.rds and "RdsSecretArn: !Ref RdsCredentialsSecret" not in root_body:
         raise RuntimeError(
             "Preflight validation failed: root stack is missing the nested RDS secret ARN wiring"
         )
