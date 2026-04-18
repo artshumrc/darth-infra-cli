@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.4.2
+
+### Patch Changes
+
+- [`09a23a4`](https://github.com/artshumrc/darth-infra-cli/commit/09a23a4ba52d96e158e155a5ab2e5e17914b4de7) Thanks [@d-flood](https://github.com/d-flood)! - use ref instead of getatt for referencing existing secrets
+
 ## 0.4.1
 
 ### Patch Changes
