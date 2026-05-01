@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.5.0
+
+### Minor Changes
+
+- [`476f774`](https://github.com/artshumrc/darth-infra-cli/commit/476f774cb5dafd71221def0523203e37f60ea4a4) Thanks [@d-flood](https://github.com/d-flood)! - Propogate tags much more thoroughly to more resources, especially ECS tasks
+
 ## 0.4.2
 
 ### Patch Changes
