@@ -55,12 +55,34 @@ Resources:
     Properties:
       LogGroupName: !Sub '/ecs/${ProjectName}-${EnvironmentName}-{{ name }}'
       RetentionInDays: 30
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
   TaskSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: !Sub '${ProjectName}-${EnvironmentName}-{{ name }} ecs tasks'
       VpcId: !Ref VpcId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
   TaskSgIngressFromAlb:
 {% if has_alb_target %}
@@ -121,6 +143,17 @@ Resources:
 {% else %}
       Policies: []
 {% endif %}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -184,6 +217,17 @@ Resources:
 {% else %}
       Policies: []
 {% endif %}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
 {% if launch_type == 'ec2' %}
   Ec2InstanceRole:
@@ -198,6 +242,17 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
   Ec2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -245,6 +300,31 @@ Resources:
               VolumeType: gp3
               VolumeSize: 30
 {% endif %}
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Project
+                Value: !Ref ProjectName
+              - Key: Environment
+                Value: !Ref EnvironmentName
+              - Key: Service
+                Value: {{ name }}
+{% for key, value in tags.items() %}
+              - Key: '{{ key }}'
+                Value: '{{ value }}'
+{% endfor %}
+          - ResourceType: volume
+            Tags:
+              - Key: Project
+                Value: !Ref ProjectName
+              - Key: Environment
+                Value: !Ref EnvironmentName
+              - Key: Service
+                Value: {{ name }}
+{% for key, value in tags.items() %}
+              - Key: '{{ key }}'
+                Value: '{{ value }}'
+{% endfor %}
 
   AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -269,6 +349,11 @@ Resources:
         - Key: Service
           Value: {{ name }}
           PropagateAtLaunch: true
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+          PropagateAtLaunch: true
+{% endfor %}
 {% endif %}
 
   TaskDefinition:
@@ -283,6 +368,17 @@ Resources:
 {% endif %}
       ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
       TaskRoleArn: !GetAtt TaskRole.Arn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 {% if launch_type == 'ec2' and ebs_params %}
       Volumes:
 {% for vol in ebs_params %}
@@ -375,6 +471,17 @@ Resources:
         DnsRecords:
           - Type: A
             TTL: 10
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
 {% endif %}
 {% if has_alb_target %}
@@ -392,6 +499,17 @@ Resources:
       UnhealthyThresholdCount: {{ svc.unhealthy_threshold_count }}
       Matcher:
         HttpCode: {{ svc.health_check_http_codes }}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
 {% endif %}
 {% if has_alb_target and has_cluster_routing_rules %}
@@ -463,6 +581,18 @@ Resources:
       EnableExecuteCommand: {{ 'true' if svc.enable_exec else 'false' }}
       LaunchType: {{ 'EC2' if launch_type == 'ec2' else 'FARGATE' }}
       TaskDefinition: !Ref TaskDefinition
+      PropagateTags: TASK_DEFINITION
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 {% if has_alb_target and svc.health_check_grace_period_seconds is not none %}
       HealthCheckGracePeriodSeconds: {{ svc.health_check_grace_period_seconds }}
 {% endif %}

@@ -74,6 +74,15 @@ Resources:
       ClusterSettings:
         - Name: containerInsights
           Value: enabled
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
 {% if has_service_discovery %}
   ServiceNamespace:
@@ -82,6 +91,15 @@ Resources:
     Properties:
       Name: local
       Vpc: !Ref VpcId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 {% endif %}
 
   DedicatedAlb:
@@ -94,6 +112,15 @@ Resources:
         - !Ref DedicatedAlbSecurityGroup
       Subnets: !Ref PublicSubnetIds
       Type: application
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
   DedicatedAlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -113,6 +140,15 @@ Resources:
             ToPort: 443
             CidrIp: 0.0.0.0/0
           - !Ref 'AWS::NoValue'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
   DedicatedAlbHttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -236,6 +272,15 @@ Resources:
 {% endif %}
 {% endfor %}
 {% endif %}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 {% endif %}
 
 {% for secret in secrets if secret.source.value == 'generate' %}
@@ -246,6 +291,15 @@ Resources:
       GenerateSecretString:
         PasswordLength: {{ secret.length }}
         ExcludePunctuation: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 {% endfor %}
 
 {% if has_s3 %}
@@ -262,6 +316,15 @@ Resources:
             AllowedMethods: [GET, PUT, POST, DELETE, HEAD]
             AllowedOrigins: ['*']
 {% endif %}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 {% endif %}
 {% endfor %}
 {% endif %}
@@ -298,6 +361,15 @@ Resources:
             Cookies:
               Forward: none
         PriceClass: PriceClass_100
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
   BucketPolicy{{ b.name | replace('-', '') }}:
     Type: AWS::S3::BucketPolicy
@@ -323,6 +395,15 @@ Resources:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Sub '${ProjectName}/${EnvironmentName}/{{ svc_ctx.name }}'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
 {% endfor %}
 
@@ -336,18 +417,45 @@ Resources:
         GenerateStringKey: password
         PasswordLength: 32
         ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
   RdsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: !Sub '${ProjectName}-${EnvironmentName} rds'
       VpcId: !Ref VpcId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
   RdsSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
       DBSubnetGroupDescription: !Sub '${ProjectName}-${EnvironmentName} DB subnets'
       SubnetIds: !Ref PrivateSubnetIds
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
   Database:
     Type: AWS::RDS::DBInstance
@@ -369,6 +477,15 @@ Resources:
       PubliclyAccessible: false
       DeletionProtection: !If [IsProd, true, false]
       StorageType: gp3
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
+{% endfor %}
 
   RdsSecretAttachment:
     Type: AWS::SecretsManager::SecretTargetAttachment
@@ -431,6 +548,15 @@ Resources:
 {% endfor %}
 {% for cf in svc_ctx.cloudfront_vars %}
         {{ cf.param_name }}: !Sub 'https://${AlbCloudFront.DomainName}'
+{% endfor %}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{% for key, value in tags.items() %}
+        - Key: '{{ key }}'
+          Value: '{{ value }}'
 {% endfor %}
 
 {% endfor %}
