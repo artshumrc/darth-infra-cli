@@ -7,6 +7,7 @@ from darth_infra.config.models import (
     AlbMode,
     CloudFrontCachedBehavior,
     CloudFrontConfig,
+    EnvironmentOverride,
     ProjectConfig,
     ServiceConfig,
 )
@@ -74,7 +75,9 @@ def test_cached_behavior_can_also_forward_authorization(tmp_path: Path) -> None:
 def test_service_listener_hosts_include_cluster_domain_and_cf_domain(
     tmp_path: Path,
 ) -> None:
-    output_dir = generate_project(_config(custom_domain="cdn.example.com"), tmp_path / "out")
+    output_dir = generate_project(
+        _config(custom_domain="cdn.example.com"), tmp_path / "out"
+    )
     service = _read(output_dir, "templates/generated/services/web.yaml")
     assert "- !Ref ClusterDomain" in service
     assert "- 'cdn.example.com'" in service
@@ -89,3 +92,27 @@ def test_dedicated_mode_with_certificate_emits_https_listener_and_redirect(
     assert "Protocol: HTTPS" in root
     assert "RedirectConfig:" in root
     assert "Port: '443'" in root
+
+
+def test_environment_tag_parameters_are_rendered_for_root_and_nested_stacks(
+    tmp_path: Path,
+) -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        tags={"owner": "platform"},
+        environment_overrides={
+            "dev": EnvironmentOverride(tags={"cost-center": "dev-sandbox"})
+        },
+    )
+
+    output_dir = generate_project(config, tmp_path / "out")
+    root = _read(output_dir, "templates/generated/root.yaml")
+    service = _read(output_dir, "templates/generated/services/web.yaml")
+
+    assert "ExtraTagOwner:" in root
+    assert "ExtraTagCostCenter:" in root
+    assert "HasExtraTagCostCenter:" in root
+    assert "ExtraTagCostCenter: !Ref ExtraTagCostCenter" in root
+    assert "ExtraTagCostCenter:" in service
+    assert "HasExtraTagCostCenter:" in service

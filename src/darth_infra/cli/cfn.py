@@ -224,7 +224,9 @@ def validate_rendered_deploy_templates(
     for service in config.services:
         service_template = service_dir / f"{service.name}.yaml"
         if not service_template.is_file():
-            raise FileNotFoundError(f"Missing service template file: {service_template}")
+            raise FileNotFoundError(
+                f"Missing service template file: {service_template}"
+            )
         service_body = service_template.read_text()
 
         if service.enable_ses_send_email:
@@ -303,16 +305,16 @@ def validate_rendered_deploy_templates(
                 )
 
             if source == "generate":
-                expected_root_value = f"{param_name}: !Ref Secret{_secret_logical_suffix(secret_name)}"
+                expected_root_value = (
+                    f"{param_name}: !Ref Secret{_secret_logical_suffix(secret_name)}"
+                )
             else:
                 expected_arn = lookups.external_secret_arns.get(secret_name, "").strip()
                 if not expected_arn:
                     raise RuntimeError(
                         f"Preflight validation failed: external secret '{secret_name}' did not resolve to an ARN"
                     )
-                expected_root_value = (
-                    f"{param_name}: !Ref EnvSecretArn{_secret_logical_suffix(secret_name)}"
-                )
+                expected_root_value = f"{param_name}: !Ref EnvSecretArn{_secret_logical_suffix(secret_name)}"
 
             if expected_root_value not in root_body:
                 raise RuntimeError(
@@ -438,6 +440,7 @@ def deploy_changeset(
 
     template_body = template_path.read_text()
     parameters = _build_parameters(config, env_name, lookups)
+    resolved_tags = config.get_tags_for_environment(env_name)
 
     change_set_type = "UPDATE"
     existing_status: str | None = None
@@ -491,7 +494,7 @@ def deploy_changeset(
             {"Key": "environment", "Value": env_name},
             {"Key": "managed-by", "Value": "darth-infra"},
             {"Key": "deployment-type", "Value": "ecs"},
-            *[{"Key": k, "Value": v} for k, v in config.tags.items()],
+            *[{"Key": k, "Value": v} for k, v in resolved_tags.items()],
         ],
     )
     cs_arn = resp["Id"]
@@ -1633,7 +1636,12 @@ def _ecs_rollout_timeout_reason(ecs_snapshot: dict[str, Any]) -> str:
         pending = int(row.get("pending", "0"))
         deployments = int(row.get("deployments", "0"))
         status = str(row.get("status", "UNKNOWN"))
-        if status == "ACTIVE" and running >= desired and pending == 0 and deployments <= 1:
+        if (
+            status == "ACTIVE"
+            and running >= desired
+            and pending == 0
+            and deployments <= 1
+        ):
             continue
         unstable.append(
             f"{row.get('service', '?')} status={status} running={running}/{desired} "
@@ -2236,6 +2244,7 @@ def _build_parameters(
     env_name: str,
     lookups: ResolvedLookupData,
 ) -> list[dict[str, str]]:
+    resolved_tags = config.get_tags_for_environment(env_name)
     params = [
         {"ParameterKey": "ProjectName", "ParameterValue": config.project_name},
         {"ParameterKey": "EnvironmentName", "ParameterValue": env_name},
@@ -2273,6 +2282,13 @@ def _build_parameters(
             "ParameterKey": "ClusterDomain",
             "ParameterValue": cluster_domain or "",
         }
+    )
+    params.extend(
+        {
+            "ParameterKey": tag_parameter.parameter_name,
+            "ParameterValue": resolved_tags.get(tag_parameter.key, ""),
+        }
+        for tag_parameter in config.get_tag_parameters()
     )
 
     if config.rds:

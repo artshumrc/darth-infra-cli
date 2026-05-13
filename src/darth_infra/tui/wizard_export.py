@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..config.models import ProjectConfig
+from .steps import STEP_ORDER
 
 
 def default_wizard_state() -> dict[str, Any]:
@@ -14,6 +15,8 @@ def default_wizard_state() -> dict[str, Any]:
         "vpc_name": "artshumrc-prod-standard",
         "aws_region": "us-east-1",
         "environments": ["prod"],
+        "project_tags": {},
+        "environment_overrides": {},
         "services": [],
         "rds": None,
         "s3_buckets": [],
@@ -176,6 +179,17 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
             "private_subnet_ids": list(config.private_subnet_ids),
             "public_subnet_ids": list(config.public_subnet_ids),
             "environments": list(config.environments),
+            "project_tags": dict(config.tags),
+            "environment_overrides": {
+                env_name: {
+                    "instance_type_override": override.instance_type_override,
+                    "ec2_instance_type_override": dict(
+                        override.ec2_instance_type_override
+                    ),
+                    "tags": dict(override.tags),
+                }
+                for env_name, override in config.environment_overrides.items()
+            },
             "services": services,
             "rds": (
                 None
@@ -212,10 +226,10 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
                     "query_strings": str(
                         getattr(behavior.query_strings, "value", behavior.query_strings)
                     ),
-                    "query_string_allowlist": list(
-                        behavior.query_string_allowlist
+                    "query_string_allowlist": list(behavior.query_string_allowlist),
+                    "cookies": str(
+                        getattr(behavior.cookies, "value", behavior.cookies)
                     ),
-                    "cookies": str(getattr(behavior.cookies, "value", behavior.cookies)),
                     "cookie_allowlist": list(behavior.cookie_allowlist),
                     "forward_authorization_header": behavior.forward_authorization_header,
                 }
@@ -243,7 +257,7 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
             "secrets": secrets,
             "_wizard_draft": {},
             "_wizard_last_screen": "welcome",
-            "_wizard_max_step_index": 0,
+            "_wizard_max_step_index": len(STEP_ORDER) - 1,
         }
     )
 

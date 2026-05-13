@@ -8,6 +8,7 @@ STEP_ORDER = [
     "rds",
     "s3",
     "secrets",
+    "tags",
     "review",
 ]
 
@@ -19,5 +20,6 @@ STEP_LABELS = {
     "rds": "RDS",
     "s3": "S3",
     "secrets": "Secrets",
+    "tags": "Tags",
     "review": "Review",
 }

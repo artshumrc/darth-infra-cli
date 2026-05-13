@@ -433,6 +433,7 @@ def _build_context(config: ProjectConfig) -> dict:
         "s3_buckets": config.s3_buckets,
         "alb": config.alb,
         "secrets": config.secrets,
+        "tag_parameters": config.get_tag_parameters(),
         "tags": config.tags,
     }
 

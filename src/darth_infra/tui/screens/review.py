@@ -20,6 +20,7 @@ from ...config.models import (
     CloudFrontCookiesMode,
     CloudFrontQueryStringsMode,
     EbsVolumeConfig,
+    EnvironmentOverride,
     LaunchType,
     ProjectConfig,
     RdsConfig,
@@ -35,6 +36,7 @@ from ...config.models import (
 
 def build_config_from_state(state: dict) -> ProjectConfig:
     s = state
+    raw_environment_overrides = s.get("environment_overrides", {})
 
     service_names = [svc["name"] for svc in s.get("services", [])]
     resolved_service_secrets: dict[str, list[str]] = {
@@ -208,9 +210,7 @@ def build_config_from_state(state: dict) -> ProjectConfig:
                 query_strings=CloudFrontQueryStringsMode(
                     behavior.get("query_strings", "all")
                 ),
-                query_string_allowlist=list(
-                    behavior.get("query_string_allowlist", [])
-                ),
+                query_string_allowlist=list(behavior.get("query_string_allowlist", [])),
                 cookies=CloudFrontCookiesMode(behavior.get("cookies", "none")),
                 cookie_allowlist=list(behavior.get("cookie_allowlist", [])),
                 forward_authorization_header=behavior.get(
@@ -220,6 +220,34 @@ def build_config_from_state(state: dict) -> ProjectConfig:
             for behavior in s.get("cloudfront_cached_behaviors", [])
         ],
     )
+    environment_overrides: dict[str, EnvironmentOverride] = {}
+    for env_name in s.get("environments", []):
+        raw_override = raw_environment_overrides.get(env_name, {})
+        if not isinstance(raw_override, dict):
+            continue
+
+        instance_type_override = raw_override.get("instance_type_override")
+        ec2_instance_type_override = {
+            str(service_name): str(instance_type)
+            for service_name, instance_type in raw_override.get(
+                "ec2_instance_type_override", {}
+            ).items()
+            if str(service_name).strip() and str(instance_type).strip()
+        }
+        tags = {
+            str(key): str(value)
+            for key, value in raw_override.get("tags", {}).items()
+            if str(key).strip() and str(value).strip()
+        }
+
+        if instance_type_override or ec2_instance_type_override or tags:
+            environment_overrides[env_name] = EnvironmentOverride(
+                instance_type_override=(
+                    str(instance_type_override) if instance_type_override else None
+                ),
+                ec2_instance_type_override=ec2_instance_type_override,
+                tags=tags,
+            )
 
     return ProjectConfig(
         project_name=s["project_name"],
@@ -239,6 +267,12 @@ def build_config_from_state(state: dict) -> ProjectConfig:
         cloudfront=cloudfront,
         alb=alb,
         secrets=secrets,
+        environment_overrides=environment_overrides,
+        tags={
+            str(key): str(value)
+            for key, value in s.get("project_tags", {}).items()
+            if str(key).strip() and str(value).strip()
+        },
     )
 
 
@@ -267,9 +301,35 @@ class ReviewScreen(Screen):
             f"[bold]VPC:[/bold]     {s['vpc_name']}",
             f"[bold]VPC ID:[/bold]  {s.get('vpc_id') or '(auto)'}",
             f"[bold]Envs:[/bold]    {', '.join(s['environments'])}",
-            "",
-            f"[bold]Services ({len(s['services'])}):[/bold]",
         ]
+        project_tags = s.get("project_tags", {})
+        if project_tags:
+            lines.append(f"[bold]Project Tags:[/bold] {len(project_tags)}")
+            for key, value in sorted(project_tags.items()):
+                lines.append(f"  {key}={value}")
+
+        environment_overrides = s.get("environment_overrides", {})
+        tagged_envs = [
+            env_name
+            for env_name in s.get("environments", [])
+            if environment_overrides.get(env_name, {}).get("tags")
+        ]
+        if tagged_envs:
+            lines.append("")
+            lines.append("[bold]Environment Tags:[/bold]")
+            for env_name in tagged_envs:
+                lines.append(f"  {env_name}:")
+                for key, value in sorted(
+                    environment_overrides.get(env_name, {}).get("tags", {}).items()
+                ):
+                    lines.append(f"    {key}={value}")
+
+        lines.extend(
+            [
+                "",
+                f"[bold]Services ({len(s['services'])}):[/bold]",
+            ]
+        )
         for svc in s["services"]:
             port_info = f":{svc['port']}" if svc.get("port") else " (worker)"
             lt_info = ""
@@ -396,7 +456,9 @@ class ReviewScreen(Screen):
 
         lines.append("")
         cf_enabled = bool(s.get("cloudfront_enabled", False))
-        lines.append(f"[bold]CloudFront:[/bold] {'enabled' if cf_enabled else 'disabled'}")
+        lines.append(
+            f"[bold]CloudFront:[/bold] {'enabled' if cf_enabled else 'disabled'}"
+        )
         if cf_enabled:
             lines.append(
                 "  ALB origin protocol: "
@@ -456,7 +518,7 @@ class ReviewScreen(Screen):
             self.app.go_to_step(target)
             return
         if event.button.id == "back":
-            self._state["_wizard_last_screen"] = "secrets"
+            self._state["_wizard_last_screen"] = "tags"
             self.app.pop_screen()
         elif event.button.id == "confirm":
             config = self._build_config()

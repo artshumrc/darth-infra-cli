@@ -399,6 +399,19 @@ class EnvironmentOverride:
     ec2_instance_type_override: dict[str, str] = field(default_factory=dict)
     """Map of service name -> EC2 instance type override for this environment."""
 
+    tags: dict[str, str] = field(default_factory=dict)
+    """Additional tags applied only when deploying this environment."""
+
+
+@dataclass(frozen=True)
+class TagParameter:
+    """CloudFormation parameter metadata for an additional resource tag."""
+
+    key: str
+    parameter_name: str
+    condition_name: str
+    default_value: str = ""
+
 
 @dataclass
 class ProjectConfig:
@@ -839,3 +852,47 @@ class ProjectConfig:
             return overrides.instance_type_override
 
         return self.rds.instance_type
+
+    def get_tags_for_environment(self, env: str) -> dict[str, str]:
+        """Resolve additional tags for a given environment.
+
+        Project-level tags apply everywhere by default. Environment tags can
+        override the same key for that specific environment.
+        """
+        resolved_tags = dict(self.tags)
+        overrides = self.environment_overrides.get(env)
+        if overrides and overrides.tags:
+            resolved_tags.update(overrides.tags)
+        return resolved_tags
+
+    def get_tag_parameters(self) -> list[TagParameter]:
+        """Build stable CloudFormation parameter metadata for all extra tag keys."""
+        tag_keys = set(self.tags)
+        for override in self.environment_overrides.values():
+            tag_keys.update(override.tags)
+
+        parameters: list[TagParameter] = []
+        used_suffixes: set[str] = set()
+        for index, key in enumerate(sorted(tag_keys), start=1):
+            raw_parts = re.split(r"[^A-Za-z0-9]+", key)
+            suffix = "".join(part[:1].upper() + part[1:] for part in raw_parts if part)
+            if not suffix or not suffix[0].isalpha():
+                suffix = f"Tag{index}{suffix}"
+
+            base_suffix = suffix
+            collision_index = 2
+            while suffix in used_suffixes:
+                suffix = f"{base_suffix}{collision_index}"
+                collision_index += 1
+            used_suffixes.add(suffix)
+
+            parameters.append(
+                TagParameter(
+                    key=key,
+                    parameter_name=f"ExtraTag{suffix}",
+                    condition_name=f"HasExtraTag{suffix}",
+                    default_value=self.tags.get(key, ""),
+                )
+            )
+
+        return parameters

@@ -718,6 +718,11 @@
             "description": "Override RDS instance type for this environment.",
             "default": null
           },
+          "tags": {
+            "type": "object",
+            "description": "Additional tags applied only when deploying this environment.",
+            "additionalProperties": { "type": "string" }
+          },
           "ec2_instance_type_override": {
             "type": "object",
             "description": "Map of service name to EC2 instance type override for this environment.",

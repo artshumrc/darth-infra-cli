@@ -21,6 +21,7 @@ from .screens.alb import AlbScreen
 from .screens.rds import RdsScreen
 from .screens.s3 import S3Screen
 from .screens.secrets import SecretsScreen
+from .screens.tags import TagsScreen
 from .screens.review import ReviewScreen, build_config_from_state
 
 
@@ -215,8 +216,12 @@ class DarthEcsInitApp(App[None]):
                 int(self._state.get("_wizard_max_step_index", 0)),
                 target_index,
             )
-            for step in STEP_ORDER[1 : target_index + 1]:
-                self.advance_to(step)
+            self._state["_wizard_transit_target"] = start
+            try:
+                for step in STEP_ORDER[1 : target_index + 1]:
+                    self.advance_to(step)
+            finally:
+                self._state.pop("_wizard_transit_target", None)
 
     def advance_to(self, screen_name: str) -> None:
         """Navigate to the next screen in the wizard."""
@@ -227,6 +232,7 @@ class DarthEcsInitApp(App[None]):
             "rds": RdsScreen,
             "s3": S3Screen,
             "secrets": SecretsScreen,
+            "tags": TagsScreen,
             "review": ReviewScreen,
         }
         if screen_name in screens:
@@ -263,8 +269,14 @@ class DarthEcsInitApp(App[None]):
         if target_index > current_index:
             if target_index > max_step_index + 1:
                 target_index = max_step_index + 1
-            for step in STEP_ORDER[current_index + 1 : target_index + 1]:
-                self.advance_to(step)
+            target_step = STEP_ORDER[target_index]
+            if target_index > current_index + 1:
+                self._state["_wizard_transit_target"] = target_step
+            try:
+                for step in STEP_ORDER[current_index + 1 : target_index + 1]:
+                    self.advance_to(step)
+            finally:
+                self._state.pop("_wizard_transit_target", None)
             return
 
         for _ in range(current_index - target_index):

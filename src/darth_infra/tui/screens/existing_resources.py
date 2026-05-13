@@ -12,7 +12,25 @@ from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Select, SelectionList, Static
 
+from ..steps import STEP_ORDER
 from ..step_rail import StepRail
+
+
+def should_auto_fetch_saved_alb(state: dict[str, Any]) -> bool:
+    """Return True when Existing Resources should auto-fetch saved ALB options."""
+    saved_alb_name = str(state.get("shared_alb_name") or "").strip()
+    if not saved_alb_name:
+        return False
+
+    transit_target = str(state.get("_wizard_transit_target") or "").strip()
+    if (
+        transit_target
+        and transit_target in STEP_ORDER
+        and transit_target != "existing-resources"
+    ):
+        return False
+
+    return True
 
 
 class ExistingResourcesScreen(Screen):
@@ -75,7 +93,7 @@ class ExistingResourcesScreen(Screen):
             )
 
         saved_alb_name = str(self._state.get("shared_alb_name") or "").strip()
-        if saved_alb_name:
+        if saved_alb_name and should_auto_fetch_saved_alb(self._state):
             self._start_fetch_albs()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

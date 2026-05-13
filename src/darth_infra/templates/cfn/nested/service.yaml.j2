@@ -1,3 +1,19 @@
+{% macro render_additional_tags(indent) -%}
+{% for tag in tag_parameters %}
+{{ indent }}- !If
+{{ indent }}  - {{ tag.condition_name }}
+{{ indent }}  - {Key: '{{ tag.key }}', Value: !Ref {{ tag.parameter_name }}}
+{{ indent }}  - !Ref AWS::NoValue
+{% endfor %}
+{%- endmacro %}
+{% macro render_additional_propagated_tags(indent) -%}
+{% for tag in tag_parameters %}
+{{ indent }}- !If
+{{ indent }}  - {{ tag.condition_name }}
+{{ indent }}  - {Key: '{{ tag.key }}', Value: !Ref {{ tag.parameter_name }}, PropagateAtLaunch: true}
+{{ indent }}  - !Ref AWS::NoValue
+{% endfor %}
+{%- endmacro %}
 AWSTemplateFormatVersion: '2010-09-09'
 Description: ECS service stack for {{ project_name }}/{{ name }}
 
@@ -22,6 +38,11 @@ Parameters:
     Type: String
   AlbSecurityGroupId:
     Type: String
+{% for tag in tag_parameters %}
+  {{ tag.parameter_name }}:
+    Type: String
+    Default: ''
+{% endfor %}
 {% if has_rds %}
   RdsSecretArn:
     Type: String
@@ -49,6 +70,11 @@ Parameters:
     Type: String
 {% endfor %}
 
+Conditions:
+{% for tag in tag_parameters %}
+  {{ tag.condition_name }}: !Not [!Equals [!Ref {{ tag.parameter_name }}, '']]
+{% endfor %}
+
 Resources:
   LogGroup:
     Type: AWS::Logs::LogGroup
@@ -62,10 +88,7 @@ Resources:
           Value: !Ref EnvironmentName
         - Key: Service
           Value: {{ name }}
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
   TaskSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -79,10 +102,7 @@ Resources:
           Value: !Ref EnvironmentName
         - Key: Service
           Value: {{ name }}
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
   TaskSgIngressFromAlb:
 {% if has_alb_target %}
@@ -150,10 +170,7 @@ Resources:
           Value: !Ref EnvironmentName
         - Key: Service
           Value: {{ name }}
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -224,10 +241,7 @@ Resources:
           Value: !Ref EnvironmentName
         - Key: Service
           Value: {{ name }}
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
 {% if launch_type == 'ec2' %}
   Ec2InstanceRole:
@@ -249,10 +263,7 @@ Resources:
           Value: !Ref EnvironmentName
         - Key: Service
           Value: {{ name }}
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
   Ec2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -309,10 +320,7 @@ Resources:
                 Value: !Ref EnvironmentName
               - Key: Service
                 Value: {{ name }}
-{% for key, value in tags.items() %}
-              - Key: '{{ key }}'
-                Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('              ') }}
           - ResourceType: volume
             Tags:
               - Key: Project
@@ -321,10 +329,7 @@ Resources:
                 Value: !Ref EnvironmentName
               - Key: Service
                 Value: {{ name }}
-{% for key, value in tags.items() %}
-              - Key: '{{ key }}'
-                Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('              ') }}
 
   AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -349,11 +354,7 @@ Resources:
         - Key: Service
           Value: {{ name }}
           PropagateAtLaunch: true
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-          PropagateAtLaunch: true
-{% endfor %}
+{{ render_additional_propagated_tags('        ') }}
 {% endif %}
 
   TaskDefinition:
@@ -375,10 +376,7 @@ Resources:
           Value: !Ref EnvironmentName
         - Key: Service
           Value: {{ name }}
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 {% if launch_type == 'ec2' and ebs_params %}
       Volumes:
 {% for vol in ebs_params %}
@@ -478,10 +476,7 @@ Resources:
           Value: !Ref EnvironmentName
         - Key: Service
           Value: {{ name }}
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
 {% endif %}
 {% if has_alb_target %}
@@ -506,10 +501,7 @@ Resources:
           Value: !Ref EnvironmentName
         - Key: Service
           Value: {{ name }}
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
 {% endif %}
 {% if has_alb_target and has_cluster_routing_rules %}
@@ -589,10 +581,7 @@ Resources:
           Value: !Ref EnvironmentName
         - Key: Service
           Value: {{ name }}
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 {% if has_alb_target and svc.health_check_grace_period_seconds is not none %}
       HealthCheckGracePeriodSeconds: {{ svc.health_check_grace_period_seconds }}
 {% endif %}

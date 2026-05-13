@@ -268,9 +268,7 @@ def _parse_cloudfront(raw: dict[str, Any]) -> CloudFrontConfig:
                 query_strings=CloudFrontQueryStringsMode(
                     behavior.get("query_strings", "all")
                 ),
-                query_string_allowlist=list(
-                    behavior.get("query_string_allowlist", [])
-                ),
+                query_string_allowlist=list(behavior.get("query_string_allowlist", [])),
                 cookies=CloudFrontCookiesMode(behavior.get("cookies", "none")),
                 cookie_allowlist=list(behavior.get("cookie_allowlist", [])),
                 forward_authorization_header=behavior.get(
@@ -297,6 +295,7 @@ def _parse_env_override(raw: dict[str, Any]) -> EnvironmentOverride:
     return EnvironmentOverride(
         instance_type_override=raw.get("instance_type_override"),
         ec2_instance_type_override=raw.get("ec2_instance_type_override", {}),
+        tags=raw.get("tags", {}),
     )
 
 
@@ -519,9 +518,7 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append(f"min_ttl_seconds = {behavior.min_ttl_seconds}")
             lines.append(f"default_ttl_seconds = {behavior.default_ttl_seconds}")
             lines.append(f"max_ttl_seconds = {behavior.max_ttl_seconds}")
-            lines.append(
-                f'query_strings = "{_enum_value(behavior.query_strings)}"'
-            )
+            lines.append(f'query_strings = "{_enum_value(behavior.query_strings)}"')
             if behavior.query_string_allowlist:
                 allowlist = ", ".join(
                     f'"{_toml_escape(v)}"' for v in behavior.query_string_allowlist
@@ -564,11 +561,16 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append(
                 f'instance_type_override = "{override.instance_type_override}"'
             )
+        if override.tags:
+            lines.append("")
+            lines.append(f"[environments.{env_name}.tags]")
+            for key, value in override.tags.items():
+                lines.append(f'"{_toml_escape(key)}" = "{_toml_escape(value)}"')
         if override.ec2_instance_type_override:
             lines.append("")
             lines.append(f"[environments.{env_name}.ec2_instance_type_override]")
             for svc_name, itype in override.ec2_instance_type_override.items():
-                lines.append(f'{svc_name} = "{itype}"')
+                lines.append(f'"{_toml_escape(svc_name)}" = "{_toml_escape(itype)}"')
         lines.append("")
     if not config.environment_overrides:
         lines.append("# [deploy-live] no [environments.<name>] overrides configured")

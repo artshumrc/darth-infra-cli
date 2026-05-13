@@ -1,3 +1,11 @@
+{% macro render_additional_tags(indent) -%}
+{% for tag in tag_parameters %}
+{{ indent }}- !If
+{{ indent }}  - {{ tag.condition_name }}
+{{ indent }}  - {Key: '{{ tag.key }}', Value: !Ref {{ tag.parameter_name }}}
+{{ indent }}  - !Ref AWS::NoValue
+{% endfor %}
+{%- endmacro %}
 AWSTemplateFormatVersion: '2010-09-09'
 Description: darth-infra root stack for {{ project_name }}
 
@@ -34,6 +42,11 @@ Parameters:
   ClusterDomain:
     Type: String
     Default: '{{ alb.domain or "" }}'
+{% for tag in tag_parameters %}
+  {{ tag.parameter_name }}:
+    Type: String
+    Default: '{{ tag.default_value | replace("'", "''") }}'
+{% endfor %}
 {% if has_rds %}
   RdsSnapshotIdentifier:
     Type: String
@@ -65,6 +78,9 @@ Conditions:
   HasExistingCloudMapNamespace: !Not [!Equals [!Ref ExistingCloudMapNamespaceId, '']]
   CreateServiceNamespace: !Equals [!Ref ExistingCloudMapNamespaceId, '']
 {% endif %}
+{% for tag in tag_parameters %}
+  {{ tag.condition_name }}: !Not [!Equals [!Ref {{ tag.parameter_name }}, '']]
+{% endfor %}
 
 Resources:
   EcsCluster:
@@ -79,10 +95,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
 {% if has_service_discovery %}
   ServiceNamespace:
@@ -96,10 +109,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 {% endif %}
 
   DedicatedAlb:
@@ -117,10 +127,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
   DedicatedAlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -145,10 +152,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
   DedicatedAlbHttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -277,10 +281,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 {% endif %}
 
 {% for secret in secrets if secret.source.value == 'generate' %}
@@ -296,10 +297,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 {% endfor %}
 
 {% if has_s3 %}
@@ -321,10 +319,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 {% endif %}
 {% endfor %}
 {% endif %}
@@ -366,10 +361,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
   BucketPolicy{{ b.name | replace('-', '') }}:
     Type: AWS::S3::BucketPolicy
@@ -400,10 +392,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
 {% endfor %}
 
@@ -422,10 +411,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
   RdsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -437,10 +423,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
   RdsSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
@@ -452,10 +435,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
   Database:
     Type: AWS::RDS::DBInstance
@@ -482,10 +462,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
   RdsSecretAttachment:
     Type: AWS::SecretsManager::SecretTargetAttachment
@@ -520,6 +497,9 @@ Resources:
         ClusterDomain: !Ref ClusterDomain
         AlbListenerArn: !If [UseDedicatedAlb, !If [UseDedicatedAlbWithCert, !Ref DedicatedAlbHttpsListener, !Ref DedicatedAlbHttpListener], !Ref SharedAlbListenerArn]
         AlbSecurityGroupId: !If [UseDedicatedAlb, !Ref DedicatedAlbSecurityGroup, !Ref SharedAlbSecurityGroupId]
+      {% for tag in tag_parameters %}
+        {{ tag.parameter_name }}: !Ref {{ tag.parameter_name }}
+      {% endfor %}
 {% if has_service_discovery and svc_ctx.svc.enable_service_discovery %}        CloudMapNamespaceId: !If [HasExistingCloudMapNamespace, !Ref ExistingCloudMapNamespaceId, !Ref ServiceNamespace]
 {% endif %}
 {% if svc_ctx.has_rds %}
@@ -554,10 +534,7 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-{% for key, value in tags.items() %}
-        - Key: '{{ key }}'
-          Value: '{{ value }}'
-{% endfor %}
+{{ render_additional_tags('        ') }}
 
 {% endfor %}
 
