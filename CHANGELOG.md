@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.6.0
+
+### Minor Changes
+
+- [`ec32b0a`](https://github.com/artshumrc/darth-infra-cli/commit/ec32b0a2d1bb0aff4a1880dfd0977e73f3ce523f) Thanks [@d-flood](https://github.com/d-flood)! - Enable arbitrary tags per environment and fix inability to switch screens out of order
+
 ## 0.5.0
 
 ### Minor Changes
