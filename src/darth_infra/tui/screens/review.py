@@ -22,6 +22,7 @@ from ...config.models import (
     EbsVolumeConfig,
     EnvironmentOverride,
     LaunchType,
+    PreviewEnvironmentsConfig,
     ProjectConfig,
     RdsConfig,
     S3BucketConfig,
@@ -29,6 +30,7 @@ from ...config.models import (
     S3BucketMode,
     SecretConfig,
     SecretSource,
+    ServiceDiscoveryConfig,
     ServiceConfig,
     UlimitConfig,
 )
@@ -141,6 +143,8 @@ def build_config_from_state(state: dict) -> ProjectConfig:
                 mode=S3BucketMode(b.get("mode", "managed")),
                 existing_bucket_name=b.get("existing_bucket_name"),
                 seed_source_bucket_name=b.get("seed_source_bucket_name"),
+                preview_fallback_bucket_name=b.get("preview_fallback_bucket_name"),
+                preview_fallback_env_key=b.get("preview_fallback_env_key"),
                 seed_non_prod_only=b.get("seed_non_prod_only", True),
                 public_read=b.get("public_read", False),
                 cloudfront=b.get("cloudfront", False),
@@ -249,6 +253,36 @@ def build_config_from_state(state: dict) -> ProjectConfig:
                 tags=tags,
             )
 
+    preview_raw = s.get("preview_environments", {}) or {}
+    preview = PreviewEnvironmentsConfig(
+        enabled=bool(preview_raw.get("enabled", False)),
+        base_environment=str(preview_raw.get("base_environment") or "prod"),
+        name_pattern=str(preview_raw.get("name_pattern") or "pr-{number}"),
+        domain_template=preview_raw.get("domain_template") or None,
+        hosted_zone_name=preview_raw.get("hosted_zone_name") or None,
+        listener_priority_start=(
+            int(preview_raw["listener_priority_start"])
+            if preview_raw.get("listener_priority_start") not in {None, ""}
+            else None
+        ),
+        listener_priority_end=(
+            int(preview_raw["listener_priority_end"])
+            if preview_raw.get("listener_priority_end") not in {None, ""}
+            else None
+        ),
+        tags={
+            str(key): str(value)
+            for key, value in preview_raw.get("tags", {}).items()
+            if str(key).strip() and str(value).strip()
+        },
+    )
+    service_discovery_raw = s.get("service_discovery", {}) or {}
+    service_discovery = ServiceDiscoveryConfig(
+        namespace_template=str(
+            service_discovery_raw.get("namespace_template") or "local"
+        )
+    )
+
     return ProjectConfig(
         project_name=s["project_name"],
         aws_region=s["aws_region"],
@@ -268,6 +302,11 @@ def build_config_from_state(state: dict) -> ProjectConfig:
         alb=alb,
         secrets=secrets,
         environment_overrides=environment_overrides,
+        service_discovery=service_discovery,
+        service_discovery_configured=bool(
+            service_discovery_raw.get("configured", bool(service_discovery_raw))
+        ),
+        preview_environments=preview,
         tags={
             str(key): str(value)
             for key, value in s.get("project_tags", {}).items()
@@ -322,6 +361,31 @@ class ReviewScreen(Screen):
                 for key, value in sorted(
                     environment_overrides.get(env_name, {}).get("tags", {}).items()
                 ):
+                    lines.append(f"    {key}={value}")
+
+        service_discovery = s.get("service_discovery", {}) or {}
+        namespace_template = service_discovery.get("namespace_template") or "local"
+        lines.append(f"[bold]Service Discovery:[/bold] {namespace_template}")
+
+        preview = s.get("preview_environments", {}) or {}
+        if preview.get("enabled"):
+            lines.append("")
+            lines.append("[bold]Preview Environments:[/bold] enabled")
+            lines.append(f"  base={preview.get('base_environment') or 'prod'}")
+            lines.append(f"  name={preview.get('name_pattern') or 'pr-{number}'}")
+            if preview.get("domain_template"):
+                lines.append(f"  domain={preview.get('domain_template')}")
+            if preview.get("hosted_zone_name"):
+                lines.append(f"  hosted zone={preview.get('hosted_zone_name')}")
+            if preview.get("listener_priority_start") is not None:
+                lines.append(
+                    "  priorities="
+                    f"{preview.get('listener_priority_start')}-{preview.get('listener_priority_end')}"
+                )
+            tags = preview.get("tags", {}) or {}
+            if tags:
+                lines.append("  preview tags:")
+                for key, value in sorted(tags.items()):
                     lines.append(f"    {key}={value}")
 
         lines.extend(

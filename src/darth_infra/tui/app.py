@@ -22,6 +22,7 @@ from .screens.rds import RdsScreen
 from .screens.s3 import S3Screen
 from .screens.secrets import SecretsScreen
 from .screens.tags import TagsScreen
+from .screens.preview import PreviewScreen
 from .screens.review import ReviewScreen, build_config_from_state
 
 
@@ -233,6 +234,7 @@ class DarthEcsInitApp(App[None]):
             "s3": S3Screen,
             "secrets": SecretsScreen,
             "tags": TagsScreen,
+            "preview": PreviewScreen,
             "review": ReviewScreen,
         }
         if screen_name in screens:

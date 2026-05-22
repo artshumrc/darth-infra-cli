@@ -17,6 +17,16 @@ def default_wizard_state() -> dict[str, Any]:
         "environments": ["prod"],
         "project_tags": {},
         "environment_overrides": {},
+        "preview_environments": {
+            "enabled": False,
+            "base_environment": "prod",
+            "name_pattern": "pr-{number}",
+            "domain_template": None,
+            "hosted_zone_name": None,
+            "listener_priority_start": None,
+            "listener_priority_end": None,
+            "tags": {},
+        },
         "services": [],
         "rds": None,
         "s3_buckets": [],
@@ -28,6 +38,10 @@ def default_wizard_state() -> dict[str, Any]:
         "cloudfront_comment": None,
         "cloudfront_connections": [],
         "cloudfront_cached_behaviors": [],
+        "service_discovery": {
+            "namespace_template": "{project}-{env}.local",
+            "configured": True,
+        },
         "alb_mode": "shared",
         "shared_alb_name": "",
         "shared_listener_arn": None,
@@ -141,6 +155,8 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
                 "mode": str(getattr(bucket.mode, "value", bucket.mode)),
                 "existing_bucket_name": bucket.existing_bucket_name,
                 "seed_source_bucket_name": bucket.seed_source_bucket_name,
+                "preview_fallback_bucket_name": bucket.preview_fallback_bucket_name,
+                "preview_fallback_env_key": bucket.preview_fallback_env_key,
                 "seed_non_prod_only": bucket.seed_non_prod_only,
                 "public_read": bucket.public_read,
                 "cloudfront": bucket.cloudfront,
@@ -190,6 +206,16 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
                 }
                 for env_name, override in config.environment_overrides.items()
             },
+            "preview_environments": {
+                "enabled": config.preview_environments.enabled,
+                "base_environment": config.preview_environments.base_environment,
+                "name_pattern": config.preview_environments.name_pattern,
+                "domain_template": config.preview_environments.domain_template,
+                "hosted_zone_name": config.preview_environments.hosted_zone_name,
+                "listener_priority_start": config.preview_environments.listener_priority_start,
+                "listener_priority_end": config.preview_environments.listener_priority_end,
+                "tags": dict(config.preview_environments.tags),
+            },
             "services": services,
             "rds": (
                 None
@@ -235,6 +261,10 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
                 }
                 for behavior in config.cloudfront.cached_behaviors
             ],
+            "service_discovery": {
+                "namespace_template": config.service_discovery.namespace_template,
+                "configured": config.service_discovery_configured,
+            },
             "alb_mode": "shared",
             "shared_alb_name": config.alb.shared_alb_name,
             "shared_listener_arn": config.alb.shared_listener_arn,

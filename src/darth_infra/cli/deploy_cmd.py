@@ -13,6 +13,7 @@ from .cfn import (
     deploy_changeset,
     ensure_artifact_bucket,
     package_template,
+    prepare_preview_deploy_config,
     resolve_lookup_data,
     run_seed_copy_tasks,
     validate_rendered_deploy_templates,
@@ -23,6 +24,7 @@ from .helpers import (
     get_service_name,
     require_config,
     require_prod_deployed,
+    resolve_environment_config,
 )
 from .image_ops import build_images, push_images, select_internal_services
 from ..scaffold.generator import generate_project
@@ -59,22 +61,22 @@ from ..scaffold.generator import generate_project
     default=False,
     help="Cancel an in-progress CloudFormation stack update for this environment.",
 )
+@click.option(
+    "--preview-from",
+    default=None,
+    help="Base environment to use for a dynamic preview environment.",
+)
 def deploy(
     env_name: str,
     no_execute: bool,
     changeset_name: str | None,
     with_images: bool,
     cancel_update: bool,
+    preview_from: str | None,
 ) -> None:
     """Deploy the CloudFormation stack for a given environment."""
-    config, project_dir = require_config()
-
-    if env_name not in config.environments:
-        console.print(
-            f"[red]Environment '{env_name}' not found in darth-infra.toml. "
-            f"Available: {', '.join(config.environments)}[/red]"
-        )
-        raise SystemExit(1)
+    loaded_config, project_dir = require_config()
+    config = resolve_environment_config(loaded_config, env_name, preview_from)
 
     if cancel_update and (no_execute or with_images or changeset_name is not None):
         console.print(
@@ -95,7 +97,7 @@ def deploy(
         console.print(f"[red]Cancel deploy failed with exit code {rc}[/red]")
         raise SystemExit(rc)
 
-    require_prod_deployed(config, env_name)
+    require_prod_deployed(config, preview_from or env_name)
 
     if with_images and no_execute:
         console.print("[red]--with-images cannot be combined with --no-execute.[/red]")
@@ -107,13 +109,15 @@ def deploy(
     )
 
     try:
+        prepare_preview_deploy_config(config, env_name)
+
         if with_images:
             _prepare_images_for_deploy(config, project_dir, env_name)
 
         console.print(
             "[dim]Refreshing CloudFormation templates from darth-infra.toml...[/dim]"
         )
-        generate_project(config, project_dir)
+        generate_project(config, project_dir, write_config=False)
 
         lookups = resolve_lookup_data(config, env_name)
         validate_rendered_deploy_templates(project_dir, config, env_name, lookups)
@@ -168,7 +172,7 @@ def _prepare_images_for_deploy(config, project_dir, env_name: str) -> None:
             if not service.image:
                 service.desired_count = 0
 
-        generate_project(bootstrap_config, project_dir)
+        generate_project(bootstrap_config, project_dir, write_config=False)
         lookups = resolve_lookup_data(config, env_name)
         validate_rendered_deploy_templates(project_dir, bootstrap_config, env_name, lookups)
         bucket = ensure_artifact_bucket(config)

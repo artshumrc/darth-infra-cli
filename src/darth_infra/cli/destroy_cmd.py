@@ -5,16 +5,29 @@ from __future__ import annotations
 import boto3
 import click
 
-from .cfn import delete_stack
-from .helpers import console, require_config
+from .cfn import (
+    cleanup_preview_service_discovery_instances,
+    delete_stack,
+    delete_preview_database_instance,
+    delete_tagged_preview_snapshots,
+    empty_managed_buckets,
+    empty_managed_repositories,
+)
+from .helpers import console, is_active_preview, require_config, resolve_environment_config
 
 
 @click.command()
 @click.option("--env", "env_name", required=True, help="Environment to destroy.")
 @click.option("--force", is_flag=True, help="Skip confirmation prompt.")
-def destroy(env_name: str, force: bool) -> None:
+@click.option(
+    "--preview-from",
+    default=None,
+    help="Base environment to use for a dynamic preview environment.",
+)
+def destroy(env_name: str, force: bool, preview_from: str | None) -> None:
     """Destroy the CloudFormation stack for a given environment."""
-    config, _ = require_config()
+    loaded_config, _ = require_config()
+    config = resolve_environment_config(loaded_config, env_name, preview_from)
 
     if env_name == "prod":
         # Verify no non-prod envs still exist
@@ -43,7 +56,26 @@ def destroy(env_name: str, force: bool) -> None:
         f"environment [cyan]{env_name}[/cyan]...[/bold]"
     )
 
+    if is_active_preview(config, env_name):
+        empty_rc = empty_managed_buckets(config, env_name)
+        if empty_rc != 0:
+            raise SystemExit(empty_rc)
+        ecr_rc = empty_managed_repositories(config, env_name)
+        if ecr_rc != 0:
+            raise SystemExit(ecr_rc)
+        cloud_map_rc = cleanup_preview_service_discovery_instances(config, env_name)
+        if cloud_map_rc != 0:
+            raise SystemExit(cloud_map_rc)
+        db_rc = delete_preview_database_instance(config, env_name)
+        if db_rc != 0:
+            raise SystemExit(db_rc)
+
     rc = delete_stack(config, env_name)
+
+    if rc == 0 and is_active_preview(config, env_name):
+        snapshot_rc = delete_tagged_preview_snapshots(config, env_name)
+        if snapshot_rc != 0:
+            raise SystemExit(snapshot_rc)
 
     if rc == 0:
         console.print(f"[green]✓ Destroyed {env_name}[/green]")

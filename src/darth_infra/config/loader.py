@@ -24,6 +24,7 @@ from .models import (
     EbsVolumeConfig,
     EnvironmentOverride,
     LaunchType,
+    PreviewEnvironmentsConfig,
     ProjectConfig,
     RdsConfig,
     S3BucketConfig,
@@ -31,6 +32,7 @@ from .models import (
     S3BucketMode,
     SecretConfig,
     SecretSource,
+    ServiceDiscoveryConfig,
     ServiceConfig,
     UlimitConfig,
 )
@@ -86,6 +88,8 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
     alb_raw = raw.get("alb", {})
     secrets_raw = raw.get("secrets", [])
     env_overrides_raw = raw.get("environments", {})
+    preview_raw = raw.get("preview_environments", {})
+    service_discovery_raw = raw.get("service_discovery")
 
     services = [_parse_service(s) for s in services_raw]
     rds = _parse_rds(rds_raw) if rds_raw else None
@@ -115,6 +119,9 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
         alb=alb,
         secrets=secrets,
         environment_overrides=environment_overrides,
+        service_discovery=_parse_service_discovery(service_discovery_raw),
+        service_discovery_configured=service_discovery_raw is not None,
+        preview_environments=_parse_preview_environments(preview_raw),
     )
 
 
@@ -209,6 +216,8 @@ def _parse_s3(raw: dict[str, Any]) -> S3BucketConfig:
         mode=S3BucketMode(raw.get("mode", "managed")),
         existing_bucket_name=raw.get("existing_bucket_name"),
         seed_source_bucket_name=raw.get("seed_source_bucket_name"),
+        preview_fallback_bucket_name=raw.get("preview_fallback_bucket_name"),
+        preview_fallback_env_key=raw.get("preview_fallback_env_key"),
         seed_non_prod_only=raw.get("seed_non_prod_only", True),
         public_read=raw.get("public_read", False),
         cloudfront=raw.get("cloudfront", False),
@@ -299,11 +308,32 @@ def _parse_env_override(raw: dict[str, Any]) -> EnvironmentOverride:
     )
 
 
+def _parse_preview_environments(raw: dict[str, Any]) -> PreviewEnvironmentsConfig:
+    raw = raw or {}
+    return PreviewEnvironmentsConfig(
+        enabled=raw.get("enabled", False),
+        base_environment=raw.get("base_environment", "prod"),
+        name_pattern=raw.get("name_pattern", "pr-{number}"),
+        domain_template=raw.get("domain_template"),
+        hosted_zone_name=raw.get("hosted_zone_name"),
+        listener_priority_start=raw.get("listener_priority_start"),
+        listener_priority_end=raw.get("listener_priority_end"),
+        tags=raw.get("tags", {}),
+    )
+
+
+def _parse_service_discovery(raw: dict[str, Any] | None) -> ServiceDiscoveryConfig:
+    raw = raw or {}
+    return ServiceDiscoveryConfig(
+        namespace_template=raw.get("namespace_template", "local"),
+    )
+
+
 def dump_config(config: ProjectConfig) -> str:
     """Serialize a ``ProjectConfig`` to TOML string."""
     lines: list[str] = []
 
-    lines.append("#:schema darth-infra.schema.json")
+    lines.append("#:schema ./darth-infra.schema.json")
     lines.append("#")
     lines.append("# darth-infra config")
     lines.append("#")
@@ -408,6 +438,15 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append(f'filesystem_type = "{vol.filesystem_type}"')
         lines.append("")
 
+    if config.service_discovery_configured:
+        lines.append("# [deploy-live] Cloud Map service discovery namespace")
+        lines.append("[service_discovery]")
+        lines.append(
+            "namespace_template = "
+            f'"{_toml_escape(config.service_discovery.namespace_template)}"'
+        )
+        lines.append("")
+
     if config.rds:
         lines.append("# Optional RDS")
         lines.append("[rds]")
@@ -431,6 +470,14 @@ def dump_config(config: ProjectConfig) -> str:
         if bucket.seed_source_bucket_name:
             lines.append(
                 f'seed_source_bucket_name = "{bucket.seed_source_bucket_name}"'
+            )
+        if bucket.preview_fallback_bucket_name:
+            lines.append(
+                f'preview_fallback_bucket_name = "{bucket.preview_fallback_bucket_name}"'
+            )
+        if bucket.preview_fallback_env_key:
+            lines.append(
+                f'preview_fallback_env_key = "{bucket.preview_fallback_env_key}"'
             )
         lines.append(f"seed_non_prod_only = {str(bucket.seed_non_prod_only).lower()}")
         lines.append(f"public_read = {str(bucket.public_read).lower()}")
@@ -574,6 +621,30 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append("")
     if not config.environment_overrides:
         lines.append("# [deploy-live] no [environments.<name>] overrides configured")
+        lines.append("")
+
+    preview = config.preview_environments
+    if preview.enabled:
+        lines.append("# Dynamic preview environment settings")
+        lines.append("[preview_environments]")
+        lines.append(f"enabled = {str(preview.enabled).lower()}")
+        lines.append(f'base_environment = "{_toml_escape(preview.base_environment)}"')
+        lines.append(f'name_pattern = "{_toml_escape(preview.name_pattern)}"')
+        if preview.domain_template:
+            lines.append(f'domain_template = "{_toml_escape(preview.domain_template)}"')
+        if preview.hosted_zone_name:
+            lines.append(
+                f'hosted_zone_name = "{_toml_escape(preview.hosted_zone_name)}"'
+            )
+        if preview.listener_priority_start is not None:
+            lines.append(f"listener_priority_start = {preview.listener_priority_start}")
+        if preview.listener_priority_end is not None:
+            lines.append(f"listener_priority_end = {preview.listener_priority_end}")
+        if preview.tags:
+            lines.append("")
+            lines.append("[preview_environments.tags]")
+            for key, value in preview.tags.items():
+                lines.append(f'"{_toml_escape(key)}" = "{_toml_escape(value)}"')
         lines.append("")
 
     return "\n".join(lines) + "\n"

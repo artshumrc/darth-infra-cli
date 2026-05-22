@@ -21,9 +21,12 @@ def test_build_parameters_uses_environment_specific_tag_values() -> None:
         shared_listener_arn="arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/shared/abc/def",
         shared_alb_security_group_id="sg-12345678",
         shared_alb_dns_name="shared.example.com",
+        shared_alb_canonical_hosted_zone_id="ZALB123",
+        hosted_zone_id="",
         default_listener_priority=None,
         path_rule_priorities={},
         rds_snapshot_identifier="",
+        rds_source_secret_arn="",
         external_secret_arns={},
         existing_service_discovery_namespace_id="",
     )

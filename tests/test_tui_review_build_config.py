@@ -4,13 +4,14 @@ from darth_infra.config.models import (
     EnvironmentOverride,
     ProjectConfig,
     SecretConfig,
+    ServiceDiscoveryConfig,
     ServiceConfig,
 )
 from darth_infra.tui.screens.existing_resources import should_auto_fetch_saved_alb
 from darth_infra.tui.screens.review import build_config_from_state
 from darth_infra.tui.screens.services import merge_service_state
 from darth_infra.tui.steps import STEP_ORDER
-from darth_infra.tui.wizard_export import project_config_to_wizard_state
+from darth_infra.tui.wizard_export import default_wizard_state, project_config_to_wizard_state
 
 
 def test_build_config_from_state_preserves_service_ses_toggle() -> None:
@@ -138,6 +139,56 @@ def test_roundtrip_preserves_project_and_environment_tags() -> None:
         "cost-center": "dev",
         "tier": "sandbox",
     }
+
+
+def test_new_wizard_state_defaults_service_discovery_namespace() -> None:
+    state = default_wizard_state()
+    state.update(
+        {
+            "project_name": "demo",
+            "services": [{"name": "web", "enable_service_discovery": True}],
+        }
+    )
+
+    rebuilt = build_config_from_state(state)
+
+    assert rebuilt.service_discovery.namespace_template == "{project}-{env}.local"
+    assert rebuilt.service_discovery_configured is True
+
+
+def test_tui_roundtrip_preserves_service_discovery_config() -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web")],
+        service_discovery=ServiceDiscoveryConfig(
+            namespace_template="{project}-{env}.local"
+        ),
+        service_discovery_configured=True,
+    )
+
+    state = project_config_to_wizard_state(config)
+    rebuilt = build_config_from_state(state)
+
+    assert state["service_discovery"]["namespace_template"] == "{project}-{env}.local"
+    assert rebuilt.service_discovery.namespace_template == "{project}-{env}.local"
+    assert rebuilt.service_discovery_configured is True
+
+
+def test_tui_roundtrip_preserves_legacy_service_discovery_default() -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", enable_service_discovery=True)],
+    )
+
+    state = project_config_to_wizard_state(config)
+    rebuilt = build_config_from_state(state)
+
+    assert state["service_discovery"] == {
+        "namespace_template": "local",
+        "configured": False,
+    }
+    assert rebuilt.service_discovery.namespace_template == "local"
+    assert rebuilt.service_discovery_configured is False
 
 
 def test_should_auto_fetch_saved_alb_skips_intermediate_transit_mounts() -> None:

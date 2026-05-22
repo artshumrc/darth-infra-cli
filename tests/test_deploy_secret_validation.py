@@ -28,9 +28,12 @@ def _lookups() -> ResolvedLookupData:
         shared_listener_arn="listener-arn",
         shared_alb_security_group_id="sg-123",
         shared_alb_dns_name="alb.example.com",
+        shared_alb_canonical_hosted_zone_id="ZALB123",
+        hosted_zone_id="",
         default_listener_priority=100,
         path_rule_priorities={},
         rds_snapshot_identifier="",
+        rds_source_secret_arn="",
         external_secret_arns={
             "DJANGO_SECRET_KEY": "arn:aws:secretsmanager:us-east-1:123456789012:secret:django",
         },
@@ -97,6 +100,19 @@ def test_root_template_uses_ref_for_generated_secret_wiring(tmp_path: Path) -> N
     root = _read(output_dir / "templates" / "generated" / "root.yaml")
 
     assert "SecretArnAPPSECRET: !Ref SecretAPPSECRET" in root
+
+
+def test_rds_snapshot_restore_uses_source_secret_and_omits_new_master_credentials(
+    tmp_path: Path,
+) -> None:
+    output_dir = generate_project(_config(), tmp_path / "out")
+    root = _read(output_dir / "templates" / "generated" / "root.yaml")
+
+    assert "RdsSourceSecretArn:" in root
+    assert "SecretString: !If" in root
+    assert "SourceSecretArn: !Ref RdsSourceSecretArn" in root
+    assert "MasterUsername: !If [HasRdsSnapshot, !Ref 'AWS::NoValue'" in root
+    assert "MasterUserPassword: !If [HasRdsSnapshot, !Ref 'AWS::NoValue'" in root
 
 
 def test_validate_rendered_templates_accepts_expected_secret_wiring(
