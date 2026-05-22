@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.7.1
+
+### Patch Changes
+
+- [`4011f5e`](https://github.com/artshumrc/darth-infra-cli/commit/4011f5ef898c761c65b992da474cdf0957eec289) Thanks [@d-flood](https://github.com/d-flood)! - add \_retry_aws_call() with backoff, 8 tries
+
 ## 0.7.0
 
 ### Minor Changes
