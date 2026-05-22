@@ -23,6 +23,37 @@ from ..config.models import ProjectConfig
 from .helpers import console, get_cluster_name, get_service_name
 
 
+_TRANSIENT_AWS_ERROR_CODES = {
+    "ServiceUnavailable",
+    "InternalError",
+    "InternalFailure",
+    "Throttling",
+    "ThrottlingException",
+    "RequestLimitExceeded",
+    "RequestThrottled",
+    "TooManyRequestsException",
+    "PriorRequestNotComplete",
+}
+
+
+def _retry_aws_call(description, func, *, max_attempts=8, base_delay=2.0):
+    """Call ``func`` and retry on transient AWS errors with exponential backoff."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return func()
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code not in _TRANSIENT_AWS_ERROR_CODES or attempt == max_attempts:
+                raise
+            delay = min(60.0, base_delay * (2 ** (attempt - 1)))
+            console.print(
+                f"[yellow]Transient AWS error during {description} ({code}). "
+                f"Retry {attempt}/{max_attempts - 1} in {delay:.0f}s...[/yellow]"
+            )
+            time.sleep(delay)
+    raise RuntimeError(f"Exhausted retries for {description}")
+
+
 @dataclass
 class ResolvedLookupData:
     vpc_id: str
@@ -2470,9 +2501,12 @@ def _resolve_hosted_zone_id(config: ProjectConfig, route53) -> str:
         return ""
 
     zone_name = config.active_preview.hosted_zone_name.rstrip(".") + "."
-    zones = route53.list_hosted_zones_by_name(
-        DNSName=zone_name,
-        MaxItems="1",
+    zones = _retry_aws_call(
+        f"Route53 list_hosted_zones_by_name {zone_name}",
+        lambda: route53.list_hosted_zones_by_name(
+            DNSName=zone_name,
+            MaxItems="1",
+        ),
     ).get("HostedZones", [])
     if not zones or zones[0].get("Name") != zone_name:
         raise RuntimeError(f"Could not resolve Route53 hosted zone '{zone_name}'")
