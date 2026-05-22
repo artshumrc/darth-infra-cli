@@ -189,15 +189,42 @@ def _build_context(config: ProjectConfig) -> dict:
     secrets_by_name = {sec.name: sec for sec in config.secrets}
 
     s3_access_by_service: dict[str, list[dict]] = {}
+    s3_buckets_ctx: list[dict[str, object]] = []
     seen_s3_entries_by_service: dict[str, set[tuple[str, str, str | None, bool]]] = {}
     for bucket in config.s3_buckets:
+        uses_preview_overlay = bool(
+            config.active_preview and bucket.preview_fallback_bucket_name
+        )
+        provisions_managed_bucket = (
+            bucket.mode.value != "existing" or uses_preview_overlay
+        )
+        s3_buckets_ctx.append(
+            {
+                "name": bucket.name,
+                "mode": bucket.mode,
+                "existing_bucket_name": bucket.existing_bucket_name,
+                "seed_source_bucket_name": bucket.seed_source_bucket_name,
+                "preview_fallback_bucket_name": bucket.preview_fallback_bucket_name,
+                "preview_fallback_env_key": bucket.preview_fallback_env_key,
+                "seed_non_prod_only": bucket.seed_non_prod_only,
+                "public_read": bucket.public_read,
+                "cloudfront": bucket.cloudfront,
+                "cors": bucket.cors,
+                "provision_bucket": provisions_managed_bucket,
+            }
+        )
         bucket_ref = (
             f"Bucket{bucket.name.replace('-', '')}"
-            if bucket.mode.value != "existing"
+            if provisions_managed_bucket
             else None
         )
         bucket_name_literal = (
-            bucket.existing_bucket_name if bucket.mode.value == "existing" else None
+            bucket.existing_bucket_name if not provisions_managed_bucket else None
+        )
+        fallback_bucket_name_literal = (
+            bucket.preview_fallback_bucket_name
+            if config.active_preview and bucket.preview_fallback_bucket_name
+            else None
         )
         for conn in bucket.connections:
             dedupe_key = (
@@ -220,11 +247,27 @@ def _build_context(config: ProjectConfig) -> dict:
                     "env_key": conn.env_key,
                     "param_name": f"BucketName{_pascalize(bucket.name)}",
                     "arn_param_name": f"BucketArn{_pascalize(bucket.name)}",
+                    "fallback_param_name": (
+                        f"FallbackBucketName{_pascalize(bucket.name)}"
+                        if fallback_bucket_name_literal
+                        else None
+                    ),
+                    "fallback_arn_param_name": (
+                        f"FallbackBucketArn{_pascalize(bucket.name)}"
+                        if fallback_bucket_name_literal
+                        else None
+                    ),
+                    "fallback_bucket_name_literal": fallback_bucket_name_literal,
+                    "fallback_env_key": (
+                        bucket.preview_fallback_env_key
+                        if fallback_bucket_name_literal
+                        else None
+                    ),
                     "cf_param_name": f"CloudFrontUrl{_pascalize(bucket.name)}"
                     if (
                         bucket.cloudfront
                         and conn.cloudfront_env_key
-                        and bucket.mode.value != "existing"
+                        and provisions_managed_bucket
                     )
                     else None,
                     "cloudfront_env_key": conn.cloudfront_env_key
@@ -437,7 +480,7 @@ def _build_context(config: ProjectConfig) -> dict:
             if config.rds is not None
             else ""
         ),
-        "s3_buckets": config.s3_buckets,
+        "s3_buckets": s3_buckets_ctx,
         "alb": config.alb,
         "secrets": config.secrets,
         "tag_parameters": config.get_tag_parameters(),

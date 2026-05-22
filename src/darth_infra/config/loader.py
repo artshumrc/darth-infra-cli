@@ -216,6 +216,8 @@ def _parse_s3(raw: dict[str, Any]) -> S3BucketConfig:
         mode=S3BucketMode(raw.get("mode", "managed")),
         existing_bucket_name=raw.get("existing_bucket_name"),
         seed_source_bucket_name=raw.get("seed_source_bucket_name"),
+        preview_fallback_bucket_name=raw.get("preview_fallback_bucket_name"),
+        preview_fallback_env_key=raw.get("preview_fallback_env_key"),
         seed_non_prod_only=raw.get("seed_non_prod_only", True),
         public_read=raw.get("public_read", False),
         cloudfront=raw.get("cloudfront", False),
@@ -331,7 +333,7 @@ def dump_config(config: ProjectConfig) -> str:
     """Serialize a ``ProjectConfig`` to TOML string."""
     lines: list[str] = []
 
-    lines.append("#:schema darth-infra.schema.json")
+    lines.append("#:schema ./darth-infra.schema.json")
     lines.append("#")
     lines.append("# darth-infra config")
     lines.append("#")
@@ -468,6 +470,14 @@ def dump_config(config: ProjectConfig) -> str:
         if bucket.seed_source_bucket_name:
             lines.append(
                 f'seed_source_bucket_name = "{bucket.seed_source_bucket_name}"'
+            )
+        if bucket.preview_fallback_bucket_name:
+            lines.append(
+                f'preview_fallback_bucket_name = "{bucket.preview_fallback_bucket_name}"'
+            )
+        if bucket.preview_fallback_env_key:
+            lines.append(
+                f'preview_fallback_env_key = "{bucket.preview_fallback_env_key}"'
             )
         lines.append(f"seed_non_prod_only = {str(bucket.seed_non_prod_only).lower()}")
         lines.append(f"public_read = {str(bucket.public_read).lower()}")
@@ -621,11 +631,11 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f'base_environment = "{_toml_escape(preview.base_environment)}"')
         lines.append(f'name_pattern = "{_toml_escape(preview.name_pattern)}"')
         if preview.domain_template:
-            lines.append(
-                f'domain_template = "{_toml_escape(preview.domain_template)}"'
-            )
+            lines.append(f'domain_template = "{_toml_escape(preview.domain_template)}"')
         if preview.hosted_zone_name:
-            lines.append(f'hosted_zone_name = "{_toml_escape(preview.hosted_zone_name)}"')
+            lines.append(
+                f'hosted_zone_name = "{_toml_escape(preview.hosted_zone_name)}"'
+            )
         if preview.listener_priority_start is not None:
             lines.append(f"listener_priority_start = {preview.listener_priority_start}")
         if preview.listener_priority_end is not None:

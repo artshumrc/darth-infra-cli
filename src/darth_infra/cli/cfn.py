@@ -522,8 +522,6 @@ def deploy_changeset(
 
     template_body = template_path.read_text()
     parameters = _build_parameters(config, env_name, lookups)
-    resolved_tags = config.get_tags_for_environment(env_name)
-
     change_set_type = "UPDATE"
     existing_status: str | None = None
     try:
@@ -559,6 +557,11 @@ def deploy_changeset(
 
     cs_name = changeset_name or f"darth-{env_name}-{int(time.time())}"
 
+    execute_kwargs: dict[str, object] = {
+        "ChangeSetName": "",
+        "StackName": stack_name,
+    }
+
     resp = cf.create_change_set(
         StackName=stack_name,
         ChangeSetName=cs_name,
@@ -572,14 +575,14 @@ def deploy_changeset(
         ],
         Parameters=parameters,
         Tags=[
-            {"Key": "project", "Value": config.project_name},
-            {"Key": "environment", "Value": env_name},
+            {"Key": "darth-project", "Value": config.project_name},
+            {"Key": "darth-environment", "Value": env_name},
             {"Key": "managed-by", "Value": "darth-infra"},
             {"Key": "deployment-type", "Value": "ecs"},
-            *[{"Key": k, "Value": v} for k, v in resolved_tags.items()],
         ],
     )
     cs_arn = resp["Id"]
+    execute_kwargs["ChangeSetName"] = cs_arn
 
     status, reason, changes = _wait_for_changeset(cf, cs_arn)
     if status == "FAILED":
@@ -619,7 +622,10 @@ def deploy_changeset(
         )
         return 0
 
-    cf.execute_change_set(ChangeSetName=cs_arn, StackName=stack_name)
+    if change_set_type == "CREATE" and config.active_preview:
+        execute_kwargs["DisableRollback"] = True
+
+    cf.execute_change_set(**execute_kwargs)
     console.print("[bold]Executing change set...[/bold]")
     success = _monitor_stack_deploy(
         cf=cf,
@@ -884,7 +890,9 @@ def delete_stack(config: ProjectConfig, env_name: str) -> int:
         return 0
     except ClientError as exc:
         if _is_missing_stack_error(exc):
-            console.print(f"[yellow]Stack '{stack_name}' does not exist; nothing to delete.[/yellow]")
+            console.print(
+                f"[yellow]Stack '{stack_name}' does not exist; nothing to delete.[/yellow]"
+            )
             return 0
         console.print(f"[red]Delete failed: {exc}[/red]")
         return 1
@@ -907,7 +915,9 @@ def _is_missing_stack_error(exc: ClientError) -> bool:
 
 def empty_managed_buckets(config: ProjectConfig, env_name: str) -> int:
     """Empty managed buckets for preview destroys so CloudFormation can delete them."""
-    buckets = [bucket for bucket in config.s3_buckets if bucket.mode.value != "existing"]
+    buckets = [
+        bucket for bucket in config.s3_buckets if bucket.mode.value != "existing"
+    ]
     if not buckets:
         return 0
 
@@ -978,6 +988,213 @@ def _empty_repository(ecr, repository_name: str) -> int:
                 ecr.batch_delete_image(repositoryName=repository_name, imageIds=chunk)
                 deleted += len(chunk)
     return deleted
+
+
+def cleanup_preview_service_discovery_instances(
+    config: ProjectConfig,
+    env_name: str,
+) -> int:
+    """Deregister Cloud Map instances so CloudFormation can delete services."""
+    if not any(service.enable_service_discovery for service in config.services):
+        return 0
+
+    cf = boto3.client("cloudformation", region_name=config.aws_region)
+    servicediscovery = boto3.client("servicediscovery", region_name=config.aws_region)
+    stack_name = f"{config.project_name}-ecs-{env_name}"
+    service_ids = set(_list_cloud_map_service_ids_for_stack(cf, stack_name))
+    service_ids.update(
+        _resolve_cloud_map_service_ids_by_namespace(config, env_name, servicediscovery)
+    )
+    if not service_ids:
+        return 0
+
+    failures: list[str] = []
+    for service_id in service_ids:
+        try:
+            deregistered = _deregister_cloud_map_instances(servicediscovery, service_id)
+            if deregistered:
+                console.print(
+                    f"[green]✓ Deregistered {deregistered} Cloud Map instance(s) from {service_id}[/green]"
+                )
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in {"ServiceNotFound", "ServiceNotFoundException"}:
+                continue
+            failures.append(f"{service_id}: {exc}")
+        except Exception as exc:
+            failures.append(f"{service_id}: {exc}")
+
+    if failures:
+        for failure in failures:
+            console.print(f"[red]Cloud Map cleanup failed: {failure}[/red]")
+        return 1
+    return 0
+
+
+def _resolve_cloud_map_service_ids_by_namespace(
+    config: ProjectConfig,
+    env_name: str,
+    servicediscovery,
+) -> list[str]:
+    service_names = {
+        service.name for service in config.services if service.enable_service_discovery
+    }
+    if not service_names:
+        return []
+
+    namespace_names = {config.get_service_discovery_namespace(env_name)}
+    if config.active_preview and config.active_preview.env_name == env_name:
+        # Older failed preview stacks may have used the legacy shared namespace.
+        namespace_names.add("local")
+
+    namespace_ids: list[str] = []
+    for namespace_name in namespace_names:
+        try:
+            response = servicediscovery.list_namespaces(
+                Filters=[
+                    {"Name": "TYPE", "Values": ["DNS_PRIVATE"], "Condition": "EQ"},
+                    {"Name": "NAME", "Values": [namespace_name], "Condition": "EQ"},
+                ]
+            )
+        except Exception:
+            continue
+        namespace_ids.extend(
+            str(namespace.get("Id", "")).strip()
+            for namespace in response.get("Namespaces", [])
+            if str(namespace.get("Id", "")).strip()
+        )
+
+    service_ids: list[str] = []
+    for namespace_id in namespace_ids:
+        try:
+            paginator = servicediscovery.get_paginator("list_services")
+            pages = paginator.paginate(
+                Filters=[
+                    {
+                        "Name": "NAMESPACE_ID",
+                        "Values": [namespace_id],
+                        "Condition": "EQ",
+                    }
+                ]
+            )
+            for page in pages:
+                for service in page.get("Services", []):
+                    name = str(service.get("Name", "")).strip()
+                    service_id = str(service.get("Id", "")).strip()
+                    if name in service_names and service_id:
+                        service_ids.append(service_id)
+        except Exception:
+            continue
+
+    return service_ids
+
+
+def _list_cloud_map_service_ids_for_stack(cf, stack_name: str) -> list[str]:
+    service_ids: list[str] = []
+    try:
+        stack_resources = _list_stack_resource_summaries(cf, stack_name)
+    except ClientError as exc:
+        if _is_missing_stack_error(exc):
+            return []
+        raise
+
+    for summary in stack_resources:
+        resource_type = str(summary.get("ResourceType", "")).strip()
+        physical_id = str(summary.get("PhysicalResourceId", "")).strip()
+        if not physical_id:
+            continue
+        if resource_type == "AWS::ServiceDiscovery::Service":
+            service_ids.append(physical_id)
+        elif resource_type == "AWS::CloudFormation::Stack":
+            service_ids.extend(_list_cloud_map_service_ids_for_stack(cf, physical_id))
+    return service_ids
+
+
+def _deregister_cloud_map_instances(servicediscovery, service_id: str) -> int:
+    deregistered = 0
+    paginator = servicediscovery.get_paginator("list_instances")
+    operation_ids: list[str] = []
+    for page in paginator.paginate(ServiceId=service_id):
+        for instance in page.get("Instances", []):
+            instance_id = str(instance.get("Id", "")).strip()
+            if not instance_id:
+                continue
+            response = servicediscovery.deregister_instance(
+                ServiceId=service_id,
+                InstanceId=instance_id,
+            )
+            operation_id = str(response.get("OperationId", "")).strip()
+            if operation_id:
+                operation_ids.append(operation_id)
+            deregistered += 1
+
+    for operation_id in operation_ids:
+        _wait_for_service_discovery_operation(servicediscovery, operation_id)
+    return deregistered
+
+
+def _wait_for_service_discovery_operation(servicediscovery, operation_id: str) -> None:
+    deadline = time.time() + 120
+    while True:
+        response = servicediscovery.get_operation(OperationId=operation_id)
+        operation = response.get("Operation", {})
+        status = str(operation.get("Status", "")).strip()
+        if status == "SUCCESS":
+            return
+        if status == "FAIL":
+            raise RuntimeError(
+                f"Cloud Map operation {operation_id} failed: {operation.get('ErrorMessage', '')}"
+            )
+        if time.time() >= deadline:
+            raise RuntimeError(f"Cloud Map operation {operation_id} did not complete")
+        time.sleep(3)
+
+
+def delete_preview_database_instance(config: ProjectConfig, env_name: str) -> int:
+    """Best-effort preview DB deletion without a final snapshot before stack delete."""
+    if not config.rds:
+        return 0
+
+    rds = boto3.client("rds", region_name=config.aws_region)
+    db_identifier = f"{config.project_name}-{env_name}-db"
+    try:
+        response = rds.describe_db_instances(DBInstanceIdentifier=db_identifier)
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in {"DBInstanceNotFound", "DBInstanceNotFoundFault"}:
+            return 0
+        console.print(f"[red]Could not inspect preview DB {db_identifier}: {exc}[/red]")
+        return 1
+
+    instances = response.get("DBInstances", [])
+    if not instances:
+        return 0
+    status = str(instances[0].get("DBInstanceStatus", "")).strip().lower()
+    if status == "deleting":
+        return 0
+
+    try:
+        rds.delete_db_instance(
+            DBInstanceIdentifier=db_identifier,
+            SkipFinalSnapshot=True,
+            DeleteAutomatedBackups=True,
+        )
+        console.print(
+            f"[green]✓ Requested deletion of preview DB {db_identifier} without final snapshot[/green]"
+        )
+        waiter = rds.get_waiter("db_instance_deleted")
+        waiter.wait(DBInstanceIdentifier=db_identifier)
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in {"DBInstanceNotFound", "DBInstanceNotFoundFault"}:
+            return 0
+        console.print(f"[red]Preview DB cleanup failed: {exc}[/red]")
+        return 1
+    except WaiterError as exc:
+        console.print(f"[red]Preview DB deletion did not complete: {exc}[/red]")
+        return 1
+
+    return 0
 
 
 def delete_tagged_preview_snapshots(config: ProjectConfig, env_name: str) -> int:
@@ -1058,9 +1275,7 @@ def _empty_bucket(s3, bucket_name: str) -> None:
     paginator = s3.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket_name):
         objects = [
-            {"Key": item["Key"]}
-            for item in page.get("Contents", [])
-            if item.get("Key")
+            {"Key": item["Key"]} for item in page.get("Contents", []) if item.get("Key")
         ]
         for chunk_start in range(0, len(objects), 1000):
             chunk = objects[chunk_start : chunk_start + 1000]
@@ -2264,7 +2479,9 @@ def _resolve_hosted_zone_id(config: ProjectConfig, route53) -> str:
 
     zone_id = str(zones[0].get("Id", "")).split("/")[-1]
     if not zone_id:
-        raise RuntimeError(f"Could not resolve Route53 hosted zone id for '{zone_name}'")
+        raise RuntimeError(
+            f"Could not resolve Route53 hosted zone id for '{zone_name}'"
+        )
     return zone_id
 
 
@@ -2535,6 +2752,9 @@ def _resolve_existing_service_discovery_namespace(
         return ""
 
     namespace_name = config.get_service_discovery_namespace(env_name)
+    stack_owned_namespace_ids = _stack_owned_service_discovery_namespace_ids(
+        config, env_name
+    )
 
     try:
         resp = servicediscovery.list_namespaces(
@@ -2550,6 +2770,8 @@ def _resolve_existing_service_discovery_namespace(
         namespace_id = str(ns.get("Id", "")).strip()
         if not namespace_id:
             continue
+        if namespace_id in stack_owned_namespace_ids:
+            return ""
         try:
             details = servicediscovery.get_namespace(Id=namespace_id)
             hosted_zone_id = (
@@ -2572,6 +2794,30 @@ def _resolve_existing_service_discovery_namespace(
             continue
 
     return ""
+
+
+def _stack_owned_service_discovery_namespace_ids(
+    config: ProjectConfig,
+    env_name: str,
+) -> set[str]:
+    stack_name = f"{config.project_name}-ecs-{env_name}"
+    cf = boto3.client("cloudformation", region_name=config.aws_region)
+    try:
+        resources = _list_stack_resource_summaries(cf, stack_name)
+    except ClientError as exc:
+        if _is_missing_stack_error(exc):
+            return set()
+        return set()
+    except Exception:
+        return set()
+
+    return {
+        str(resource.get("PhysicalResourceId", "")).strip()
+        for resource in resources
+        if str(resource.get("ResourceType", "")).strip()
+        == "AWS::ServiceDiscovery::PrivateDnsNamespace"
+        and str(resource.get("PhysicalResourceId", "")).strip()
+    }
 
 
 def _build_parameters(
@@ -2676,15 +2922,21 @@ def _build_parameters(
 
 
 def run_seed_copy_tasks(config: ProjectConfig, env_name: str) -> int:
-    seed_buckets = [
-        bucket
-        for bucket in config.s3_buckets
-        if bucket.mode.value == "seed-copy" and bucket.seed_source_bucket_name
-    ]
+    seed_buckets = []
+    for bucket in config.s3_buckets:
+        if bucket.mode.value != "seed-copy" or not bucket.seed_source_bucket_name:
+            continue
+        if config.active_preview and bucket.preview_fallback_bucket_name:
+            console.print(
+                f"[dim]Skipping seed copy for bucket '{bucket.name}' in preview overlay mode; fallback bucket is '{bucket.preview_fallback_bucket_name}'.[/dim]"
+            )
+            continue
+        seed_buckets.append(bucket)
+
     if not seed_buckets:
         return 0
 
-    s3 = boto3.client("s3", region_name=config.aws_region)
+    s3 = None
     failures: list[str] = []
 
     for bucket in seed_buckets:
@@ -2705,6 +2957,8 @@ def run_seed_copy_tasks(config: ProjectConfig, env_name: str) -> int:
             continue
 
         try:
+            if s3 is None:
+                s3 = boto3.client("s3", region_name=config.aws_region)
             _ensure_bucket_exists(s3, source_bucket, role="source")
             _ensure_bucket_exists(s3, target_bucket, role="target")
 

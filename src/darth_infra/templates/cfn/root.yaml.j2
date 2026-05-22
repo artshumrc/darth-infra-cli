@@ -324,7 +324,7 @@ Resources:
 
 {% if has_s3 %}
 {% for b in s3_buckets %}
-{% if b.mode.value != 'existing' %}
+{% if b.provision_bucket %}
   Bucket{{ b.name | replace('-', '') }}:
     Type: AWS::S3::Bucket
     Properties:
@@ -347,7 +347,7 @@ Resources:
 {% endif %}
 
 {% if has_cloudfront %}
-{% for b in s3_buckets if b.cloudfront and b.mode.value != 'existing' %}
+{% for b in s3_buckets if b.cloudfront and b.provision_bucket %}
   CloudFrontOac{{ b.name | replace('-', '') }}:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
@@ -470,7 +470,8 @@ Resources:
 
   Database:
     Type: AWS::RDS::DBInstance
-    DeletionPolicy: Snapshot
+    DeletionPolicy: !If [IsProd, Snapshot, Delete]
+    UpdateReplacePolicy: !If [IsProd, Snapshot, Delete]
     Properties:
       DBInstanceIdentifier: !Sub '${ProjectName}-${EnvironmentName}-db'
       DBInstanceClass: !Ref RdsInstanceType
@@ -556,6 +557,10 @@ Resources:
 {% endif %}
 {% if s3.cf_param_name %}
         {{ s3.cf_param_name }}: !Sub 'https://${CloudFront{{ s3.bucket_name | replace('-', '') }}.DomainName}'
+{% endif %}
+{% if s3.fallback_param_name %}
+        {{ s3.fallback_param_name }}: '{{ s3.fallback_bucket_name_literal }}'
+        {{ s3.fallback_arn_param_name }}: !Sub 'arn:aws:s3:::{{ s3.fallback_bucket_name_literal }}'
 {% endif %}
 {% endfor %}
 {% for cf in svc_ctx.cloudfront_vars %}

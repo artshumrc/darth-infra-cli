@@ -6,7 +6,9 @@ import boto3
 import click
 
 from .cfn import (
+    cleanup_preview_service_discovery_instances,
     delete_stack,
+    delete_preview_database_instance,
     delete_tagged_preview_snapshots,
     empty_managed_buckets,
     empty_managed_repositories,
@@ -61,6 +63,12 @@ def destroy(env_name: str, force: bool, preview_from: str | None) -> None:
         ecr_rc = empty_managed_repositories(config, env_name)
         if ecr_rc != 0:
             raise SystemExit(ecr_rc)
+        cloud_map_rc = cleanup_preview_service_discovery_instances(config, env_name)
+        if cloud_map_rc != 0:
+            raise SystemExit(cloud_map_rc)
+        db_rc = delete_preview_database_instance(config, env_name)
+        if db_rc != 0:
+            raise SystemExit(db_rc)
 
     rc = delete_stack(config, env_name)
 

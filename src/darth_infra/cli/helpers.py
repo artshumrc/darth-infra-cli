@@ -11,7 +11,12 @@ import boto3
 from rich.console import Console
 
 from ..config.loader import find_config, load_config
-from ..config.models import ActivePreviewEnvironment, EnvironmentOverride, ProjectConfig
+from ..config.models import (
+    ActivePreviewEnvironment,
+    EnvironmentOverride,
+    ProjectConfig,
+    S3BucketMode,
+)
 
 console = Console()
 
@@ -61,7 +66,9 @@ def resolve_environment_config(
         )
         raise SystemExit(1)
     if env_name == preview_from:
-        console.print("[red]Preview environment cannot equal its base environment.[/red]")
+        console.print(
+            "[red]Preview environment cannot equal its base environment.[/red]"
+        )
         raise SystemExit(1)
     if preview_from != preview.base_environment:
         console.print(
@@ -105,6 +112,8 @@ def resolve_environment_config(
         hosted_zone_name=preview.hosted_zone_name,
         tags=preview_tags,
     )
+    _resolve_preview_s3_fallback_buckets(resolved, preview_from)
+    resolved._validate_preview_overlay_bucket_collisions()
     _render_service_environment_templates(resolved, env_name, number, domain)
     return resolved
 
@@ -163,6 +172,22 @@ def _render_service_environment_templates(
             except (KeyError, ValueError):
                 rendered[key] = value
         service.environment_variables = rendered
+
+
+def _resolve_preview_s3_fallback_buckets(
+    config: ProjectConfig, base_environment: str
+) -> None:
+    """Fill implicit preview S3 fallback buckets from the preview base env."""
+    for bucket in config.s3_buckets:
+        if not bucket.preview_fallback_env_key or bucket.preview_fallback_bucket_name:
+            continue
+
+        if bucket.mode == S3BucketMode.EXISTING:
+            bucket.preview_fallback_bucket_name = bucket.existing_bucket_name
+        else:
+            bucket.preview_fallback_bucket_name = (
+                f"{config.project_name}-{base_environment}-{bucket.name}"
+            )
 
 
 def require_prod_deployed(config: ProjectConfig, env: str) -> None:

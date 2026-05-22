@@ -386,6 +386,16 @@
             "description": "Source bucket name for one-time seed copy when mode is \"seed-copy\".",
             "default": null
           },
+          "preview_fallback_bucket_name": {
+            "type": ["string", "null"],
+            "description": "Optional explicit fallback bucket name that active preview environments may read from. If omitted and preview_fallback_env_key is set, the preview base environment bucket is used.",
+            "default": null
+          },
+          "preview_fallback_env_key": {
+            "type": ["string", "null"],
+            "description": "Optional environment variable name that receives the preview fallback bucket name in active preview environments.",
+            "default": null
+          },
           "seed_non_prod_only": {
             "type": "boolean",
             "description": "When true, one-time seed copy runs only for non-prod environments.",
@@ -629,6 +639,58 @@
           }
         }
       }
+    },
+    "preview_environments": {
+      "type": "object",
+      "description": "Dynamic preview environment settings for temporary environments such as per-PR deployments.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Allow dynamic preview environments that do not appear in project.environments.",
+          "default": false
+        },
+        "base_environment": {
+          "type": "string",
+          "description": "Configured environment used as the preview source/template.",
+          "default": "prod"
+        },
+        "name_pattern": {
+          "type": "string",
+          "description": "Preview environment name pattern. Must contain {number}.",
+          "default": "pr-{number}"
+        },
+        "domain_template": {
+          "type": ["string", "null"],
+          "description": "Preview hostname template. Must contain {number} when set.",
+          "default": null
+        },
+        "hosted_zone_name": {
+          "type": ["string", "null"],
+          "description": "Route53 hosted zone name used for preview DNS records.",
+          "default": null
+        },
+        "listener_priority_start": {
+          "type": ["integer", "null"],
+          "description": "Start of the shared ALB listener priority range reserved for previews.",
+          "default": null,
+          "minimum": 1,
+          "maximum": 50000
+        },
+        "listener_priority_end": {
+          "type": ["integer", "null"],
+          "description": "End of the shared ALB listener priority range reserved for previews.",
+          "default": null,
+          "minimum": 1,
+          "maximum": 50000
+        },
+        "tags": {
+          "type": "object",
+          "description": "Tags applied only to dynamic preview environments. Supports {project}, {env}, {base_environment}, and {number} placeholders.",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "default": {}
     },
     "secrets": {
       "type": "array",

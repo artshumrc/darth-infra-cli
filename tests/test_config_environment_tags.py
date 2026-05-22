@@ -37,7 +37,7 @@ def test_get_tags_for_environment_merges_with_environment_override() -> None:
 def test_load_and_dump_environment_tags_roundtrip(tmp_path: Path) -> None:
     config_path = tmp_path / "darth-infra.toml"
     config_path.write_text(
-        """#:schema darth-infra.schema.json
+        """#:schema ./darth-infra.schema.json
 
 [project]
 name = "demo"

@@ -167,6 +167,10 @@ class S3BucketConfig:
         existing_bucket_name: Existing bucket to use when mode=existing.
         seed_source_bucket_name: Source bucket for one-time seed copy when
             mode=seed-copy.
+        preview_fallback_bucket_name: Optional fallback bucket apps may read
+            from in active preview environments.
+        preview_fallback_env_key: Optional env var name that receives the
+            preview fallback bucket name.
         seed_non_prod_only: If True, seed-copy runs only for non-prod envs.
         public_read: Grant public read access.
         cloudfront: Provision a CloudFront distribution in front of this bucket.
@@ -178,6 +182,8 @@ class S3BucketConfig:
     mode: S3BucketMode = S3BucketMode.MANAGED
     existing_bucket_name: str | None = None
     seed_source_bucket_name: str | None = None
+    preview_fallback_bucket_name: str | None = None
+    preview_fallback_env_key: str | None = None
     seed_non_prod_only: bool = True
     public_read: bool = False
     cloudfront: bool = False
@@ -617,6 +623,8 @@ class ProjectConfig:
                         f"S3 bucket '{bucket.name}' mode=seed-copy requires seed_source_bucket_name"
                     )
 
+            self._normalize_and_validate_preview_overlay_bucket(bucket)
+
             seen: set[str] = set()
             for conn in bucket.connections:
                 if conn.service not in service_names:
@@ -881,13 +889,17 @@ class ProjectConfig:
         preview = self.preview_environments
         if preview.enabled:
             if not preview.base_environment.strip():
-                raise ValueError("preview_environments.base_environment must not be empty")
+                raise ValueError(
+                    "preview_environments.base_environment must not be empty"
+                )
             if preview.base_environment not in self.environments:
                 raise ValueError(
                     "preview_environments.base_environment must reference a configured environment"
                 )
             if "{number}" not in preview.name_pattern:
-                raise ValueError("preview_environments.name_pattern must contain {number}")
+                raise ValueError(
+                    "preview_environments.name_pattern must contain {number}"
+                )
             if preview.domain_template and "{number}" not in preview.domain_template:
                 raise ValueError(
                     "preview_environments.domain_template must contain {number}"
@@ -910,6 +922,52 @@ class ProjectConfig:
                 if preview.listener_priority_start > int(preview.listener_priority_end):
                     raise ValueError(
                         "preview_environments.listener_priority_start must be <= listener_priority_end"
+                    )
+
+        self._validate_preview_overlay_bucket_collisions()
+
+    def _normalize_and_validate_preview_overlay_bucket(
+        self, bucket: S3BucketConfig
+    ) -> None:
+        fallback_bucket_name = (
+            bucket.preview_fallback_bucket_name or ""
+        ).strip() or None
+        fallback_env_key = (bucket.preview_fallback_env_key or "").strip() or None
+        bucket.preview_fallback_bucket_name = fallback_bucket_name
+        bucket.preview_fallback_env_key = fallback_env_key
+
+        if (
+            fallback_env_key
+            and not fallback_bucket_name
+            and not self.preview_environments.enabled
+        ):
+            raise ValueError(
+                f"S3 bucket '{bucket.name}' sets preview_fallback_env_key but previews are not enabled"
+            )
+
+    def _validate_preview_overlay_bucket_collisions(self) -> None:
+        for bucket in self.s3_buckets:
+            fallback_bucket_name = bucket.preview_fallback_bucket_name
+            if not fallback_bucket_name:
+                continue
+
+            normalized_fallback = fallback_bucket_name.lower()
+            if self.preview_environments.enabled:
+                preview_bucket_template = (
+                    f"{self.project_name}-{self.preview_environments.name_pattern}-{bucket.name}"
+                ).lower()
+                if normalized_fallback == preview_bucket_template:
+                    raise ValueError(
+                        f"S3 bucket '{bucket.name}' preview_fallback_bucket_name must not match the generated preview bucket template"
+                    )
+
+            if self.active_preview:
+                preview_bucket_name = (
+                    f"{self.project_name}-{self.active_preview.env_name}-{bucket.name}"
+                ).lower()
+                if normalized_fallback == preview_bucket_name:
+                    raise ValueError(
+                        f"S3 bucket '{bucket.name}' preview_fallback_bucket_name must not match the active preview bucket name"
                     )
 
     def get_cluster_domain(self, env: str) -> str | None:
@@ -944,9 +1002,7 @@ class ProjectConfig:
             )
             .replace("{env}", "${EnvironmentName}")
             .replace("{number}", "${EnvironmentName}")
-            .replace(
-                "{base_environment}", self.preview_environments.base_environment
-            )
+            .replace("{base_environment}", self.preview_environments.base_environment)
         )
 
     def _validate_service_discovery_namespace_template(self) -> None:
@@ -972,8 +1028,10 @@ class ProjectConfig:
                     "support format specifiers or conversions"
                 )
 
-        if self.service_discovery_configured and template != "local" and not (
-            "{project}" in template or "{env}" in template
+        if (
+            self.service_discovery_configured
+            and template != "local"
+            and not ("{project}" in template or "{env}" in template)
         ):
             raise ValueError(
                 "service_discovery.namespace_template must include {project} or {env}, "
@@ -998,7 +1056,9 @@ class ProjectConfig:
             raise ValueError("service discovery namespace must be <= 253 characters")
         labels = namespace.split(".")
         if any(not label for label in labels):
-            raise ValueError("service discovery namespace must not contain empty labels")
+            raise ValueError(
+                "service discovery namespace must not contain empty labels"
+            )
         for label in labels:
             if len(label) > 63:
                 raise ValueError(

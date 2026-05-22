@@ -155,6 +155,8 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
                 "mode": str(getattr(bucket.mode, "value", bucket.mode)),
                 "existing_bucket_name": bucket.existing_bucket_name,
                 "seed_source_bucket_name": bucket.seed_source_bucket_name,
+                "preview_fallback_bucket_name": bucket.preview_fallback_bucket_name,
+                "preview_fallback_env_key": bucket.preview_fallback_env_key,
                 "seed_non_prod_only": bucket.seed_non_prod_only,
                 "public_read": bucket.public_read,
                 "cloudfront": bucket.cloudfront,

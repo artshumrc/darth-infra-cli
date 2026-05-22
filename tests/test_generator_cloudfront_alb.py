@@ -189,3 +189,29 @@ def test_service_discovery_namespace_uses_configured_template(
     root = _read(output_dir, "templates/generated/root.yaml")
 
     assert "Name: !Sub '${ProjectName}-${EnvironmentName}.local'" in root
+
+
+def test_listener_rules_do_not_emit_unsupported_tags(tmp_path: Path) -> None:
+    output_dir = generate_project(_config(custom_domain=None), tmp_path / "out")
+    service = _read(output_dir, "templates/generated/services/web.yaml")
+    rule_block = service.split("DefaultHostHeaderRule:", 1)[1].split("EcsService:", 1)[0]
+
+    assert "Type: AWS::ElasticLoadBalancingV2::ListenerRule" in rule_block
+    assert "Tags:" not in rule_block
+
+
+def test_rds_deletion_policy_snapshots_only_prod(tmp_path: Path) -> None:
+    from darth_infra.config.models import RdsConfig
+
+    output_dir = generate_project(
+        ProjectConfig(
+            project_name="demo",
+            services=[ServiceConfig(name="web", port=8000)],
+            rds=RdsConfig(database_name="demo", expose_to=["web"]),
+        ),
+        tmp_path / "out",
+    )
+    root = _read(output_dir, "templates/generated/root.yaml")
+
+    assert "DeletionPolicy: !If [IsProd, Snapshot, Delete]" in root
+    assert "UpdateReplacePolicy: !If [IsProd, Snapshot, Delete]" in root

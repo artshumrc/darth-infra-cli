@@ -143,6 +143,8 @@ def build_config_from_state(state: dict) -> ProjectConfig:
                 mode=S3BucketMode(b.get("mode", "managed")),
                 existing_bucket_name=b.get("existing_bucket_name"),
                 seed_source_bucket_name=b.get("seed_source_bucket_name"),
+                preview_fallback_bucket_name=b.get("preview_fallback_bucket_name"),
+                preview_fallback_env_key=b.get("preview_fallback_env_key"),
                 seed_non_prod_only=b.get("seed_non_prod_only", True),
                 public_read=b.get("public_read", False),
                 cloudfront=b.get("cloudfront", False),

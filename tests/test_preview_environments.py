@@ -12,6 +12,9 @@ from darth_infra.config.models import (
     EnvironmentOverride,
     PreviewEnvironmentsConfig,
     ProjectConfig,
+    S3BucketConfig,
+    S3BucketConnection,
+    S3BucketMode,
     ServiceDiscoveryConfig,
     ServiceConfig,
 )
@@ -214,3 +217,92 @@ def test_preview_service_discovery_names_are_isolated(tmp_path: Path) -> None:
     assert "Name: django-pr-123" not in django_service
     assert "Name: !Sub '${ProjectName}-${EnvironmentName}.local'" in root
     assert "Value: 'http://django.demo-pr-123.local:8000'" in sveltekit_service
+
+
+def test_preview_s3_overlay_renders_fallback_parameters_and_permissions(
+    tmp_path: Path,
+) -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        s3_buckets=[
+            S3BucketConfig(
+                name="media",
+                mode=S3BucketMode.SEED_COPY,
+                seed_source_bucket_name="prod-media",
+                preview_fallback_bucket_name="prod-media",
+                preview_fallback_env_key="AWS_STORAGE_FALLBACK_BUCKET_NAME",
+                connections=[
+                    S3BucketConnection(
+                        service="web",
+                        env_key="AWS_STORAGE_BUCKET_NAME",
+                    )
+                ],
+            )
+        ],
+        preview_environments=PreviewEnvironmentsConfig(
+            enabled=True,
+            base_environment="prod",
+            name_pattern="pr-{number}",
+            domain_template="pr-{number}.example.com",
+        ),
+    )
+
+    preview_config = resolve_environment_config(config, "pr-123", "prod")
+    output_dir = generate_project(preview_config, tmp_path / "out")
+    root = (output_dir / "templates" / "generated" / "root.yaml").read_text()
+    service = (
+        output_dir / "templates" / "generated" / "services" / "web.yaml"
+    ).read_text()
+
+    assert "        FallbackBucketNameMedia: 'prod-media'" in root
+    assert "        FallbackBucketArnMedia: !Sub 'arn:aws:s3:::prod-media'" in root
+    assert "AWS_STORAGE_FALLBACK_BUCKET_NAME" in service
+    assert "Value: !Ref FallbackBucketNameMedia" in service
+    fallback_statement = service.split("- !Ref FallbackBucketArnMedia", 1)[0].rsplit(
+        "- Effect: Allow", 1
+    )[1]
+    assert "s3:GetObject" in fallback_statement
+    assert "s3:ListBucket" in fallback_statement
+    assert "s3:PutObject" not in fallback_statement
+    assert "s3:DeleteObject" not in fallback_statement
+
+
+def test_preview_s3_overlay_derives_fallback_bucket_from_base_environment(
+    tmp_path: Path,
+) -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        s3_buckets=[
+            S3BucketConfig(
+                name="media",
+                mode=S3BucketMode.MANAGED,
+                preview_fallback_env_key="AWS_STORAGE_FALLBACK_BUCKET_NAME",
+                connections=[
+                    S3BucketConnection(
+                        service="web",
+                        env_key="AWS_STORAGE_BUCKET_NAME",
+                    )
+                ],
+            )
+        ],
+        preview_environments=PreviewEnvironmentsConfig(
+            enabled=True,
+            base_environment="prod",
+            name_pattern="pr-{number}",
+            domain_template="pr-{number}.example.com",
+        ),
+    )
+
+    preview_config = resolve_environment_config(config, "pr-123", "prod")
+    output_dir = generate_project(preview_config, tmp_path / "out")
+    root = (output_dir / "templates" / "generated" / "root.yaml").read_text()
+    service = (
+        output_dir / "templates" / "generated" / "services" / "web.yaml"
+    ).read_text()
+
+    assert preview_config.s3_buckets[0].preview_fallback_bucket_name == "demo-prod-media"
+    assert "        FallbackBucketNameMedia: 'demo-prod-media'" in root
+    assert "        FallbackBucketArnMedia: !Sub 'arn:aws:s3:::demo-prod-media'" in root
+    assert "AWS_STORAGE_FALLBACK_BUCKET_NAME" in service

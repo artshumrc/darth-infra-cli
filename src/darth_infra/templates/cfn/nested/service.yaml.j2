@@ -61,6 +61,12 @@ Parameters:
   {{ s3.arn_param_name }}:
     Type: String
 {% endfor %}
+{% for s3 in s3_vars if s3.fallback_param_name %}
+  {{ s3.fallback_param_name }}:
+    Type: String
+  {{ s3.fallback_arn_param_name }}:
+    Type: String
+{% endfor %}
 {% for s3 in s3_vars if s3.cf_param_name %}
   {{ s3.cf_param_name }}:
     Type: String
@@ -229,6 +235,15 @@ Resources:
                 Resource:
                   - !Ref {{ s3.arn_param_name }}
                   - !Join ['', [!Ref {{ s3.arn_param_name }}, '/*']]
+{% if s3.fallback_arn_param_name %}
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Ref {{ s3.fallback_arn_param_name }}
+                  - !Join ['', [!Ref {{ s3.fallback_arn_param_name }}, '/*']]
+{% endif %}
 {% endfor %}
 {% endif %}
 {% else %}
@@ -443,6 +458,10 @@ Resources:
 {% for s3 in s3_vars %}
             - Name: {{ s3.env_key }}
               Value: !Ref {{ s3.param_name }}
+{% if s3.fallback_env_key and s3.fallback_param_name %}
+            - Name: {{ s3.fallback_env_key }}
+              Value: !Ref {{ s3.fallback_param_name }}
+{% endif %}
 {% if s3.cloudfront_env_key and s3.cf_param_name %}
             - Name: {{ s3.cloudfront_env_key }}
               Value: !Ref {{ s3.cf_param_name }}
@@ -543,14 +562,6 @@ Resources:
 {% endfor %}
       ListenerArn: !Ref AlbListenerArn
       Priority: {{ default_listener_priority }}
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-        - Key: Service
-          Value: {{ name }}
-{{ render_additional_tags('        ') }}
 
 {% endif %}
 {% for rule in service_path_rules %}
@@ -576,14 +587,6 @@ Resources:
             Values: ['{{ rule.path_pattern }}']
       ListenerArn: !Ref AlbListenerArn
       Priority: {{ rule.priority }}
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-        - Key: Service
-          Value: {{ name }}
-{{ render_additional_tags('        ') }}
 
 {% endfor %}
 {% endif %}
