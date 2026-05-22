@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.7.0
+
+### Minor Changes
+
+- [#16](https://github.com/artshumrc/darth-infra-cli/pull/16) [`90e8142`](https://github.com/artshumrc/darth-infra-cli/commit/90e8142bd74c863e9582e617aac68be9f695c3eb) Thanks [@d-flood](https://github.com/d-flood)! - Add initial support for ephemeral preview environments and make the cloud discover DNS namespace project and environment specific
+
 ## 0.6.0
 
 ### Minor Changes
