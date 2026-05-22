@@ -10,6 +10,7 @@ from darth_infra.config.models import (
     EnvironmentOverride,
     LaunchType,
     ProjectConfig,
+    ServiceDiscoveryConfig,
     ServiceConfig,
 )
 from darth_infra.scaffold.generator import generate_project
@@ -154,3 +155,37 @@ def test_ec2_launch_resources_receive_cleanup_tags(tmp_path: Path) -> None:
     assert "LaunchTemplate:" in service
     assert "ResourceType: launch-template" in service
     assert "ExtraTagEphemeralCleanupId" in service
+
+
+def test_service_discovery_namespace_defaults_to_legacy_local(
+    tmp_path: Path,
+) -> None:
+    output_dir = generate_project(
+        ProjectConfig(
+            project_name="demo",
+            services=[ServiceConfig(name="web", enable_service_discovery=True)],
+        ),
+        tmp_path / "out",
+    )
+    root = _read(output_dir, "templates/generated/root.yaml")
+
+    assert "Name: !Sub 'local'" in root
+
+
+def test_service_discovery_namespace_uses_configured_template(
+    tmp_path: Path,
+) -> None:
+    output_dir = generate_project(
+        ProjectConfig(
+            project_name="demo",
+            services=[ServiceConfig(name="web", enable_service_discovery=True)],
+            service_discovery=ServiceDiscoveryConfig(
+                namespace_template="{project}-{env}.local"
+            ),
+            service_discovery_configured=True,
+        ),
+        tmp_path / "out",
+    )
+    root = _read(output_dir, "templates/generated/root.yaml")
+
+    assert "Name: !Sub '${ProjectName}-${EnvironmentName}.local'" in root

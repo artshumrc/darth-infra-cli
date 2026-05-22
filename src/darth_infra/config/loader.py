@@ -32,6 +32,7 @@ from .models import (
     S3BucketMode,
     SecretConfig,
     SecretSource,
+    ServiceDiscoveryConfig,
     ServiceConfig,
     UlimitConfig,
 )
@@ -88,6 +89,7 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
     secrets_raw = raw.get("secrets", [])
     env_overrides_raw = raw.get("environments", {})
     preview_raw = raw.get("preview_environments", {})
+    service_discovery_raw = raw.get("service_discovery")
 
     services = [_parse_service(s) for s in services_raw]
     rds = _parse_rds(rds_raw) if rds_raw else None
@@ -117,6 +119,8 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
         alb=alb,
         secrets=secrets,
         environment_overrides=environment_overrides,
+        service_discovery=_parse_service_discovery(service_discovery_raw),
+        service_discovery_configured=service_discovery_raw is not None,
         preview_environments=_parse_preview_environments(preview_raw),
     )
 
@@ -316,6 +320,13 @@ def _parse_preview_environments(raw: dict[str, Any]) -> PreviewEnvironmentsConfi
     )
 
 
+def _parse_service_discovery(raw: dict[str, Any] | None) -> ServiceDiscoveryConfig:
+    raw = raw or {}
+    return ServiceDiscoveryConfig(
+        namespace_template=raw.get("namespace_template", "local"),
+    )
+
+
 def dump_config(config: ProjectConfig) -> str:
     """Serialize a ``ProjectConfig`` to TOML string."""
     lines: list[str] = []
@@ -423,6 +434,15 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append(f'device_name = "{vol.device_name}"')
             lines.append(f'volume_type = "{vol.volume_type}"')
             lines.append(f'filesystem_type = "{vol.filesystem_type}"')
+        lines.append("")
+
+    if config.service_discovery_configured:
+        lines.append("# [deploy-live] Cloud Map service discovery namespace")
+        lines.append("[service_discovery]")
+        lines.append(
+            "namespace_template = "
+            f'"{_toml_escape(config.service_discovery.namespace_template)}"'
+        )
         lines.append("")
 
     if config.rds:

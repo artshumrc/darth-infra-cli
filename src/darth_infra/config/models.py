@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 import re
+from string import Formatter
 
 
 class SecretSource(str, Enum):
@@ -429,6 +430,13 @@ class ActivePreviewEnvironment:
     tags: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass
+class ServiceDiscoveryConfig:
+    """Cloud Map service discovery namespace configuration."""
+
+    namespace_template: str = "local"
+
+
 @dataclass(frozen=True)
 class TagParameter:
     """CloudFormation parameter metadata for an additional resource tag."""
@@ -473,6 +481,10 @@ class ProjectConfig:
     secrets: list[SecretConfig] = field(default_factory=list)
     environment_overrides: dict[str, EnvironmentOverride] = field(default_factory=dict)
     tags: dict[str, str] = field(default_factory=dict)
+    service_discovery: ServiceDiscoveryConfig = field(
+        default_factory=ServiceDiscoveryConfig
+    )
+    service_discovery_configured: bool = False
     preview_environments: PreviewEnvironmentsConfig = field(
         default_factory=PreviewEnvironmentsConfig
     )
@@ -484,6 +496,8 @@ class ProjectConfig:
         if self.environments[0] != "prod":
             self.environments.remove("prod")
             self.environments.insert(0, "prod")
+
+        self._validate_service_discovery_namespace_template()
 
         service_names = [s.name for s in self.services]
         service_ports = {s.name: s.port for s in self.services}
@@ -907,6 +921,94 @@ class ProjectConfig:
         if env == "prod":
             return self.alb.domain
         return f"{env}.{self.alb.domain}"
+
+    def get_service_discovery_namespace(self, env: str) -> str:
+        """Resolve the Cloud Map namespace for a given environment."""
+        number = ""
+        if self.active_preview and self.active_preview.env_name == env:
+            number = self.active_preview.number
+        namespace = self.service_discovery.namespace_template.format(
+            project=self.project_name,
+            env=env,
+            number=number,
+            base_environment=self.preview_environments.base_environment,
+        )
+        self._validate_service_discovery_namespace(namespace)
+        return namespace
+
+    def get_service_discovery_namespace_cfn(self) -> str:
+        """Render the namespace template as a CloudFormation Fn::Sub string."""
+        return (
+            self.service_discovery.namespace_template.replace(
+                "{project}", "${ProjectName}"
+            )
+            .replace("{env}", "${EnvironmentName}")
+            .replace("{number}", "${EnvironmentName}")
+            .replace(
+                "{base_environment}", self.preview_environments.base_environment
+            )
+        )
+
+    def _validate_service_discovery_namespace_template(self) -> None:
+        template = self.service_discovery.namespace_template.strip()
+        if not template:
+            raise ValueError("service_discovery.namespace_template must not be empty")
+        self.service_discovery.namespace_template = template
+
+        allowed_fields = {"project", "env", "number", "base_environment"}
+        try:
+            parsed = list(Formatter().parse(template))
+        except ValueError as exc:
+            raise ValueError("service_discovery.namespace_template is invalid") from exc
+        for _, field_name, format_spec, conversion in parsed:
+            if field_name and field_name not in allowed_fields:
+                raise ValueError(
+                    "service_discovery.namespace_template contains unsupported "
+                    f"placeholder '{{{field_name}}}'"
+                )
+            if field_name and (format_spec or conversion):
+                raise ValueError(
+                    "service_discovery.namespace_template placeholders do not "
+                    "support format specifiers or conversions"
+                )
+
+        if self.service_discovery_configured and template != "local" and not (
+            "{project}" in template or "{env}" in template
+        ):
+            raise ValueError(
+                "service_discovery.namespace_template must include {project} or {env}, "
+                "or be explicitly set to 'local'"
+            )
+
+        for env in self.environments:
+            self._validate_service_discovery_namespace(
+                template.format(
+                    project=self.project_name,
+                    env=env,
+                    number="",
+                    base_environment=self.preview_environments.base_environment,
+                )
+            )
+
+    @staticmethod
+    def _validate_service_discovery_namespace(namespace: str) -> None:
+        if not namespace or namespace.strip() != namespace:
+            raise ValueError("service discovery namespace must not be empty or padded")
+        if len(namespace) > 253:
+            raise ValueError("service discovery namespace must be <= 253 characters")
+        labels = namespace.split(".")
+        if any(not label for label in labels):
+            raise ValueError("service discovery namespace must not contain empty labels")
+        for label in labels:
+            if len(label) > 63:
+                raise ValueError(
+                    "service discovery namespace labels must be <= 63 characters"
+                )
+            if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", label):
+                raise ValueError(
+                    "service discovery namespace labels must contain only letters, "
+                    "numbers, and hyphens, and cannot start or end with a hyphen"
+                )
 
     def get_rds_instance_type(self, env: str) -> str:
         """Resolve the RDS instance type for a given environment."""

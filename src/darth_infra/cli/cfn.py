@@ -133,7 +133,7 @@ def resolve_lookup_data(config: ProjectConfig, env_name: str) -> ResolvedLookupD
     rds_source_secret_arn = _resolve_rds_source_secret_arn(config, env_name, snapshot)
     external_secrets = _resolve_external_secrets(config)
     namespace_id = _resolve_existing_service_discovery_namespace(
-        config, sd, route53, vpc_id
+        config, env_name, sd, route53, vpc_id
     )
 
     resolved = ResolvedLookupData(
@@ -2526,6 +2526,7 @@ def _resolve_external_secrets(config: ProjectConfig) -> dict[str, str]:
 
 def _resolve_existing_service_discovery_namespace(
     config: ProjectConfig,
+    env_name: str,
     servicediscovery,
     route53,
     vpc_id: str,
@@ -2533,11 +2534,13 @@ def _resolve_existing_service_discovery_namespace(
     if not any(s.enable_service_discovery for s in config.services):
         return ""
 
+    namespace_name = config.get_service_discovery_namespace(env_name)
+
     try:
         resp = servicediscovery.list_namespaces(
             Filters=[
                 {"Name": "TYPE", "Values": ["DNS_PRIVATE"], "Condition": "EQ"},
-                {"Name": "NAME", "Values": ["local"], "Condition": "EQ"},
+                {"Name": "NAME", "Values": [namespace_name], "Condition": "EQ"},
             ]
         )
     except Exception:

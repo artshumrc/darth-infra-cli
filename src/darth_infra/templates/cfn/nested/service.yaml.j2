@@ -481,7 +481,7 @@ Resources:
   CloudMapService:
     Type: AWS::ServiceDiscovery::Service
     Properties:
-      Name: {{ name }}{{ service_discovery_name_suffix }}
+      Name: {{ name }}
       NamespaceId: !Ref CloudMapNamespaceId
       DnsConfig:
         DnsRecords:

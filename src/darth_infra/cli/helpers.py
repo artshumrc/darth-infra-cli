@@ -143,11 +143,8 @@ def _render_service_environment_templates(
     number: str,
     domain: str | None,
 ) -> None:
-    service_discovery_suffix = (
-        f"-{env_name}"
-        if config.active_preview and config.active_preview.env_name == env_name
-        else ""
-    )
+    service_discovery_suffix = ""
+    service_discovery_namespace = config.get_service_discovery_namespace(env_name)
     replacements = {
         "project": config.project_name,
         "env": env_name,
@@ -156,6 +153,7 @@ def _render_service_environment_templates(
         "domain": f"https://{domain}" if domain else "",
         "hostname": domain or "",
         "service_discovery_suffix": service_discovery_suffix,
+        "service_discovery_namespace": service_discovery_namespace,
     }
     for service in config.services:
         rendered: dict[str, str] = {}

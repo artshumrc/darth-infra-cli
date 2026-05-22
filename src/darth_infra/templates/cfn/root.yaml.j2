@@ -112,7 +112,7 @@ Resources:
     Type: AWS::ServiceDiscovery::PrivateDnsNamespace
     Condition: CreateServiceNamespace
     Properties:
-      Name: local
+      Name: !Sub '{{ service_discovery_namespace_cfn }}'
       Vpc: !Ref VpcId
       Tags:
         - Key: Project

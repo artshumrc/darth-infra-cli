@@ -319,6 +319,20 @@
         }
       }
     },
+    "service_discovery": {
+      "type": "object",
+      "description": "Cloud Map service discovery namespace settings.",
+      "additionalProperties": false,
+      "properties": {
+        "namespace_template": {
+          "type": "string",
+          "description": "Private DNS namespace template. Existing configs without this block keep legacy 'local'; new configs should use '{project}-{env}.local'.",
+          "default": "{project}-{env}.local",
+          "minLength": 1,
+          "examples": ["{project}-{env}.local", "local"]
+        }
+      }
+    },
     "rds": {
       "type": "object",
       "description": "Optional RDS PostgreSQL instance configuration.",

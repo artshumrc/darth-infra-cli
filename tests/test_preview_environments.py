@@ -12,6 +12,7 @@ from darth_infra.config.models import (
     EnvironmentOverride,
     PreviewEnvironmentsConfig,
     ProjectConfig,
+    ServiceDiscoveryConfig,
     ServiceConfig,
 )
 from darth_infra.scaffold.generator import generate_project
@@ -119,10 +120,14 @@ def test_static_resolution_does_not_consume_preview_templates() -> None:
             ServiceConfig(
                 name="sveltekit",
                 environment_variables={
-                    "DJANGO_INTERNAL_URL": "http://django{service_discovery_suffix}.local:8000",
+                    "DJANGO_INTERNAL_URL": "http://django.{service_discovery_namespace}:8000",
                 },
             ),
         ],
+        service_discovery=ServiceDiscoveryConfig(
+            namespace_template="{project}-{env}.local"
+        ),
+        service_discovery_configured=True,
         preview_environments=PreviewEnvironmentsConfig(
             enabled=True,
             base_environment="prod",
@@ -134,8 +139,8 @@ def test_static_resolution_does_not_consume_preview_templates() -> None:
     prod_config = resolve_environment_config(config, "prod")
     preview_config = resolve_environment_config(config, "pr-123", "prod")
 
-    assert prod_config.services[0].environment_variables["DJANGO_INTERNAL_URL"] == "http://django.local:8000"
-    assert preview_config.services[0].environment_variables["DJANGO_INTERNAL_URL"] == "http://django-pr-123.local:8000"
+    assert prod_config.services[0].environment_variables["DJANGO_INTERNAL_URL"] == "http://django.demo-prod.local:8000"
+    assert preview_config.services[0].environment_variables["DJANGO_INTERNAL_URL"] == "http://django.demo-pr-123.local:8000"
 
 
 def test_preview_build_parameters_include_dns_and_tags() -> None:
@@ -178,10 +183,14 @@ def test_preview_service_discovery_names_are_isolated(tmp_path: Path) -> None:
             ServiceConfig(
                 name="sveltekit",
                 environment_variables={
-                    "DJANGO_INTERNAL_URL": "http://django{service_discovery_suffix}.local:8000",
+                    "DJANGO_INTERNAL_URL": "http://django.{service_discovery_namespace}:8000",
                 },
             ),
         ],
+        service_discovery=ServiceDiscoveryConfig(
+            namespace_template="{project}-{env}.local"
+        ),
+        service_discovery_configured=True,
         preview_environments=PreviewEnvironmentsConfig(
             enabled=True,
             base_environment="prod",
@@ -199,6 +208,9 @@ def test_preview_service_discovery_names_are_isolated(tmp_path: Path) -> None:
     sveltekit_service = (
         output_dir / "templates" / "generated" / "services" / "sveltekit.yaml"
     ).read_text()
+    root = (output_dir / "templates" / "generated" / "root.yaml").read_text()
 
-    assert "Name: django-pr-123" in django_service
-    assert "Value: 'http://django-pr-123.local:8000'" in sveltekit_service
+    assert "Name: django" in django_service
+    assert "Name: django-pr-123" not in django_service
+    assert "Name: !Sub '${ProjectName}-${EnvironmentName}.local'" in root
+    assert "Value: 'http://django.demo-pr-123.local:8000'" in sveltekit_service

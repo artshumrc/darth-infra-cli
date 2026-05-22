@@ -38,6 +38,10 @@ def default_wizard_state() -> dict[str, Any]:
         "cloudfront_comment": None,
         "cloudfront_connections": [],
         "cloudfront_cached_behaviors": [],
+        "service_discovery": {
+            "namespace_template": "{project}-{env}.local",
+            "configured": True,
+        },
         "alb_mode": "shared",
         "shared_alb_name": "",
         "shared_listener_arn": None,
@@ -255,6 +259,10 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
                 }
                 for behavior in config.cloudfront.cached_behaviors
             ],
+            "service_discovery": {
+                "namespace_template": config.service_discovery.namespace_template,
+                "configured": config.service_discovery_configured,
+            },
             "alb_mode": "shared",
             "shared_alb_name": config.alb.shared_alb_name,
             "shared_listener_arn": config.alb.shared_listener_arn,

@@ -430,9 +430,7 @@ def _build_context(config: ProjectConfig) -> dict:
         "has_service_discovery": any(
             s.enable_service_discovery for s in config.services
         ),
-        "service_discovery_name_suffix": (
-            f"-{config.active_preview.env_name}" if config.active_preview else ""
-        ),
+        "service_discovery_namespace_cfn": config.get_service_discovery_namespace_cfn(),
         "rds": config.rds,
         "rds_master_username": (
             _derive_rds_master_username(config.rds.database_name)

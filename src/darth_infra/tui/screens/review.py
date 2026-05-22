@@ -30,6 +30,7 @@ from ...config.models import (
     S3BucketMode,
     SecretConfig,
     SecretSource,
+    ServiceDiscoveryConfig,
     ServiceConfig,
     UlimitConfig,
 )
@@ -273,6 +274,12 @@ def build_config_from_state(state: dict) -> ProjectConfig:
             if str(key).strip() and str(value).strip()
         },
     )
+    service_discovery_raw = s.get("service_discovery", {}) or {}
+    service_discovery = ServiceDiscoveryConfig(
+        namespace_template=str(
+            service_discovery_raw.get("namespace_template") or "local"
+        )
+    )
 
     return ProjectConfig(
         project_name=s["project_name"],
@@ -293,6 +300,10 @@ def build_config_from_state(state: dict) -> ProjectConfig:
         alb=alb,
         secrets=secrets,
         environment_overrides=environment_overrides,
+        service_discovery=service_discovery,
+        service_discovery_configured=bool(
+            service_discovery_raw.get("configured", bool(service_discovery_raw))
+        ),
         preview_environments=preview,
         tags={
             str(key): str(value)
@@ -349,6 +360,10 @@ class ReviewScreen(Screen):
                     environment_overrides.get(env_name, {}).get("tags", {}).items()
                 ):
                     lines.append(f"    {key}={value}")
+
+        service_discovery = s.get("service_discovery", {}) or {}
+        namespace_template = service_discovery.get("namespace_template") or "local"
+        lines.append(f"[bold]Service Discovery:[/bold] {namespace_template}")
 
         preview = s.get("preview_environments", {}) or {}
         if preview.get("enabled"):
