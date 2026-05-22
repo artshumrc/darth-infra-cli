@@ -17,6 +17,16 @@ def default_wizard_state() -> dict[str, Any]:
         "environments": ["prod"],
         "project_tags": {},
         "environment_overrides": {},
+        "preview_environments": {
+            "enabled": False,
+            "base_environment": "prod",
+            "name_pattern": "pr-{number}",
+            "domain_template": None,
+            "hosted_zone_name": None,
+            "listener_priority_start": None,
+            "listener_priority_end": None,
+            "tags": {},
+        },
         "services": [],
         "rds": None,
         "s3_buckets": [],
@@ -189,6 +199,16 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
                     "tags": dict(override.tags),
                 }
                 for env_name, override in config.environment_overrides.items()
+            },
+            "preview_environments": {
+                "enabled": config.preview_environments.enabled,
+                "base_environment": config.preview_environments.base_environment,
+                "name_pattern": config.preview_environments.name_pattern,
+                "domain_template": config.preview_environments.domain_template,
+                "hosted_zone_name": config.preview_environments.hosted_zone_name,
+                "listener_priority_start": config.preview_environments.listener_priority_start,
+                "listener_priority_end": config.preview_environments.listener_priority_end,
+                "tags": dict(config.preview_environments.tags),
             },
             "services": services,
             "rds": (

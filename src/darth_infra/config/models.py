@@ -403,6 +403,32 @@ class EnvironmentOverride:
     """Additional tags applied only when deploying this environment."""
 
 
+@dataclass
+class PreviewEnvironmentsConfig:
+    """Dynamic preview environment configuration."""
+
+    enabled: bool = False
+    base_environment: str = "prod"
+    name_pattern: str = "pr-{number}"
+    domain_template: str | None = None
+    hosted_zone_name: str | None = None
+    listener_priority_start: int | None = None
+    listener_priority_end: int | None = None
+    tags: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class ActivePreviewEnvironment:
+    """Runtime-only resolved preview environment metadata."""
+
+    env_name: str
+    base_environment: str
+    number: str
+    domain: str | None
+    hosted_zone_name: str | None
+    tags: dict[str, str] = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class TagParameter:
     """CloudFormation parameter metadata for an additional resource tag."""
@@ -447,6 +473,10 @@ class ProjectConfig:
     secrets: list[SecretConfig] = field(default_factory=list)
     environment_overrides: dict[str, EnvironmentOverride] = field(default_factory=dict)
     tags: dict[str, str] = field(default_factory=dict)
+    preview_environments: PreviewEnvironmentsConfig = field(
+        default_factory=PreviewEnvironmentsConfig
+    )
+    active_preview: ActivePreviewEnvironment | None = None
 
     def __post_init__(self) -> None:
         if "prod" not in self.environments:
@@ -834,8 +864,44 @@ class ProjectConfig:
                 "alb.domain is required when alb.path_rules are configured"
             )
 
+        preview = self.preview_environments
+        if preview.enabled:
+            if not preview.base_environment.strip():
+                raise ValueError("preview_environments.base_environment must not be empty")
+            if preview.base_environment not in self.environments:
+                raise ValueError(
+                    "preview_environments.base_environment must reference a configured environment"
+                )
+            if "{number}" not in preview.name_pattern:
+                raise ValueError("preview_environments.name_pattern must contain {number}")
+            if preview.domain_template and "{number}" not in preview.domain_template:
+                raise ValueError(
+                    "preview_environments.domain_template must contain {number}"
+                )
+            if bool(preview.listener_priority_start) != bool(
+                preview.listener_priority_end
+            ):
+                raise ValueError(
+                    "preview_environments.listener_priority_start and listener_priority_end must be set together"
+                )
+            if preview.listener_priority_start is not None:
+                if not (1 <= preview.listener_priority_start <= 50000):
+                    raise ValueError(
+                        "preview_environments.listener_priority_start must be between 1 and 50000"
+                    )
+                if not (1 <= int(preview.listener_priority_end or 0) <= 50000):
+                    raise ValueError(
+                        "preview_environments.listener_priority_end must be between 1 and 50000"
+                    )
+                if preview.listener_priority_start > int(preview.listener_priority_end):
+                    raise ValueError(
+                        "preview_environments.listener_priority_start must be <= listener_priority_end"
+                    )
+
     def get_cluster_domain(self, env: str) -> str | None:
         """Resolve cluster host domain for a given environment."""
+        if self.active_preview and self.active_preview.env_name == env:
+            return self.active_preview.domain
         if not self.alb.domain:
             return None
         if env == "prod":
@@ -860,6 +926,9 @@ class ProjectConfig:
         override the same key for that specific environment.
         """
         resolved_tags = dict(self.tags)
+        if self.active_preview and self.active_preview.env_name == env:
+            resolved_tags.update(self.active_preview.tags)
+            return resolved_tags
         overrides = self.environment_overrides.get(env)
         if overrides and overrides.tags:
             resolved_tags.update(overrides.tags)
@@ -868,6 +937,15 @@ class ProjectConfig:
     def get_tag_parameters(self) -> list[TagParameter]:
         """Build stable CloudFormation parameter metadata for all extra tag keys."""
         tag_keys = set(self.tags)
+        tag_keys.update(self.preview_environments.tags)
+        tag_keys.update(
+            {
+                "environment-type",
+                "preview-base-environment",
+                "pull-request",
+                "ephemeral-cleanup-id",
+            }
+        )
         for override in self.environment_overrides.values():
             tag_keys.update(override.tags)
 

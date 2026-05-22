@@ -80,7 +80,12 @@ def _normalize_rds_json_key(value: str | None) -> str | None:
     return aliases.get(compact, raw)
 
 
-def generate_project(config: ProjectConfig, output_dir: Path) -> Path:
+def generate_project(
+    config: ProjectConfig,
+    output_dir: Path,
+    *,
+    write_config: bool = True,
+) -> Path:
     """Render the full CloudFormation project into *output_dir*.
 
     Returns the output directory path.
@@ -103,7 +108,8 @@ def generate_project(config: ProjectConfig, output_dir: Path) -> Path:
     from ..config.loader import dump_config
 
     toml_path = output_dir / "darth-infra.toml"
-    toml_path.write_text(dump_config(config))
+    if write_config:
+        toml_path.write_text(dump_config(config))
 
     # Copy the JSON schema for editor support
     schema_src = Path(__file__).resolve().parent.parent / "darth-infra.schema.json"
@@ -423,6 +429,9 @@ def _build_context(config: ProjectConfig) -> dict:
         "has_ec2": any(_enum_value(s.launch_type) == "ec2" for s in config.services),
         "has_service_discovery": any(
             s.enable_service_discovery for s in config.services
+        ),
+        "service_discovery_name_suffix": (
+            f"-{config.active_preview.env_name}" if config.active_preview else ""
         ),
         "rds": config.rds,
         "rds_master_username": (

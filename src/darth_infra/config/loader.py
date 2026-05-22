@@ -24,6 +24,7 @@ from .models import (
     EbsVolumeConfig,
     EnvironmentOverride,
     LaunchType,
+    PreviewEnvironmentsConfig,
     ProjectConfig,
     RdsConfig,
     S3BucketConfig,
@@ -86,6 +87,7 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
     alb_raw = raw.get("alb", {})
     secrets_raw = raw.get("secrets", [])
     env_overrides_raw = raw.get("environments", {})
+    preview_raw = raw.get("preview_environments", {})
 
     services = [_parse_service(s) for s in services_raw]
     rds = _parse_rds(rds_raw) if rds_raw else None
@@ -115,6 +117,7 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
         alb=alb,
         secrets=secrets,
         environment_overrides=environment_overrides,
+        preview_environments=_parse_preview_environments(preview_raw),
     )
 
 
@@ -295,6 +298,20 @@ def _parse_env_override(raw: dict[str, Any]) -> EnvironmentOverride:
     return EnvironmentOverride(
         instance_type_override=raw.get("instance_type_override"),
         ec2_instance_type_override=raw.get("ec2_instance_type_override", {}),
+        tags=raw.get("tags", {}),
+    )
+
+
+def _parse_preview_environments(raw: dict[str, Any]) -> PreviewEnvironmentsConfig:
+    raw = raw or {}
+    return PreviewEnvironmentsConfig(
+        enabled=raw.get("enabled", False),
+        base_environment=raw.get("base_environment", "prod"),
+        name_pattern=raw.get("name_pattern", "pr-{number}"),
+        domain_template=raw.get("domain_template"),
+        hosted_zone_name=raw.get("hosted_zone_name"),
+        listener_priority_start=raw.get("listener_priority_start"),
+        listener_priority_end=raw.get("listener_priority_end"),
         tags=raw.get("tags", {}),
     )
 
@@ -574,6 +591,30 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append("")
     if not config.environment_overrides:
         lines.append("# [deploy-live] no [environments.<name>] overrides configured")
+        lines.append("")
+
+    preview = config.preview_environments
+    if preview.enabled:
+        lines.append("# Dynamic preview environment settings")
+        lines.append("[preview_environments]")
+        lines.append(f"enabled = {str(preview.enabled).lower()}")
+        lines.append(f'base_environment = "{_toml_escape(preview.base_environment)}"')
+        lines.append(f'name_pattern = "{_toml_escape(preview.name_pattern)}"')
+        if preview.domain_template:
+            lines.append(
+                f'domain_template = "{_toml_escape(preview.domain_template)}"'
+            )
+        if preview.hosted_zone_name:
+            lines.append(f'hosted_zone_name = "{_toml_escape(preview.hosted_zone_name)}"')
+        if preview.listener_priority_start is not None:
+            lines.append(f"listener_priority_start = {preview.listener_priority_start}")
+        if preview.listener_priority_end is not None:
+            lines.append(f"listener_priority_end = {preview.listener_priority_end}")
+        if preview.tags:
+            lines.append("")
+            lines.append("[preview_environments.tags]")
+            for key, value in preview.tags.items():
+                lines.append(f'"{_toml_escape(key)}" = "{_toml_escape(value)}"')
         lines.append("")
 
     return "\n".join(lines) + "\n"

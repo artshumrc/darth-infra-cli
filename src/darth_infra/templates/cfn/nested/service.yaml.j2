@@ -269,10 +269,28 @@ Resources:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles: [!Ref Ec2InstanceRole]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{{ render_additional_tags('        ') }}
 
   LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
+      TagSpecifications:
+        - ResourceType: launch-template
+          Tags:
+            - Key: Project
+              Value: !Ref ProjectName
+            - Key: Environment
+              Value: !Ref EnvironmentName
+            - Key: Service
+              Value: {{ name }}
+{{ render_additional_tags('            ') }}
       LaunchTemplateData:
         IamInstanceProfile:
           Arn: !GetAtt Ec2InstanceProfile.Arn
@@ -463,7 +481,7 @@ Resources:
   CloudMapService:
     Type: AWS::ServiceDiscovery::Service
     Properties:
-      Name: {{ name }}
+      Name: {{ name }}{{ service_discovery_name_suffix }}
       NamespaceId: !Ref CloudMapNamespaceId
       DnsConfig:
         DnsRecords:
@@ -525,6 +543,14 @@ Resources:
 {% endfor %}
       ListenerArn: !Ref AlbListenerArn
       Priority: {{ default_listener_priority }}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{{ render_additional_tags('        ') }}
 
 {% endif %}
 {% for rule in service_path_rules %}
@@ -550,6 +576,14 @@ Resources:
             Values: ['{{ rule.path_pattern }}']
       ListenerArn: !Ref AlbListenerArn
       Priority: {{ rule.priority }}
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Service
+          Value: {{ name }}
+{{ render_additional_tags('        ') }}
 
 {% endfor %}
 {% endif %}

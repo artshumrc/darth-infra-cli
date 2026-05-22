@@ -36,6 +36,12 @@ Parameters:
   SharedAlbDnsName:
     Type: String
     Default: ''
+  SharedAlbCanonicalHostedZoneId:
+    Type: String
+    Default: ''
+  HostedZoneId:
+    Type: String
+    Default: ''
   CertificateArn:
     Type: String
     Default: '{{ alb.certificate_arn or "" }}'
@@ -49,6 +55,9 @@ Parameters:
 {% endfor %}
 {% if has_rds %}
   RdsSnapshotIdentifier:
+    Type: String
+    Default: ''
+  RdsSourceSecretArn:
     Type: String
     Default: ''
   RdsInstanceType:
@@ -69,6 +78,7 @@ Conditions:
   IsProd: !Equals [!Ref EnvironmentName, prod]
   UseDedicatedAlb: !Equals [!Ref AlbMode, dedicated]
   HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
+  HasHostedZone: !Not [!Equals [!Ref HostedZoneId, '']]
   UseDedicatedAlbWithCert: !And [!Condition UseDedicatedAlb, !Condition HasCertificate]
   UseDedicatedAlbNoCert: !And [!Condition UseDedicatedAlb, !Not [!Condition HasCertificate]]
 {% if has_rds %}
@@ -174,6 +184,12 @@ Resources:
       LoadBalancerArn: !Ref DedicatedAlb
       Port: 80
       Protocol: HTTP
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{{ render_additional_tags('        ') }}
 
   DedicatedAlbHttpsListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -190,6 +206,12 @@ Resources:
       LoadBalancerArn: !Ref DedicatedAlb
       Port: 443
       Protocol: HTTPS
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{{ render_additional_tags('        ') }}
 
 {% if has_alb_cloudfront %}
   AlbCloudFront:
@@ -387,6 +409,7 @@ Resources:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Sub '${ProjectName}/${EnvironmentName}/{{ svc_ctx.name }}'
+      EmptyOnDelete: true
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -401,11 +424,19 @@ Resources:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub '${ProjectName}-${EnvironmentName}-rds-credentials'
-      GenerateSecretString:
-        SecretStringTemplate: '{"username": "{{ rds_master_username }}"}'
-        GenerateStringKey: password
-        PasswordLength: 32
-        ExcludeCharacters: '"@/\'
+      GenerateSecretString: !If
+        - HasRdsSnapshot
+        - !Ref 'AWS::NoValue'
+        - SecretStringTemplate: '{"username": "{{ rds_master_username }}"}'
+          GenerateStringKey: password
+          PasswordLength: 32
+          ExcludeCharacters: '"@/\'
+      SecretString: !If
+        - HasRdsSnapshot
+        - !Sub
+          - '{"username":"{{ "{{" }}resolve:secretsmanager:${SourceSecretArn}:SecretString:username{{ "}}" }}","password":"{{ "{{" }}resolve:secretsmanager:${SourceSecretArn}:SecretString:password{{ "}}" }}"}'
+          - SourceSecretArn: !Ref RdsSourceSecretArn
+        - !Ref 'AWS::NoValue'
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -445,10 +476,11 @@ Resources:
       DBInstanceClass: !Ref RdsInstanceType
       Engine: postgres
       EngineVersion: '{{ rds.engine_version }}'
-      MasterUsername: !Join ['', ['{{ "{{" }}resolve:secretsmanager:', !Ref RdsCredentialsSecret, ':SecretString:username{{ "}}" }}']]
-      MasterUserPassword: !Join ['', ['{{ "{{" }}resolve:secretsmanager:', !Ref RdsCredentialsSecret, ':SecretString:password{{ "}}" }}']]
+      MasterUsername: !If [HasRdsSnapshot, !Ref 'AWS::NoValue', !Join ['', ['{{ "{{" }}resolve:secretsmanager:', !Ref RdsCredentialsSecret, ':SecretString:username{{ "}}" }}']]]
+      MasterUserPassword: !If [HasRdsSnapshot, !Ref 'AWS::NoValue', !Join ['', ['{{ "{{" }}resolve:secretsmanager:', !Ref RdsCredentialsSecret, ':SecretString:password{{ "}}" }}']]]
       AllocatedStorage: '{{ rds.allocated_storage_gb }}'
       BackupRetentionPeriod: {{ rds.backup_retention_days }}
+      CopyTagsToSnapshot: true
       DBName: !If [HasRdsSnapshot, !Ref 'AWS::NoValue', '{{ rds.database_name }}']
       DBSnapshotIdentifier: !If [HasRdsSnapshot, !Ref RdsSnapshotIdentifier, !Ref 'AWS::NoValue']
       VPCSecurityGroups:
@@ -552,10 +584,27 @@ Resources:
 {% endfor %}
 {% endif %}
 
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasHostedZone
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref ClusterDomain
+      Type: A
+      AliasTarget:
+        DNSName: !If [UseDedicatedAlb, !GetAtt DedicatedAlb.DNSName, !Ref SharedAlbDnsName]
+        HostedZoneId: !If [UseDedicatedAlb, !GetAtt DedicatedAlb.CanonicalHostedZoneID, !Ref SharedAlbCanonicalHostedZoneId]
+
   CustomOverrides:
     Type: AWS::CloudFormation::Stack
     Properties:
       TemplateURL: ../custom/overrides.yaml
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+{{ render_additional_tags('        ') }}
 Outputs:
   ClusterName:
     Value: !Ref EcsCluster

@@ -6,14 +6,26 @@ import boto3
 import click
 from rich.table import Table
 
-from .helpers import console, get_cluster_name, get_service_name, require_config
+from .helpers import (
+    console,
+    get_cluster_name,
+    get_service_name,
+    require_config,
+    resolve_environment_config,
+)
 
 
 @click.command()
 @click.option("--env", "env_name", required=True, help="Environment name.")
-def status(env_name: str) -> None:
+@click.option(
+    "--preview-from",
+    default=None,
+    help="Base environment to use for a dynamic preview environment.",
+)
+def status(env_name: str, preview_from: str | None) -> None:
     """Show the status of services in an environment."""
-    config, _ = require_config()
+    loaded_config, _ = require_config()
+    config = resolve_environment_config(loaded_config, env_name, preview_from)
 
     ecs = boto3.client("ecs", region_name=config.aws_region)
     cluster = get_cluster_name(config.project_name, env_name)

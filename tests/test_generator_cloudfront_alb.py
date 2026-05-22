@@ -8,6 +8,7 @@ from darth_infra.config.models import (
     CloudFrontCachedBehavior,
     CloudFrontConfig,
     EnvironmentOverride,
+    LaunchType,
     ProjectConfig,
     ServiceConfig,
 )
@@ -116,3 +117,40 @@ def test_environment_tag_parameters_are_rendered_for_root_and_nested_stacks(
     assert "ExtraTagCostCenter: !Ref ExtraTagCostCenter" in root
     assert "ExtraTagCostCenter:" in service
     assert "HasExtraTagCostCenter:" in service
+
+
+def test_managed_ecr_repositories_are_empty_on_delete(tmp_path: Path) -> None:
+    output_dir = generate_project(
+        ProjectConfig(
+            project_name="demo",
+            services=[ServiceConfig(name="web", port=8000)],
+        ),
+        tmp_path / "out",
+    )
+    root = _read(output_dir, "templates/generated/root.yaml")
+
+    assert "EcrRepoWeb:" in root
+    assert "EmptyOnDelete: true" in root
+
+
+def test_ec2_launch_resources_receive_cleanup_tags(tmp_path: Path) -> None:
+    output_dir = generate_project(
+        ProjectConfig(
+            project_name="demo",
+            services=[
+                ServiceConfig(
+                    name="worker",
+                    launch_type=LaunchType.EC2,
+                    ec2_instance_type="t3.medium",
+                )
+            ],
+            tags={"ephemeral-cleanup-id": "demo-pr-123"},
+        ),
+        tmp_path / "out",
+    )
+    service = _read(output_dir, "templates/generated/services/worker.yaml")
+
+    assert "Ec2InstanceProfile:" in service
+    assert "LaunchTemplate:" in service
+    assert "ResourceType: launch-template" in service
+    assert "ExtraTagEphemeralCleanupId" in service

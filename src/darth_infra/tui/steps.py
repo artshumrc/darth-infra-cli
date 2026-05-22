@@ -9,6 +9,7 @@ STEP_ORDER = [
     "s3",
     "secrets",
     "tags",
+    "preview",
     "review",
 ]
 
@@ -21,5 +22,6 @@ STEP_LABELS = {
     "s3": "S3",
     "secrets": "Secrets",
     "tags": "Tags",
+    "preview": "Preview",
     "review": "Review",
 }

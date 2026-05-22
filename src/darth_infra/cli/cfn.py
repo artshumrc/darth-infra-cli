@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, WaiterError
 from rich.console import Group
 from rich.live import Live
 from rich.panel import Panel
@@ -32,9 +32,12 @@ class ResolvedLookupData:
     shared_listener_arn: str
     shared_alb_security_group_id: str
     shared_alb_dns_name: str
+    shared_alb_canonical_hosted_zone_id: str
+    hosted_zone_id: str
     default_listener_priority: int | None
     path_rule_priorities: dict[str, int]
     rds_snapshot_identifier: str
+    rds_source_secret_arn: str
     external_secret_arns: dict[str, str]
     existing_service_discovery_namespace_id: str
 
@@ -49,6 +52,71 @@ class DeployMonitorState:
     fatal_ecs_messages: list[str]
 
 
+def prepare_preview_deploy_config(config: ProjectConfig, env_name: str) -> None:
+    """Apply AWS-dependent dynamic preview values before template rendering."""
+    if not config.active_preview or config.active_preview.env_name != env_name:
+        return
+
+    preview = config.preview_environments
+    if (
+        config.alb.mode.value != "shared"
+        or preview.listener_priority_start is None
+        or preview.listener_priority_end is None
+        or not config.alb.domain
+    ):
+        return
+
+    elbv2 = boto3.client("elbv2", region_name=config.aws_region)
+    listener_arn, _, _, _ = _resolve_shared_alb(config, elbv2)
+    config.alb.default_listener_priority = _select_preview_listener_priority(
+        config,
+        env_name,
+        listener_arn,
+        elbv2,
+        int(preview.listener_priority_start),
+        int(preview.listener_priority_end),
+    )
+
+
+def _select_preview_listener_priority(
+    config: ProjectConfig,
+    env_name: str,
+    listener_arn: str,
+    elbv2,
+    start: int,
+    end: int,
+) -> int:
+    stack_owned = sorted(
+        p
+        for p in _resolve_stack_owned_listener_rule_priorities(
+            config, env_name, listener_arn, elbv2
+        )
+        if start <= p <= end
+    )
+    if stack_owned:
+        return stack_owned[0]
+
+    existing: set[int] = set()
+    paginator = elbv2.get_paginator("describe_rules")
+    for page in paginator.paginate(ListenerArn=listener_arn):
+        for rule in page.get("Rules", []):
+            priority = rule.get("Priority")
+            if not priority or priority == "default":
+                continue
+            try:
+                existing.add(int(priority))
+            except ValueError:
+                continue
+
+    for priority in range(start, end + 1):
+        if priority not in existing:
+            return priority
+
+    raise RuntimeError(
+        f"No available ALB listener priorities in preview range {start}-{end}"
+    )
+
+
 def resolve_lookup_data(config: ProjectConfig, env_name: str) -> ResolvedLookupData:
     ec2 = boto3.client("ec2", region_name=config.aws_region)
     elbv2 = boto3.client("elbv2", region_name=config.aws_region)
@@ -56,11 +124,13 @@ def resolve_lookup_data(config: ProjectConfig, env_name: str) -> ResolvedLookupD
     route53 = boto3.client("route53")
 
     vpc_id, vpc_cidr, private_subnets, public_subnets = _resolve_network(config, ec2)
-    listener_arn, alb_sg, alb_dns_name = _resolve_shared_alb(config, elbv2)
+    listener_arn, alb_sg, alb_dns_name, alb_zone_id = _resolve_shared_alb(config, elbv2)
+    hosted_zone_id = _resolve_hosted_zone_id(config, route53)
     default_priority, path_priorities = _resolve_listener_priorities(
         config, env_name, elbv2, listener_arn
     )
     snapshot = _resolve_rds_snapshot(config, env_name)
+    rds_source_secret_arn = _resolve_rds_source_secret_arn(config, env_name, snapshot)
     external_secrets = _resolve_external_secrets(config)
     namespace_id = _resolve_existing_service_discovery_namespace(
         config, sd, route53, vpc_id
@@ -74,9 +144,12 @@ def resolve_lookup_data(config: ProjectConfig, env_name: str) -> ResolvedLookupD
         shared_listener_arn=listener_arn,
         shared_alb_security_group_id=alb_sg,
         shared_alb_dns_name=alb_dns_name,
+        shared_alb_canonical_hosted_zone_id=alb_zone_id,
+        hosted_zone_id=hosted_zone_id,
         default_listener_priority=default_priority,
         path_rule_priorities=path_priorities,
         rds_snapshot_identifier=snapshot,
+        rds_source_secret_arn=rds_source_secret_arn,
         external_secret_arns=external_secrets,
         existing_service_discovery_namespace_id=namespace_id,
     )
@@ -193,6 +266,15 @@ def _validate_resolved_lookup_data(
         raise RuntimeError(
             "CloudFront is enabled but shared ALB DNS name could not be resolved"
         )
+    if config.active_preview and config.active_preview.hosted_zone_name:
+        if not lookups.shared_alb_dns_name:
+            raise RuntimeError("Preview DNS requires a resolved shared ALB DNS name")
+        if not lookups.shared_alb_canonical_hosted_zone_id:
+            raise RuntimeError(
+                "Preview DNS requires the shared ALB canonical hosted zone id"
+            )
+        if not lookups.hosted_zone_id:
+            raise RuntimeError("Preview DNS requires a resolved Route53 hosted zone id")
 
 
 def validate_rendered_deploy_templates(
@@ -801,8 +883,189 @@ def delete_stack(config: ProjectConfig, env_name: str) -> int:
         waiter.wait(StackName=stack_name)
         return 0
     except ClientError as exc:
+        if _is_missing_stack_error(exc):
+            console.print(f"[yellow]Stack '{stack_name}' does not exist; nothing to delete.[/yellow]")
+            return 0
         console.print(f"[red]Delete failed: {exc}[/red]")
         return 1
+    except WaiterError as exc:
+        console.print(f"[red]Delete did not complete: {exc}[/red]")
+        _print_recent_stack_events(
+            cf,
+            stack_name,
+            label=f"Stack events for {stack_name}",
+            max_events=20,
+        )
+        return 1
+
+
+def _is_missing_stack_error(exc: ClientError) -> bool:
+    code = str(exc.response.get("Error", {}).get("Code", ""))
+    message = str(exc.response.get("Error", {}).get("Message", ""))
+    return code == "ValidationError" and "does not exist" in message
+
+
+def empty_managed_buckets(config: ProjectConfig, env_name: str) -> int:
+    """Empty managed buckets for preview destroys so CloudFormation can delete them."""
+    buckets = [bucket for bucket in config.s3_buckets if bucket.mode.value != "existing"]
+    if not buckets:
+        return 0
+
+    s3 = boto3.client("s3", region_name=config.aws_region)
+    failures: list[str] = []
+    for bucket in buckets:
+        bucket_name = f"{config.project_name}-{env_name}-{bucket.name}".lower()
+        try:
+            _empty_bucket(s3, bucket_name)
+            console.print(f"[green]✓ Emptied preview bucket {bucket_name}[/green]")
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in {"404", "NoSuchBucket", "NotFound"}:
+                continue
+            failures.append(f"{bucket_name}: {exc}")
+        except Exception as exc:
+            failures.append(f"{bucket_name}: {exc}")
+
+    if failures:
+        for failure in failures:
+            console.print(f"[red]Bucket cleanup failed: {failure}[/red]")
+        return 1
+    return 0
+
+
+def empty_managed_repositories(config: ProjectConfig, env_name: str) -> int:
+    """Delete images from managed ECR repositories so stack deletion cannot be blocked."""
+    repository_names = [
+        f"{config.project_name}/{env_name}/{service.name}"
+        for service in config.services
+        if not service.image
+    ]
+    if not repository_names:
+        return 0
+
+    ecr = boto3.client("ecr", region_name=config.aws_region)
+    failures: list[str] = []
+    for repository_name in repository_names:
+        try:
+            deleted = _empty_repository(ecr, repository_name)
+            if deleted:
+                console.print(
+                    f"[green]✓ Deleted {deleted} image(s) from preview repository {repository_name}[/green]"
+                )
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in {"RepositoryNotFoundException", "RepositoryNotFound"}:
+                continue
+            failures.append(f"{repository_name}: {exc}")
+        except Exception as exc:
+            failures.append(f"{repository_name}: {exc}")
+
+    if failures:
+        for failure in failures:
+            console.print(f"[red]Repository cleanup failed: {failure}[/red]")
+        return 1
+    return 0
+
+
+def _empty_repository(ecr, repository_name: str) -> int:
+    deleted = 0
+    paginator = ecr.get_paginator("list_images")
+    for page in paginator.paginate(repositoryName=repository_name):
+        image_ids = [image_id for image_id in page.get("imageIds", []) if image_id]
+        for chunk_start in range(0, len(image_ids), 100):
+            chunk = image_ids[chunk_start : chunk_start + 100]
+            if chunk:
+                ecr.batch_delete_image(repositoryName=repository_name, imageIds=chunk)
+                deleted += len(chunk)
+    return deleted
+
+
+def delete_tagged_preview_snapshots(config: ProjectConfig, env_name: str) -> int:
+    """Delete preview RDS snapshots retained by CloudFormation deletion policies."""
+    if not config.rds:
+        return 0
+
+    cleanup_id = config.get_tags_for_environment(env_name).get("ephemeral-cleanup-id")
+    if not cleanup_id:
+        return 0
+
+    rds = boto3.client("rds", region_name=config.aws_region)
+    db_identifier = f"{config.project_name}-{env_name}-db"
+    failures: list[str] = []
+    deleted = 0
+
+    try:
+        paginator = rds.get_paginator("describe_db_snapshots")
+        pages = paginator.paginate(
+            DBInstanceIdentifier=db_identifier,
+            SnapshotType="manual",
+        )
+        for page in pages:
+            for snapshot in page.get("DBSnapshots", []):
+                snapshot_id = str(snapshot.get("DBSnapshotIdentifier", ""))
+                snapshot_arn = str(snapshot.get("DBSnapshotArn", ""))
+                if not snapshot_id or not snapshot_arn:
+                    continue
+                if not _rds_snapshot_has_cleanup_tag(rds, snapshot_arn, cleanup_id):
+                    continue
+                try:
+                    rds.delete_db_snapshot(DBSnapshotIdentifier=snapshot_id)
+                    deleted += 1
+                    console.print(
+                        f"[green]✓ Deleted preview RDS snapshot {snapshot_id}[/green]"
+                    )
+                except ClientError as exc:
+                    failures.append(f"{snapshot_id}: {exc}")
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in {"DBInstanceNotFound", "DBInstanceNotFoundFault"}:
+            return 0
+        failures.append(f"{db_identifier}: {exc}")
+
+    if failures:
+        for failure in failures:
+            console.print(f"[red]RDS snapshot cleanup failed: {failure}[/red]")
+        return 1
+    if deleted:
+        console.print(
+            f"[green]✓ Deleted {deleted} retained preview RDS snapshot(s) for {env_name}[/green]"
+        )
+    return 0
+
+
+def _rds_snapshot_has_cleanup_tag(rds, snapshot_arn: str, cleanup_id: str) -> bool:
+    response = rds.list_tags_for_resource(ResourceName=snapshot_arn)
+    return any(
+        tag.get("Key") == "ephemeral-cleanup-id" and tag.get("Value") == cleanup_id
+        for tag in response.get("TagList", [])
+    )
+
+
+def _empty_bucket(s3, bucket_name: str) -> None:
+    paginator = s3.get_paginator("list_object_versions")
+    for page in paginator.paginate(Bucket=bucket_name):
+        objects = [
+            {"Key": item["Key"], "VersionId": item["VersionId"]}
+            for collection in ("Versions", "DeleteMarkers")
+            for item in page.get(collection, [])
+            if item.get("Key") and item.get("VersionId")
+        ]
+        for chunk_start in range(0, len(objects), 1000):
+            chunk = objects[chunk_start : chunk_start + 1000]
+            if chunk:
+                s3.delete_objects(Bucket=bucket_name, Delete={"Objects": chunk})
+
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket_name):
+        objects = [
+            {"Key": item["Key"]}
+            for item in page.get("Contents", [])
+            if item.get("Key")
+        ]
+        for chunk_start in range(0, len(objects), 1000):
+            chunk = objects[chunk_start : chunk_start + 1000]
+            if chunk:
+                s3.delete_objects(Bucket=bucket_name, Delete={"Objects": chunk})
 
 
 def cancel_stack_update(config: ProjectConfig, env_name: str) -> int:
@@ -1910,9 +2173,9 @@ def _resolve_network(
     return vpc_id, vpc_cidr, private_subnets, public_subnets
 
 
-def _resolve_shared_alb(config: ProjectConfig, elbv2) -> tuple[str, str, str]:
+def _resolve_shared_alb(config: ProjectConfig, elbv2) -> tuple[str, str, str, str]:
     if config.alb.mode.value != "shared":
-        return "", "", ""
+        return "", "", "", ""
 
     listener_arn = config.alb.shared_listener_arn
     alb_sg = config.alb.shared_alb_security_group_id
@@ -1941,7 +2204,12 @@ def _resolve_shared_alb(config: ProjectConfig, elbv2) -> tuple[str, str, str]:
             raise RuntimeError(
                 f"Expected one ALB for listener {listener_arn}, found {len(lbs)}"
             )
-        return listener_arn, alb_sg, lbs[0].get("DNSName", "")
+        return (
+            listener_arn,
+            alb_sg,
+            lbs[0].get("DNSName", ""),
+            lbs[0].get("CanonicalHostedZoneId", ""),
+        )
 
     if not config.alb.shared_alb_name:
         raise RuntimeError("alb.shared_alb_name is required in shared mode")
@@ -1974,7 +2242,30 @@ def _resolve_shared_alb(config: ProjectConfig, elbv2) -> tuple[str, str, str]:
             )
         raise RuntimeError("Could not find an ALB listener to attach rules")
 
-    return preferred["ListenerArn"], alb_sg, alb.get("DNSName", "")
+    return (
+        preferred["ListenerArn"],
+        alb_sg,
+        alb.get("DNSName", ""),
+        alb.get("CanonicalHostedZoneId", ""),
+    )
+
+
+def _resolve_hosted_zone_id(config: ProjectConfig, route53) -> str:
+    if not config.active_preview or not config.active_preview.hosted_zone_name:
+        return ""
+
+    zone_name = config.active_preview.hosted_zone_name.rstrip(".") + "."
+    zones = route53.list_hosted_zones_by_name(
+        DNSName=zone_name,
+        MaxItems="1",
+    ).get("HostedZones", [])
+    if not zones or zones[0].get("Name") != zone_name:
+        raise RuntimeError(f"Could not resolve Route53 hosted zone '{zone_name}'")
+
+    zone_id = str(zones[0].get("Id", "")).split("/")[-1]
+    if not zone_id:
+        raise RuntimeError(f"Could not resolve Route53 hosted zone id for '{zone_name}'")
+    return zone_id
 
 
 def _resolve_listener_priorities(
@@ -2146,13 +2437,54 @@ def _resolve_rds_snapshot(config: ProjectConfig, env_name: str) -> str:
             DBInstanceIdentifier=db_id,
             SnapshotType="automated",
         ).get("DBSnapshots", [])
-    except Exception:
+    except Exception as exc:
+        if config.active_preview and config.active_preview.env_name == env_name:
+            raise RuntimeError(
+                f"Could not resolve latest prod RDS snapshot from '{db_id}' for preview '{env_name}'"
+            ) from exc
         return ""
 
     if not snapshots:
+        if config.active_preview and config.active_preview.env_name == env_name:
+            raise RuntimeError(
+                f"No automated prod RDS snapshots found for '{db_id}' to seed preview '{env_name}'"
+            )
         return ""
     latest = max(snapshots, key=lambda s: s.get("SnapshotCreateTime"))
     return latest["DBSnapshotIdentifier"]
+
+
+def _resolve_rds_source_secret_arn(
+    config: ProjectConfig,
+    env_name: str,
+    rds_snapshot_identifier: str,
+) -> str:
+    if not config.rds or env_name == "prod" or not rds_snapshot_identifier:
+        return ""
+
+    if not (config.active_preview and config.active_preview.env_name == env_name):
+        return ""
+
+    cf = boto3.client("cloudformation", region_name=config.aws_region)
+    stack_name = f"{config.project_name}-ecs-prod"
+    try:
+        response = cf.describe_stack_resource(
+            StackName=stack_name,
+            LogicalResourceId="RdsCredentialsSecret",
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not resolve prod RDS credentials secret from stack '{stack_name}' for preview '{env_name}'"
+        ) from exc
+
+    secret_id = str(
+        response.get("StackResourceDetail", {}).get("PhysicalResourceId", "")
+    ).strip()
+    if not secret_id:
+        raise RuntimeError(
+            f"Prod stack '{stack_name}' does not expose a physical RdsCredentialsSecret resource id"
+        )
+    return secret_id
 
 
 def _resolve_external_secrets(config: ProjectConfig) -> dict[str, str]:
@@ -2272,6 +2604,14 @@ def _build_parameters(
             "ParameterValue": lookups.shared_alb_dns_name,
         },
         {
+            "ParameterKey": "SharedAlbCanonicalHostedZoneId",
+            "ParameterValue": lookups.shared_alb_canonical_hosted_zone_id,
+        },
+        {
+            "ParameterKey": "HostedZoneId",
+            "ParameterValue": lookups.hosted_zone_id,
+        },
+        {
             "ParameterKey": "CertificateArn",
             "ParameterValue": config.alb.certificate_arn or "",
         },
@@ -2301,6 +2641,10 @@ def _build_parameters(
                 {
                     "ParameterKey": "RdsSnapshotIdentifier",
                     "ParameterValue": lookups.rds_snapshot_identifier,
+                },
+                {
+                    "ParameterKey": "RdsSourceSecretArn",
+                    "ParameterValue": lookups.rds_source_secret_arn,
                 },
                 {"ParameterKey": "RdsInstanceType", "ParameterValue": rds_type},
             ]

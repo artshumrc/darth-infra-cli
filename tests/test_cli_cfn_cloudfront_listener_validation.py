@@ -27,13 +27,17 @@ class FakeElbv2:
                         "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/shared/abc",
                         "SecurityGroups": ["sg-1234abcd"],
                         "DNSName": "shared-alb-123.us-east-1.elb.amazonaws.com",
+                        "CanonicalHostedZoneId": "ZALB123",
                     }
                 ]
             }
         if LoadBalancerArns:
             return {
                 "LoadBalancers": [
-                    {"DNSName": "shared-alb-123.us-east-1.elb.amazonaws.com"}
+                    {
+                        "DNSName": "shared-alb-123.us-east-1.elb.amazonaws.com",
+                        "CanonicalHostedZoneId": "ZALB123",
+                    }
                 ]
             }
         raise AssertionError("unexpected describe_load_balancers call")
@@ -94,7 +98,7 @@ def test_resolve_shared_alb_rejects_non_https_listener_for_https_only_origin() -
 
 def test_resolve_shared_alb_prefers_https_443_for_https_only_origin() -> None:
     config = _config()
-    listener_arn, sg_id, dns_name = _resolve_shared_alb(
+    listener_arn, sg_id, dns_name, zone_id = _resolve_shared_alb(
         config,
         FakeElbv2(
             listeners=[
@@ -106,6 +110,7 @@ def test_resolve_shared_alb_prefers_https_443_for_https_only_origin() -> None:
     assert listener_arn == "arn:listener/https"
     assert sg_id == "sg-1234abcd"
     assert dns_name == "shared-alb-123.us-east-1.elb.amazonaws.com"
+    assert zone_id == "ZALB123"
 
 
 def test_explicit_shared_listener_must_be_https_443_for_https_only_origin() -> None:
