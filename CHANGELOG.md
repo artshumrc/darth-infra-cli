@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.7.2
+
+### Patch Changes
+
+- [`2cd02da`](https://github.com/artshumrc/darth-infra-cli/commit/2cd02da5d3841532e9e052c336d339a15f181b28) Thanks [@d-flood](https://github.com/d-flood)! - keep rds identifier stable across multiple deploys for same preview
+
 ## 0.7.1
 
 ### Patch Changes
