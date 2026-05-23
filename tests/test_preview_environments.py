@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from darth_infra.cli.cfn import ResolvedLookupData, _build_parameters
+from darth_infra.cli.cfn import (
+    ResolvedLookupData,
+    _build_parameters,
+    _resolve_rds_snapshot,
+)
 from darth_infra.cli.helpers import resolve_environment_config
 from darth_infra.config.loader import dump_config, load_config
 from darth_infra.config.models import (
@@ -12,6 +16,7 @@ from darth_infra.config.models import (
     EnvironmentOverride,
     PreviewEnvironmentsConfig,
     ProjectConfig,
+    RdsConfig,
     S3BucketConfig,
     S3BucketConnection,
     S3BucketMode,
@@ -306,3 +311,56 @@ def test_preview_s3_overlay_derives_fallback_bucket_from_base_environment(
     assert "        FallbackBucketNameMedia: 'demo-prod-media'" in root
     assert "        FallbackBucketArnMedia: !Sub 'arn:aws:s3:::demo-prod-media'" in root
     assert "AWS_STORAGE_FALLBACK_BUCKET_NAME" in service
+
+
+def test_existing_preview_reuses_original_rds_snapshot(monkeypatch) -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web")],
+        rds=RdsConfig(database_name="app"),
+        preview_environments=PreviewEnvironmentsConfig(
+            enabled=True,
+            base_environment="prod",
+            name_pattern="pr-{number}",
+            domain_template="pr-{number}.example.com",
+        ),
+    )
+    config.active_preview = ActivePreviewEnvironment(
+        env_name="pr-123",
+        base_environment="prod",
+        number="123",
+        domain="pr-123.example.com",
+        hosted_zone_name=None,
+        tags={},
+    )
+
+    class FakeCloudFormation:
+        def describe_stacks(self, *, StackName: str) -> dict[str, object]:
+            assert StackName == "demo-ecs-pr-123"
+            return {
+                "Stacks": [
+                    {
+                        "Parameters": [
+                            {
+                                "ParameterKey": "RdsSnapshotIdentifier",
+                                "ParameterValue": "rds:demo-prod-db-2026-05-22",
+                            }
+                        ]
+                    }
+                ]
+            }
+
+    class FakeRds:
+        def describe_db_snapshots(self, **_: object) -> dict[str, object]:
+            raise AssertionError("existing preview should not resolve latest snapshot")
+
+    def fake_client(service: str, **_: object) -> object:
+        if service == "cloudformation":
+            return FakeCloudFormation()
+        if service == "rds":
+            return FakeRds()
+        raise AssertionError(f"unexpected client: {service}")
+
+    monkeypatch.setattr("darth_infra.cli.cfn.boto3.client", fake_client)
+
+    assert _resolve_rds_snapshot(config, "pr-123") == "rds:demo-prod-db-2026-05-22"

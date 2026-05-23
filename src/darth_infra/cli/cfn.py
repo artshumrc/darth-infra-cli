@@ -2677,9 +2677,34 @@ def _stack_exists_for_env(config: ProjectConfig, env_name: str) -> bool:
         raise
 
 
+def _get_existing_stack_parameter(
+    config: ProjectConfig, env_name: str, parameter_key: str
+) -> str:
+    stack_name = f"{config.project_name}-ecs-{env_name}"
+    cf = boto3.client("cloudformation", region_name=config.aws_region)
+    try:
+        stack = cf.describe_stacks(StackName=stack_name)["Stacks"][0]
+    except ClientError as exc:
+        if _is_missing_stack_error(exc):
+            return ""
+        raise
+
+    for parameter in stack.get("Parameters", []):
+        if parameter.get("ParameterKey") == parameter_key:
+            return str(parameter.get("ParameterValue") or "")
+    return ""
+
+
 def _resolve_rds_snapshot(config: ProjectConfig, env_name: str) -> str:
     if not config.rds or env_name == "prod":
         return ""
+
+    if config.active_preview and config.active_preview.env_name == env_name:
+        existing_snapshot = _get_existing_stack_parameter(
+            config, env_name, "RdsSnapshotIdentifier"
+        )
+        if existing_snapshot:
+            return existing_snapshot
 
     rds = boto3.client("rds", region_name=config.aws_region)
     db_id = f"{config.project_name}-prod-db"
