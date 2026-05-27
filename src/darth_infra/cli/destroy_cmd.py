@@ -14,6 +14,7 @@ from .cfn import (
     empty_managed_repositories,
 )
 from .helpers import console, is_active_preview, require_config, resolve_environment_config
+from .version_floor import bump_cli_version_floor
 
 
 @click.command()
@@ -26,7 +27,7 @@ from .helpers import console, is_active_preview, require_config, resolve_environ
 )
 def destroy(env_name: str, force: bool, preview_from: str | None) -> None:
     """Destroy the CloudFormation stack for a given environment."""
-    loaded_config, _ = require_config()
+    loaded_config, project_dir = require_config()
     config = resolve_environment_config(loaded_config, env_name, preview_from)
 
     if env_name == "prod":
@@ -78,6 +79,7 @@ def destroy(env_name: str, force: bool, preview_from: str | None) -> None:
             raise SystemExit(snapshot_rc)
 
     if rc == 0:
+        bump_cli_version_floor(project_dir)
         console.print(f"[green]✓ Destroyed {env_name}[/green]")
     else:
         console.print(f"[red]Destroy failed with exit code {rc}[/red]")

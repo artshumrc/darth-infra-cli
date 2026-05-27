@@ -112,6 +112,7 @@ def _parse_project(raw: dict[str, Any]) -> ProjectConfig:
         public_subnet_ids=project.get("public_subnet_ids", []),
         environments=project.get("environments", ["prod"]),
         tags=project.get("tags", {}),
+        cli_version_floor=project.get("cli_version_floor"),
         services=services,
         rds=rds,
         s3_buckets=s3_buckets,
@@ -344,6 +345,8 @@ def dump_config(config: ProjectConfig) -> str:
     lines.append(f'name = "{config.project_name}"')
     lines.append(f'aws_region = "{config.aws_region}"')
     lines.append(f'vpc_name = "{config.vpc_name}"')
+    if config.cli_version_floor:
+        lines.append(f'cli_version_floor = "{_toml_escape(config.cli_version_floor)}"')
     if config.vpc_id:
         lines.append(f'vpc_id = "{config.vpc_id}"')
     if config.private_subnet_ids:

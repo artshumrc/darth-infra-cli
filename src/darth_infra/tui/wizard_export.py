@@ -16,6 +16,7 @@ def default_wizard_state() -> dict[str, Any]:
         "aws_region": "us-east-1",
         "environments": ["prod"],
         "project_tags": {},
+        "cli_version_floor": None,
         "environment_overrides": {},
         "preview_environments": {
             "enabled": False,
@@ -196,6 +197,7 @@ def project_config_to_wizard_state(config: ProjectConfig) -> dict[str, Any]:
             "public_subnet_ids": list(config.public_subnet_ids),
             "environments": list(config.environments),
             "project_tags": dict(config.tags),
+            "cli_version_floor": config.cli_version_floor,
             "environment_overrides": {
                 env_name: {
                     "instance_type_override": override.instance_type_override,

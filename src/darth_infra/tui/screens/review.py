@@ -312,6 +312,7 @@ def build_config_from_state(state: dict) -> ProjectConfig:
             for key, value in s.get("project_tags", {}).items()
             if str(key).strip() and str(value).strip()
         },
+        cli_version_floor=s.get("cli_version_floor"),
     )
 
 

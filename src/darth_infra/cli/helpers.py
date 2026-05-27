@@ -17,6 +17,7 @@ from ..config.models import (
     ProjectConfig,
     S3BucketMode,
 )
+from .version_floor import enforce_cli_version_floor
 
 console = Console()
 
@@ -29,6 +30,7 @@ def require_config() -> tuple[ProjectConfig, Path]:
         console.print(f"[red]{exc}[/red]")
         sys.exit(1)
     config = load_config(config_path)
+    enforce_cli_version_floor(config)
     return config, config_path.parent
 
 

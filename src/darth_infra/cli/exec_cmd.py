@@ -8,6 +8,7 @@ import boto3
 import click
 
 from .helpers import console, get_cluster_name, get_service_name, require_config
+from .version_floor import bump_cli_version_floor
 
 
 @click.command("exec")
@@ -21,7 +22,7 @@ from .helpers import console, get_cluster_name, get_service_name, require_config
 )
 def exec_cmd(service: str, env_name: str, shell_cmd: str) -> None:
     """Open an interactive shell in a running ECS container."""
-    config, _ = require_config()
+    config, project_dir = require_config()
 
     svc = next((s for s in config.services if s.name == service), None)
     if svc is None:
@@ -77,6 +78,8 @@ def exec_cmd(service: str, env_name: str, shell_cmd: str) -> None:
 
     console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
     try:
-        subprocess.run(cmd)
+        result = subprocess.run(cmd)
     except KeyboardInterrupt:
-        pass
+        return
+    if result.returncode == 0:
+        bump_cli_version_floor(project_dir)

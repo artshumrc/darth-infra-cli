@@ -6,6 +6,7 @@ import click
 
 from .helpers import require_config
 from .image_ops import push_images
+from .version_floor import bump_cli_version_floor
 
 
 @click.command()
@@ -23,5 +24,6 @@ from .image_ops import push_images
 )
 def push(env_name: str, service_name: str | None) -> None:
     """Tag and push Docker images to ECR."""
-    config, _ = require_config()
+    config, project_dir = require_config()
     push_images(config, env_name, service_name)
+    bump_cli_version_floor(project_dir)

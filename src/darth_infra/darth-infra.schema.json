@@ -33,6 +33,10 @@
           "description": "Name tag of the existing VPC to deploy into.",
           "default": "artshumrc-prod-standard"
         },
+        "cli_version_floor": {
+          "type": "string",
+          "description": "Minimum darth-infra CLI version allowed to operate on this project."
+        },
         "vpc_id": {
           "type": ["string", "null"],
           "description": "Explicit VPC ID to deploy into. When set, vpc_name lookup is skipped.",

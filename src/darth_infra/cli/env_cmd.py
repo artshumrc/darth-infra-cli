@@ -10,6 +10,7 @@ import click
 
 from .helpers import console, require_config
 from .secret_cmd import _extract_secret_value, _resolve_secret_id
+from .version_floor import bump_cli_version_floor
 
 
 @click.command("env")
@@ -51,4 +52,5 @@ def env_cmd(env_name: str, env_file: str) -> None:
     with dest.open("a") as fh:
         fh.write(block)
 
+    bump_cli_version_floor(project_root)
     console.print(f"[green]Appended {len(entries)} secret(s) to {dest}[/green]")

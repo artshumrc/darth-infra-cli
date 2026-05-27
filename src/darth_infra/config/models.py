@@ -7,6 +7,8 @@ from enum import Enum
 import re
 from string import Formatter
 
+from packaging.version import InvalidVersion, Version
+
 
 class SecretSource(str, Enum):
     """How a secret value is sourced."""
@@ -470,6 +472,7 @@ class ProjectConfig:
         secrets: Additional secrets to inject into containers.
         environment_overrides: Per-environment configuration overrides.
         tags: Additional tags applied to all resources.
+        cli_version_floor: Minimum darth-infra CLI version allowed for this project.
     """
 
     project_name: str
@@ -487,6 +490,7 @@ class ProjectConfig:
     secrets: list[SecretConfig] = field(default_factory=list)
     environment_overrides: dict[str, EnvironmentOverride] = field(default_factory=dict)
     tags: dict[str, str] = field(default_factory=dict)
+    cli_version_floor: str | None = None
     service_discovery: ServiceDiscoveryConfig = field(
         default_factory=ServiceDiscoveryConfig
     )
@@ -497,6 +501,16 @@ class ProjectConfig:
     active_preview: ActivePreviewEnvironment | None = None
 
     def __post_init__(self) -> None:
+        if self.cli_version_floor is not None:
+            if not str(self.cli_version_floor).strip():
+                raise ValueError("project.cli_version_floor must not be empty")
+            try:
+                Version(self.cli_version_floor)
+            except InvalidVersion as exc:
+                raise ValueError(
+                    f"project.cli_version_floor is not a valid version: {self.cli_version_floor}"
+                ) from exc
+
         if "prod" not in self.environments:
             raise ValueError("'prod' must be in the environments list")
         if self.environments[0] != "prod":

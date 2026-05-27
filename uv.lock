@@ -53,12 +53,13 @@ wheels = [
 
 [[package]]
 name = "darth-infra"
-version = "0.6.0"
+version = "0.7.2"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "click" },
     { name = "jinja2" },
+    { name = "packaging" },
     { name = "pytest" },
     { name = "rich" },
     { name = "textual" },
@@ -69,6 +70,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
     { name = "click", specifier = ">=8.1" },
     { name = "jinja2", specifier = ">=3.1" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "rich", specifier = ">=13.0" },
     { name = "textual", specifier = ">=1.0" },

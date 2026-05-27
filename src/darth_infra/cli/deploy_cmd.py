@@ -27,6 +27,7 @@ from .helpers import (
     resolve_environment_config,
 )
 from .image_ops import build_images, push_images, select_internal_services
+from .version_floor import bump_cli_version_floor
 from ..scaffold.generator import generate_project
 
 
@@ -91,6 +92,7 @@ def deploy(
         )
         rc = cancel_stack_update(config, env_name)
         if rc == 0:
+            bump_cli_version_floor(project_dir)
             console.print(f"[green]✓ Cancelled deploy for {env_name}[/green]")
             return
 
@@ -136,6 +138,7 @@ def deploy(
         raise SystemExit(1)
 
     if rc == 0:
+        bump_cli_version_floor(project_dir)
         if no_execute:
             console.print(
                 f"[green]✓ Change set prepared successfully for {env_name}[/green]"

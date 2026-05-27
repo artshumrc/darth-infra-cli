@@ -24,6 +24,7 @@ from .screens.secrets import SecretsScreen
 from .screens.tags import TagsScreen
 from .screens.preview import PreviewScreen
 from .screens.review import ReviewScreen, build_config_from_state
+from ..cli.version_floor import apply_current_cli_version_floor
 
 
 class QuitSaveConfirmScreen(ModalScreen[str]):
@@ -300,7 +301,6 @@ class DarthEcsInitApp(App[None]):
             self.exit()
             return
 
-        candidate_toml = dump_config(candidate)
         current_toml = ""
         if self._config_path.is_file():
             try:
@@ -313,6 +313,9 @@ class DarthEcsInitApp(App[None]):
             except Exception:
                 pass
             current_toml = self._config_path.read_text()
+
+        apply_current_cli_version_floor(candidate)
+        candidate_toml = dump_config(candidate)
 
         if candidate_toml == current_toml:
             self.exit()

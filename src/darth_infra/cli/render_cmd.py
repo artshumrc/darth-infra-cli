@@ -8,6 +8,7 @@ import click
 
 from ..scaffold.generator import generate_project
 from .helpers import console, require_config
+from .version_floor import apply_current_cli_version_floor
 
 
 @click.command("render")
@@ -22,6 +23,7 @@ from .helpers import console, require_config
 def render_cmd(output_dir: Path | None) -> None:
     """Regenerate CloudFormation templates from ``darth-infra.toml``."""
     config, project_dir = require_config()
+    apply_current_cli_version_floor(config)
 
     target_dir = output_dir or project_dir
     result = generate_project(config, target_dir)

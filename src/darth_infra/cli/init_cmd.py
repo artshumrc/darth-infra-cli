@@ -9,6 +9,7 @@ from rich.console import Console
 
 from ..config.loader import find_config, load_config
 from ..tui.wizard_export import project_config_to_wizard_state
+from .version_floor import apply_current_cli_version_floor, enforce_cli_version_floor
 
 console = Console()
 
@@ -47,6 +48,8 @@ def init_cmd(
         if config_path is None:
             raise click.UsageError("--config is required when using --non-interactive")
         config = load_config(config_path)
+        enforce_cli_version_floor(config)
+        apply_current_cli_version_floor(config)
         out = output_dir or Path.cwd()
         result = generate_project(config, out)
         console.print(f"[green]Project scaffolded at {result}[/green]")
@@ -59,6 +62,7 @@ def init_cmd(
     try:
         existing_path = find_config(Path.cwd())
         existing_config = load_config(existing_path)
+        enforce_cli_version_floor(existing_config)
         seed_state = project_config_to_wizard_state(existing_config)
         console.print(f"[dim]Loaded seed values from {existing_path}[/dim]")
     except FileNotFoundError:
@@ -72,6 +76,7 @@ def init_cmd(
         return
 
     config = app.result_config
+    apply_current_cli_version_floor(config)
     out = output_dir or Path.cwd()
     result = generate_project(config, out)
     console.print(f"\n[green]✓ Project scaffolded at {result}[/green]")
