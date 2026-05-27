@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.7.3
+
+### Patch Changes
+
+- [`dc3d4f5`](https://github.com/artshumrc/darth-infra-cli/commit/dc3d4f5b618d081bda629179ebf2c10a34178b45) Thanks [@d-flood](https://github.com/d-flood)! - implement CLI version floor enforcement
+
 ## 0.7.2
 
 ### Patch Changes
