@@ -78,6 +78,19 @@ def test_cloudfront_disabled_rejects_cloudfront_only_fields() -> None:
         )
 
 
+def test_alb_listener_priorities_are_optional() -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[_base_service()],
+        alb=AlbConfig(
+            domain="app.example.com",
+            default_target_service="web",
+        ),
+    )
+
+    assert config.alb.default_listener_priority is None
+
+
 def test_dedicated_mode_origin_https_only_requires_alb_certificate() -> None:
     with pytest.raises(
         ValueError,

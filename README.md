@@ -125,7 +125,7 @@ cloudfront = true
 mode = "shared"
 domain = "myapp.example.com"
 default_target_service = "django"
-default_listener_priority = 100
+# Listener priorities are allocated automatically during deploy.
 
 [cloudfront]
 enabled = true

@@ -7,12 +7,16 @@ import pytest
 from darth_infra.cli.cfn import (
     ResolvedLookupData,
     _build_parameters,
+    _resolve_listener_priorities,
     _resolve_rds_snapshot,
 )
 from darth_infra.cli.helpers import resolve_environment_config
 from darth_infra.config.loader import dump_config, load_config
 from darth_infra.config.models import (
     ActivePreviewEnvironment,
+    AlbConfig,
+    AlbMode,
+    AlbPathRule,
     EnvironmentOverride,
     PreviewEnvironmentsConfig,
     ProjectConfig,
@@ -70,6 +74,23 @@ def _lookups() -> ResolvedLookupData:
         external_secret_arns={},
         existing_service_discovery_namespace_id="",
     )
+
+
+class _RulePaginator:
+    def __init__(self, rules: list[dict[str, object]]) -> None:
+        self.rules = rules
+
+    def paginate(self, **_: object) -> list[dict[str, object]]:
+        return [{"Rules": self.rules}]
+
+
+class _FakeElbv2Rules:
+    def __init__(self, rules: list[dict[str, object]] | None = None) -> None:
+        self.rules = rules or []
+
+    def get_paginator(self, name: str) -> _RulePaginator:
+        assert name == "describe_rules"
+        return _RulePaginator(self.rules)
 
 
 def test_preview_config_load_and_dump_roundtrip(tmp_path: Path) -> None:
@@ -170,8 +191,127 @@ def test_preview_build_parameters_include_dns_and_tags() -> None:
     assert params["ClusterDomain"] == "pr-123.bta.darthcrimson.org"
     assert params["HostedZoneId"] == "ZHOSTED123"
     assert params["SharedAlbCanonicalHostedZoneId"] == "ZALB123"
+    assert params["DefaultListenerPriority"] == "30000"
     assert params["ExtraTagEphemeralCleanupId"] == "demo-pr-123"
     assert params["ExtraTagHuitAssetid"] == ""
+
+
+def test_listener_priority_resolution_allocates_preview_range(monkeypatch) -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        alb=AlbConfig(
+            mode=AlbMode.SHARED,
+            shared_alb_name="shared-alb",
+            domain="pr-123.example.com",
+            default_target_service="web",
+            path_rules=[
+                AlbPathRule(
+                    name="api",
+                    path_pattern="/api/*",
+                    target_service="web",
+                )
+            ],
+        ),
+        preview_environments=PreviewEnvironmentsConfig(
+            enabled=True,
+            base_environment="prod",
+            listener_priority_start=30000,
+            listener_priority_end=30005,
+        ),
+    )
+    config.active_preview = ActivePreviewEnvironment(
+        env_name="pr-123",
+        base_environment="prod",
+        number="123",
+        domain="pr-123.example.com",
+        hosted_zone_name=None,
+        tags={},
+    )
+    monkeypatch.setattr(
+        "darth_infra.cli.cfn._resolve_stack_owned_listener_rule_priorities_by_label",
+        lambda *_: {},
+    )
+
+    default_priority, path_priorities = _resolve_listener_priorities(
+        config,
+        "pr-123",
+        _FakeElbv2Rules(
+            [
+                {"Priority": "30000"},
+                {"Priority": "30002"},
+            ]
+        ),
+        "listener-arn",
+    )
+
+    assert default_priority == 30001
+    assert path_priorities == {"api": 30003}
+
+
+def test_listener_priority_resolution_reuses_stack_owned_by_rule(monkeypatch) -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        alb=AlbConfig(
+            mode=AlbMode.SHARED,
+            shared_alb_name="shared-alb",
+            domain="app.example.com",
+            default_target_service="web",
+            path_rules=[
+                AlbPathRule(
+                    name="api",
+                    path_pattern="/api/*",
+                    target_service="web",
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "darth_infra.cli.cfn._resolve_stack_owned_listener_rule_priorities_by_label",
+        lambda *_: {"default": 101, "api": 102},
+    )
+
+    default_priority, path_priorities = _resolve_listener_priorities(
+        config,
+        "prod",
+        _FakeElbv2Rules([{"Priority": "101"}, {"Priority": "102"}]),
+        "listener-arn",
+    )
+
+    assert default_priority == 101
+    assert path_priorities == {"api": 102}
+
+
+def test_listener_priority_resolution_rejects_configured_duplicates() -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        alb=AlbConfig(
+            mode=AlbMode.SHARED,
+            shared_alb_name="shared-alb",
+            domain="pr-123.example.com",
+            default_target_service="web",
+            default_listener_priority=100,
+            path_rules=[
+                AlbPathRule(
+                    name="api",
+                    path_pattern="/api/*",
+                    target_service="web",
+                    priority=30000,
+                )
+            ],
+        ),
+    )
+    config.alb.default_listener_priority = 30000
+
+    with pytest.raises(RuntimeError, match="Duplicate configured ALB listener priorities"):
+        _resolve_listener_priorities(
+            config,
+            "pr-123",
+            _FakeElbv2Rules(),
+            "listener-arn",
+        )
 
 
 def test_tui_roundtrips_preview_config() -> None:

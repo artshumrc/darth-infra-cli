@@ -237,13 +237,21 @@ def _parse_alb(raw: dict[str, Any]) -> AlbConfig:
         certificate_arn=raw.get("certificate_arn"),
         domain=raw.get("domain"),
         default_target_service=raw.get("default_target_service"),
-        default_listener_priority=raw.get("default_listener_priority"),
+        default_listener_priority=(
+            int(raw["default_listener_priority"])
+            if raw.get("default_listener_priority") not in {None, ""}
+            else None
+        ),
         path_rules=[
             AlbPathRule(
                 name=str(rule["name"]),
                 path_pattern=str(rule["path_pattern"]),
                 target_service=str(rule["target_service"]),
-                priority=int(rule["priority"]),
+                priority=(
+                    int(rule["priority"])
+                    if rule.get("priority") not in {None, ""}
+                    else None
+                ),
             )
             for rule in raw.get("path_rules", [])
         ],
@@ -522,7 +530,8 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f'name = "{rule.name}"')
         lines.append(f'path_pattern = "{rule.path_pattern}"')
         lines.append(f'target_service = "{rule.target_service}"')
-        lines.append(f"priority = {rule.priority}")
+        if rule.priority is not None:
+            lines.append(f"priority = {rule.priority}")
     lines.append("")
 
     cloudfront = config.cloudfront

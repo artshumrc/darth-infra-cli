@@ -658,7 +658,7 @@
         },
         "default_listener_priority": {
           "type": ["integer", "null"],
-          "description": "Listener rule priority for the default host-header rule.",
+          "description": "Optional preferred listener rule priority for the default host-header rule. When omitted, darth-infra allocates one during deploy.",
           "default": null,
           "minimum": 1,
           "maximum": 50000
@@ -669,7 +669,7 @@
           "default": [],
           "items": {
             "type": "object",
-            "required": ["name", "path_pattern", "target_service", "priority"],
+            "required": ["name", "path_pattern", "target_service"],
             "additionalProperties": false,
             "properties": {
               "name": {
@@ -685,8 +685,9 @@
                 "description": "Service name that receives requests for this path."
               },
               "priority": {
-                "type": "integer",
-                "description": "Listener rule priority.",
+                "type": ["integer", "null"],
+                "description": "Optional preferred listener rule priority. When omitted, darth-infra allocates one during deploy.",
+                "default": null,
                 "minimum": 1,
                 "maximum": 50000
               }

@@ -83,71 +83,6 @@ class DeployMonitorState:
     fatal_ecs_messages: list[str]
 
 
-def prepare_preview_deploy_config(config: ProjectConfig, env_name: str) -> None:
-    """Apply AWS-dependent dynamic preview values before template rendering."""
-    if not config.active_preview or config.active_preview.env_name != env_name:
-        return
-
-    preview = config.preview_environments
-    if (
-        config.alb.mode.value != "shared"
-        or preview.listener_priority_start is None
-        or preview.listener_priority_end is None
-        or not config.alb.domain
-    ):
-        return
-
-    elbv2 = boto3.client("elbv2", region_name=config.aws_region)
-    listener_arn, _, _, _ = _resolve_shared_alb(config, elbv2)
-    config.alb.default_listener_priority = _select_preview_listener_priority(
-        config,
-        env_name,
-        listener_arn,
-        elbv2,
-        int(preview.listener_priority_start),
-        int(preview.listener_priority_end),
-    )
-
-
-def _select_preview_listener_priority(
-    config: ProjectConfig,
-    env_name: str,
-    listener_arn: str,
-    elbv2,
-    start: int,
-    end: int,
-) -> int:
-    stack_owned = sorted(
-        p
-        for p in _resolve_stack_owned_listener_rule_priorities(
-            config, env_name, listener_arn, elbv2
-        )
-        if start <= p <= end
-    )
-    if stack_owned:
-        return stack_owned[0]
-
-    existing: set[int] = set()
-    paginator = elbv2.get_paginator("describe_rules")
-    for page in paginator.paginate(ListenerArn=listener_arn):
-        for rule in page.get("Rules", []):
-            priority = rule.get("Priority")
-            if not priority or priority == "default":
-                continue
-            try:
-                existing.add(int(priority))
-            except ValueError:
-                continue
-
-    for priority in range(start, end + 1):
-        if priority not in existing:
-            return priority
-
-    raise RuntimeError(
-        f"No available ALB listener priorities in preview range {start}-{end}"
-    )
-
-
 def resolve_lookup_data(config: ProjectConfig, env_name: str) -> ResolvedLookupData:
     ec2 = boto3.client("ec2", region_name=config.aws_region)
     elbv2 = boto3.client("elbv2", region_name=config.aws_region)
@@ -653,7 +588,9 @@ def deploy_changeset(
         )
         return 0
 
-    if change_set_type == "CREATE" and config.active_preview:
+    if config.active_preview and (
+        change_set_type == "CREATE" or existing_status == "CREATE_FAILED"
+    ):
         execute_kwargs["DisableRollback"] = True
 
     cf.execute_change_set(**execute_kwargs)
@@ -2528,55 +2465,93 @@ def _resolve_listener_priorities(
     if not config.alb.domain:
         return None, {}
 
-    if config.alb.default_listener_priority is None:
+    desired_priority_items = [
+        ("default", config.alb.default_listener_priority),
+        *((rule.name, rule.priority) for rule in config.alb.path_rules),
+    ]
+    seen_desired: dict[int, str] = {}
+    duplicate_desired: list[str] = []
+    for label, priority in desired_priority_items:
+        if priority is None:
+            continue
+        previous_label = seen_desired.get(priority)
+        if previous_label is not None:
+            duplicate_desired.append(f"{priority} ({previous_label}, {label})")
+            continue
+        seen_desired[priority] = label
+    if duplicate_desired:
         raise RuntimeError(
-            "alb.default_listener_priority is required when alb.domain is configured"
+            "Duplicate configured ALB listener priorities: "
+            f"{', '.join(duplicate_desired)}. "
+            "Remove the explicit priorities or choose unique values."
         )
-    desired_priorities = {
-        "default": config.alb.default_listener_priority,
-        **{rule.name: rule.priority for rule in config.alb.path_rules},
-    }
-
-    if config.alb.mode.value != "shared":
-        return config.alb.default_listener_priority, {
-            rule.name: rule.priority for rule in config.alb.path_rules
-        }
-
-    if _stack_exists_for_env(config, env_name):
-        return config.alb.default_listener_priority, {
-            rule.name: rule.priority for rule in config.alb.path_rules
-        }
 
     existing: set[int] = set()
-    paginator = elbv2.get_paginator("describe_rules")
-    for page in paginator.paginate(ListenerArn=listener_arn):
-        for rule in page.get("Rules", []):
-            p = rule.get("Priority")
-            if p and p != "default":
-                try:
-                    existing.add(int(p))
-                except ValueError:
-                    continue
+    if config.alb.mode.value == "shared" and listener_arn:
+        paginator = elbv2.get_paginator("describe_rules")
+        for page in paginator.paginate(ListenerArn=listener_arn):
+            for rule in page.get("Rules", []):
+                p = rule.get("Priority")
+                if p and p != "default":
+                    try:
+                        existing.add(int(p))
+                    except ValueError:
+                        continue
 
-    stack_owned = _resolve_stack_owned_listener_rule_priorities(
+    stack_owned_by_label = _resolve_stack_owned_listener_rule_priorities_by_label(
         config, env_name, listener_arn, elbv2
     )
+    stack_owned = set(stack_owned_by_label.values())
+    unavailable = set(existing) - stack_owned
+    start, end = _listener_priority_bounds(config)
+    resolved: dict[str, int] = {}
+    allocated = set(unavailable)
 
-    conflicts = sorted(
-        priority
-        for priority in desired_priorities.values()
-        if priority in existing and priority not in stack_owned
-    )
-    if conflicts:
-        raise RuntimeError(
-            "ALB listener rule priorities already in use on shared listener: "
-            f"{', '.join(str(p) for p in conflicts)}. "
-            "Choose different priorities (use the TUI 'Get next available priority' button)."
-        )
+    for label, requested_priority in desired_priority_items:
+        owned_priority = stack_owned_by_label.get(label)
+        if owned_priority is not None and 1 <= owned_priority <= 50000:
+            if owned_priority not in resolved.values():
+                resolved[label] = owned_priority
+                allocated.add(owned_priority)
+                continue
 
-    return config.alb.default_listener_priority, {
-        rule.name: rule.priority for rule in config.alb.path_rules
+        if (
+            requested_priority is not None
+            and start <= requested_priority <= end
+            and requested_priority not in allocated
+        ):
+            resolved[label] = requested_priority
+            allocated.add(requested_priority)
+            continue
+
+        resolved[label] = _next_available_listener_priority(allocated, start, end)
+        allocated.add(resolved[label])
+
+    return resolved.get("default"), {
+        rule.name: resolved[rule.name] for rule in config.alb.path_rules
     }
+
+
+def _listener_priority_bounds(config: ProjectConfig) -> tuple[int, int]:
+    preview = config.preview_environments
+    if (
+        config.active_preview
+        and preview.listener_priority_start is not None
+        and preview.listener_priority_end is not None
+    ):
+        return int(preview.listener_priority_start), int(preview.listener_priority_end)
+    return 1, 50000
+
+
+def _next_available_listener_priority(
+    unavailable: set[int],
+    start: int,
+    end: int,
+) -> int:
+    for priority in range(start, end + 1):
+        if priority not in unavailable:
+            return priority
+    raise RuntimeError(f"No available ALB listener priorities in range {start}-{end}")
 
 
 def _resolve_stack_owned_listener_rule_priorities(
@@ -2585,13 +2560,34 @@ def _resolve_stack_owned_listener_rule_priorities(
     listener_arn: str,
     elbv2,
 ) -> set[int]:
+    return set(
+        _resolve_stack_owned_listener_rule_priorities_by_label(
+            config, env_name, listener_arn, elbv2
+        ).values()
+    )
+
+
+def _resolve_stack_owned_listener_rule_priorities_by_label(
+    config: ProjectConfig,
+    env_name: str,
+    listener_arn: str,
+    elbv2,
+) -> dict[str, int]:
     stack_name = f"{config.project_name}-ecs-{env_name}"
     cf = boto3.client("cloudformation", region_name=config.aws_region)
+    rule_resources = _list_listener_rule_resources_for_stack(cf, stack_name)
+    path_rule_labels_by_logical_id = {
+        f"PathRule{_pascalize(rule.name)}": rule.name for rule in config.alb.path_rules
+    }
 
-    rule_arns = _list_listener_rule_arns_for_stack(cf, stack_name)
-
-    priorities: set[int] = set()
-    for rule_arn in rule_arns:
+    priorities: dict[str, int] = {}
+    for logical_id, rule_arn in rule_resources:
+        if logical_id == "DefaultHostHeaderRule":
+            label = "default"
+        else:
+            label = path_rule_labels_by_logical_id.get(logical_id)
+        if not label:
+            continue
         try:
             response = elbv2.describe_rules(RuleArns=[rule_arn])
         except ClientError:
@@ -2600,13 +2596,16 @@ def _resolve_stack_owned_listener_rule_priorities(
             continue
 
         for rule in response.get("Rules", []):
-            if str(rule.get("ListenerArn", "")).strip() != listener_arn:
+            if (
+                listener_arn
+                and str(rule.get("ListenerArn", "")).strip() != listener_arn
+            ):
                 continue
             priority = rule.get("Priority")
             if not priority or priority == "default":
                 continue
             try:
-                priorities.add(int(priority))
+                priorities[label] = int(priority)
             except ValueError:
                 continue
 
@@ -2618,6 +2617,19 @@ def _list_listener_rule_arns_for_stack(
     stack_name: str,
     visited: set[str] | None = None,
 ) -> list[str]:
+    return [
+        physical_id
+        for _, physical_id in _list_listener_rule_resources_for_stack(
+            cf, stack_name, visited
+        )
+    ]
+
+
+def _list_listener_rule_resources_for_stack(
+    cf,
+    stack_name: str,
+    visited: set[str] | None = None,
+) -> list[tuple[str, str]]:
     if visited is None:
         visited = set()
     if stack_name in visited:
@@ -2635,24 +2647,25 @@ def _list_listener_rule_arns_for_stack(
     except Exception:
         return []
 
-    listener_rule_arns: list[str] = []
+    listener_rule_resources: list[tuple[str, str]] = []
     nested_stacks: list[str] = []
     for summary in stack_resources:
+        logical_id = str(summary.get("LogicalResourceId", "")).strip()
         resource_type = str(summary.get("ResourceType", "")).strip()
         physical_id = str(summary.get("PhysicalResourceId", "")).strip()
         if not physical_id:
             continue
         if resource_type == "AWS::ElasticLoadBalancingV2::ListenerRule":
-            listener_rule_arns.append(physical_id)
+            listener_rule_resources.append((logical_id, physical_id))
         elif resource_type == "AWS::CloudFormation::Stack":
             nested_stacks.append(physical_id)
 
     for nested_stack_id in nested_stacks:
-        listener_rule_arns.extend(
-            _list_listener_rule_arns_for_stack(cf, nested_stack_id, visited)
+        listener_rule_resources.extend(
+            _list_listener_rule_resources_for_stack(cf, nested_stack_id, visited)
         )
 
-    return listener_rule_arns
+    return listener_rule_resources
 
 
 def _list_stack_resource_summaries(cf, stack_name: str) -> list[dict[str, Any]]:
@@ -2661,20 +2674,6 @@ def _list_stack_resource_summaries(cf, stack_name: str) -> list[dict[str, Any]]:
     for page in paginator.paginate(StackName=stack_name):
         summaries.extend(page.get("StackResourceSummaries", []))
     return summaries
-
-
-def _stack_exists_for_env(config: ProjectConfig, env_name: str) -> bool:
-    stack_name = f"{config.project_name}-ecs-{env_name}"
-    cf = boto3.client("cloudformation", region_name=config.aws_region)
-    try:
-        cf.describe_stacks(StackName=stack_name)
-        return True
-    except ClientError as exc:
-        code = str(exc.response.get("Error", {}).get("Code", ""))
-        message = str(exc.response.get("Error", {}).get("Message", ""))
-        if code == "ValidationError" and "does not exist" in message:
-            return False
-        raise
 
 
 def _get_existing_stack_parameter(
@@ -2931,6 +2930,23 @@ def _build_parameters(
             "ParameterValue": cluster_domain or "",
         }
     )
+    if lookups.default_listener_priority is not None:
+        params.append(
+            {
+                "ParameterKey": "DefaultListenerPriority",
+                "ParameterValue": str(lookups.default_listener_priority),
+            }
+        )
+    for rule in config.alb.path_rules:
+        priority = lookups.path_rule_priorities.get(rule.name)
+        if priority is None:
+            continue
+        params.append(
+            {
+                "ParameterKey": f"PathRulePriority{_pascalize(rule.name)}",
+                "ParameterValue": str(priority),
+            }
+        )
     params.extend(
         {
             "ParameterKey": tag_parameter.parameter_name,

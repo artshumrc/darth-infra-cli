@@ -13,7 +13,6 @@ from .cfn import (
     deploy_changeset,
     ensure_artifact_bucket,
     package_template,
-    prepare_preview_deploy_config,
     resolve_lookup_data,
     run_seed_copy_tasks,
     validate_rendered_deploy_templates,
@@ -111,8 +110,6 @@ def deploy(
     )
 
     try:
-        prepare_preview_deploy_config(config, env_name)
-
         if with_images:
             _prepare_images_for_deploy(config, project_dir, env_name)
 

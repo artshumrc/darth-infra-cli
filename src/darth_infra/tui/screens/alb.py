@@ -72,8 +72,8 @@ class AlbScreen(Screen):
                     prompt="Select service",
                     allow_blank=True,
                 )
-                yield Label("Default rule priority:", classes="section-label")
-                yield Input(placeholder="100", id="default_listener_priority")
+                yield Label("Default rule priority (optional):", classes="section-label")
+                yield Input(placeholder="auto", id="default_listener_priority")
                 yield Button(
                     "Get Next Available Priority",
                     id="fetch_next_priority_default",
@@ -92,8 +92,8 @@ class AlbScreen(Screen):
                     prompt="Select service",
                     allow_blank=True,
                 )
-                yield Label("Priority:", classes="section-label")
-                yield Input(placeholder="101", id="path_rule_priority")
+                yield Label("Priority (optional):", classes="section-label")
+                yield Input(placeholder="auto", id="path_rule_priority")
                 with Vertical(classes="button-row"):
                     yield Button(
                         "+ Add / Update Rule", id="path_rule_add", variant="success"
@@ -359,11 +359,12 @@ class AlbScreen(Screen):
         lv = self.query_one("#path-rule-list", ListView)
         lv.clear()
         for rule in self._path_rules:
+            priority = rule.get("priority") or "auto"
             lv.append(
                 ListItem(
                     Static(
                         f"{rule['name']}: {rule['path_pattern']} -> "
-                        f"{rule['target_service']} ({rule['priority']})",
+                        f"{rule['target_service']} ({priority})",
                         markup=False,
                     )
                 )
@@ -663,25 +664,20 @@ class AlbScreen(Screen):
                     severity="error",
                 )
                 return False
-            if not default_priority_raw:
-                self.notify(
-                    "Default listener priority is required when cluster domain is set",
-                    severity="error",
-                )
-                return False
-            try:
-                default_priority = int(default_priority_raw)
-            except ValueError:
-                self.notify(
-                    "Default listener priority must be an integer", severity="error"
-                )
-                return False
-            if default_priority < 1 or default_priority > 50000:
-                self.notify(
-                    "Default listener priority must be between 1 and 50000",
-                    severity="error",
-                )
-                return False
+            if default_priority_raw:
+                try:
+                    default_priority = int(default_priority_raw)
+                except ValueError:
+                    self.notify(
+                        "Default listener priority must be an integer", severity="error"
+                    )
+                    return False
+                if default_priority < 1 or default_priority > 50000:
+                    self.notify(
+                        "Default listener priority must be between 1 and 50000",
+                        severity="error",
+                    )
+                    return False
         else:
             if target or default_priority_raw or self._path_rules:
                 self.notify(
@@ -691,7 +687,9 @@ class AlbScreen(Screen):
                 return False
             return True
 
-        priorities = {int(default_priority_raw)}
+        priorities = set()
+        if default_priority_raw:
+            priorities.add(int(default_priority_raw))
         names: set[str] = set()
         for rule in self._path_rules:
             name = str(rule.get("name", "")).strip()
@@ -702,26 +700,27 @@ class AlbScreen(Screen):
                 self.notify(f"Duplicate path rule name '{name}'", severity="error")
                 return False
             names.add(name)
-            try:
-                priority = int(rule.get("priority", 0))
-            except (TypeError, ValueError):
-                self.notify(
-                    f"Path rule '{name}' has an invalid priority", severity="error"
-                )
-                return False
-            if priority < 1 or priority > 50000:
-                self.notify(
-                    f"Path rule '{name}' priority must be between 1 and 50000",
-                    severity="error",
-                )
-                return False
-            if priority in priorities:
-                self.notify(
-                    f"Duplicate listener priority '{priority}' in routing rules",
-                    severity="error",
-                )
-                return False
-            priorities.add(priority)
+            if rule.get("priority") not in {None, ""}:
+                try:
+                    priority = int(rule.get("priority", 0))
+                except (TypeError, ValueError):
+                    self.notify(
+                        f"Path rule '{name}' has an invalid priority", severity="error"
+                    )
+                    return False
+                if priority < 1 or priority > 50000:
+                    self.notify(
+                        f"Path rule '{name}' priority must be between 1 and 50000",
+                        severity="error",
+                    )
+                    return False
+                if priority in priorities:
+                    self.notify(
+                        f"Duplicate listener priority '{priority}' in routing rules",
+                        severity="error",
+                    )
+                    return False
+                priorities.add(priority)
         return self._validate_cloudfront()
 
     def _validate_cloudfront(self) -> bool:
@@ -914,8 +913,8 @@ class AlbScreen(Screen):
             self.query_one("#path_rule_pattern", Input).value = rule.get(
                 "path_pattern", ""
             )
-            self.query_one("#path_rule_priority", Input).value = str(
-                rule.get("priority", "")
+            self.query_one("#path_rule_priority", Input).value = (
+                str(rule.get("priority")) if rule.get("priority") is not None else ""
             )
             target = rule.get("target_service")
             if target:
@@ -1029,17 +1028,22 @@ class AlbScreen(Screen):
             str(target_raw).strip() if not self._is_select_empty(target_raw) else ""
         )
         priority_raw = self.query_one("#path_rule_priority", Input).value.strip()
-        if not name or not path_pattern or not target or not priority_raw:
+        if not name or not path_pattern or not target:
             self.notify(
-                "Rule name, path pattern, target service, and priority are required",
+                "Rule name, path pattern, and target service are required",
                 severity="error",
             )
             return
-        try:
-            priority = int(priority_raw)
-        except ValueError:
-            self.notify("Priority must be an integer", severity="error")
-            return
+        priority = None
+        if priority_raw:
+            try:
+                priority = int(priority_raw)
+            except ValueError:
+                self.notify("Priority must be an integer", severity="error")
+                return
+            if priority < 1 or priority > 50000:
+                self.notify("Priority must be between 1 and 50000", severity="error")
+                return
         rule = {
             "name": name,
             "path_pattern": path_pattern,

@@ -38,6 +38,14 @@ Parameters:
     Type: String
   AlbSecurityGroupId:
     Type: String
+{% if is_default_listener_target %}
+  DefaultListenerPriority:
+    Type: Number
+{% endif %}
+{% for rule in service_path_rules %}
+  {{ rule.priority_param_name }}:
+    Type: Number
+{% endfor %}
 {% for tag in tag_parameters %}
   {{ tag.parameter_name }}:
     Type: String
@@ -561,7 +569,7 @@ Resources:
 {% endif %}
 {% endfor %}
       ListenerArn: !Ref AlbListenerArn
-      Priority: {{ default_listener_priority }}
+      Priority: !Ref DefaultListenerPriority
 
 {% endif %}
 {% for rule in service_path_rules %}
@@ -586,7 +594,7 @@ Resources:
           PathPatternConfig:
             Values: ['{{ rule.path_pattern }}']
       ListenerArn: !Ref AlbListenerArn
-      Priority: {{ rule.priority }}
+      Priority: !Ref {{ rule.priority_param_name }}
 
 {% endfor %}
 {% endif %}

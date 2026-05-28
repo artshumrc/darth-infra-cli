@@ -479,11 +479,12 @@ class ServicesScreen(Screen):
         lv = self.query_one("#path-rule-list", ListView)
         lv.clear()
         for rule in self._path_rules:
+            priority = rule.get("priority") or "auto"
             lv.append(
                 ListItem(
                     Static(
                         f"{rule['name']}: {rule['path_pattern']} -> "
-                        f"{rule['target_service']} ({rule['priority']})"
+                        f"{rule['target_service']} ({priority})"
                     )
                 )
             )
@@ -1108,20 +1109,22 @@ class ServicesScreen(Screen):
         )
         priority_raw = self.query_one("#path_rule_priority", Input).value.strip()
 
-        if not name or not path_pattern or not target or not priority_raw:
+        if not name or not path_pattern or not target:
             self.notify(
-                "Rule name, path pattern, target service, and priority are required",
+                "Rule name, path pattern, and target service are required",
                 severity="error",
             )
             return
-        try:
-            priority = int(priority_raw)
-        except ValueError:
-            self.notify("Priority must be an integer", severity="error")
-            return
-        if priority < 1 or priority > 50000:
-            self.notify("Priority must be between 1 and 50000", severity="error")
-            return
+        priority = None
+        if priority_raw:
+            try:
+                priority = int(priority_raw)
+            except ValueError:
+                self.notify("Priority must be an integer", severity="error")
+                return
+            if priority < 1 or priority > 50000:
+                self.notify("Priority must be between 1 and 50000", severity="error")
+                return
 
         rule = {
             "name": name,

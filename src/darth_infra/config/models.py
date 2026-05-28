@@ -297,7 +297,7 @@ class AlbPathRule:
     name: str
     path_pattern: str
     target_service: str
-    priority: int
+    priority: int | None = None
 
 
 @dataclass
@@ -838,11 +838,6 @@ class ProjectConfig:
                     f"alb.default_target_service '{self.alb.default_target_service}' "
                     "must target a service with a container port"
                 )
-            if self.alb.default_listener_priority is None:
-                raise ValueError(
-                    "alb.default_listener_priority is required when alb.domain is set"
-                )
-
         if self.alb.default_listener_priority is not None and not (
             1 <= self.alb.default_listener_priority <= 50000
         ):
@@ -877,6 +872,8 @@ class ProjectConfig:
                     f"alb.path_rules '{rule.name}' target '{rule.target_service}' "
                     "must have a container port"
                 )
+            if rule.priority is None:
+                continue
             if not (1 <= rule.priority <= 50000):
                 raise ValueError(
                     f"alb.path_rules '{rule.name}' priority must be between 1 and 50000"

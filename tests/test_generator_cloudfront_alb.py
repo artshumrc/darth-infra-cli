@@ -5,6 +5,7 @@ from pathlib import Path
 from darth_infra.config.models import (
     AlbConfig,
     AlbMode,
+    AlbPathRule,
     CloudFrontCachedBehavior,
     CloudFrontConfig,
     EnvironmentOverride,
@@ -198,6 +199,37 @@ def test_listener_rules_do_not_emit_unsupported_tags(tmp_path: Path) -> None:
 
     assert "Type: AWS::ElasticLoadBalancingV2::ListenerRule" in rule_block
     assert "Tags:" not in rule_block
+
+
+def test_listener_rule_priorities_are_parameterized(tmp_path: Path) -> None:
+    output_dir = generate_project(
+        ProjectConfig(
+            project_name="demo",
+            services=[ServiceConfig(name="web", port=8000)],
+            alb=AlbConfig(
+                domain="app.example.com",
+                default_target_service="web",
+                path_rules=[
+                    AlbPathRule(
+                        name="api",
+                        path_pattern="/api/*",
+                        target_service="web",
+                    )
+                ],
+            ),
+        ),
+        tmp_path / "out",
+    )
+
+    root = _read(output_dir, "templates/generated/root.yaml")
+    service = _read(output_dir, "templates/generated/services/web.yaml")
+
+    assert "DefaultListenerPriority:" in root
+    assert "PathRulePriorityApi:" in root
+    assert "DefaultListenerPriority: !Ref DefaultListenerPriority" in root
+    assert "PathRulePriorityApi: !Ref PathRulePriorityApi" in root
+    assert "Priority: !Ref DefaultListenerPriority" in service
+    assert "Priority: !Ref PathRulePriorityApi" in service
 
 
 def test_rds_deletion_policy_snapshots_only_prod(tmp_path: Path) -> None:

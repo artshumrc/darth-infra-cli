@@ -48,6 +48,14 @@ Parameters:
   ClusterDomain:
     Type: String
     Default: '{{ alb.domain or "" }}'
+{% if has_cluster_routing %}
+  DefaultListenerPriority:
+    Type: Number
+{% for rule in alb_path_rules_ctx %}
+  {{ rule.priority_param_name }}:
+    Type: Number
+{% endfor %}
+{% endif %}
 {% for tag in tag_parameters %}
   {{ tag.parameter_name }}:
     Type: String
@@ -530,6 +538,12 @@ Resources:
         ClusterDomain: !Ref ClusterDomain
         AlbListenerArn: !If [UseDedicatedAlb, !If [UseDedicatedAlbWithCert, !Ref DedicatedAlbHttpsListener, !Ref DedicatedAlbHttpListener], !Ref SharedAlbListenerArn]
         AlbSecurityGroupId: !If [UseDedicatedAlb, !Ref DedicatedAlbSecurityGroup, !Ref SharedAlbSecurityGroupId]
+{% if svc_ctx.is_default_listener_target %}
+        DefaultListenerPriority: !Ref DefaultListenerPriority
+{% endif %}
+{% for rule in svc_ctx.service_path_rules %}
+        {{ rule.priority_param_name }}: !Ref {{ rule.priority_param_name }}
+{% endfor %}
       {% for tag in tag_parameters %}
         {{ tag.parameter_name }}: !Ref {{ tag.parameter_name }}
       {% endfor %}

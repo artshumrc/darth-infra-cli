@@ -392,17 +392,21 @@ def _build_context(config: ProjectConfig) -> dict:
         )
 
     path_rules_by_service: dict[str, list[dict[str, object]]] = {}
+    alb_path_rules_ctx: list[dict[str, object]] = []
     for rule in config.alb.path_rules:
         target_ctx = alb_target_services.get(rule.target_service)
         if not target_ctx:
             continue
+        rule_ctx = {
+            "name": rule.name,
+            "name_pascal": _pascalize(rule.name),
+            "path_pattern": rule.path_pattern,
+            "priority": rule.priority,
+            "priority_param_name": f"PathRulePriority{_pascalize(rule.name)}",
+        }
+        alb_path_rules_ctx.append(rule_ctx)
         path_rules_by_service.setdefault(rule.target_service, []).append(
-            {
-                "name": rule.name,
-                "name_pascal": _pascalize(rule.name),
-                "path_pattern": rule.path_pattern,
-                "priority": rule.priority,
-            }
+            rule_ctx
         )
     for svc_ctx in services_ctx:
         svc_name = str(svc_ctx["name"])
@@ -420,6 +424,7 @@ def _build_context(config: ProjectConfig) -> dict:
                 listener_hostnames.append({"is_ref": False, "value": cf_custom_domain})
 
         svc_ctx["default_listener_priority"] = config.alb.default_listener_priority
+        svc_ctx["default_listener_priority_param_name"] = "DefaultListenerPriority"
         svc_ctx["is_default_listener_target"] = is_default_listener_target
         svc_ctx["service_path_rules"] = svc_path_rules
         svc_ctx["listener_hostnames"] = listener_hostnames
@@ -444,6 +449,11 @@ def _build_context(config: ProjectConfig) -> dict:
             b.cloudfront and b.mode.value != "existing" for b in config.s3_buckets
         ),
         "has_alb_cloudfront": config.cloudfront.enabled,
+        "has_cluster_routing": bool(
+            config.alb.domain
+            and (config.alb.default_target_service or config.alb.path_rules)
+        ),
+        "alb_path_rules_ctx": alb_path_rules_ctx,
         "alb_cloudfront": {
             "origin_https_only": config.cloudfront.origin_https_only,
             "custom_domain": config.cloudfront.custom_domain,

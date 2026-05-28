@@ -183,7 +183,11 @@ def build_config_from_state(state: dict) -> ProjectConfig:
                 name=rule["name"],
                 path_pattern=rule["path_pattern"],
                 target_service=rule["target_service"],
-                priority=int(rule["priority"]),
+                priority=(
+                    int(rule["priority"])
+                    if rule.get("priority") not in {None, ""}
+                    else None
+                ),
             )
             for rule in s.get("alb_path_rules", [])
         ],
@@ -503,14 +507,14 @@ class ReviewScreen(Screen):
         lines.append(f"  Cluster domain: {s.get('alb_domain') or '(none)'}")
         lines.append(f"  Default target: {s.get('default_target_service') or '(none)'}")
         lines.append(
-            f"  Default priority: {s.get('default_listener_priority') or '(none)'}"
+            f"  Default priority: {s.get('default_listener_priority') or '(auto)'}"
         )
         if s.get("alb_path_rules"):
             lines.append("  Path rules:")
             for rule in s.get("alb_path_rules", []):
                 lines.append(
                     f"    - {rule.get('name')}: {rule.get('path_pattern')} -> "
-                    f"{rule.get('target_service')} ({rule.get('priority')})"
+                    f"{rule.get('target_service')} ({rule.get('priority') or 'auto'})"
                 )
         if s.get("alb_mode", "shared") == "shared":
             lines.append(f"  Name: {s.get('shared_alb_name') or '(auto)'}")
