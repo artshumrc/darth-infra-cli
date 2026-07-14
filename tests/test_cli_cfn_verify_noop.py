@@ -1,93 +1,84 @@
-"""Unit tests for the ``--verify-noop`` release gate (mocked boto3).
+"""Unit tests for the structural ``--verify-noop`` release gate (mocked boto3).
 
-These exercise ``deploy_changeset(..., verify_noop=True)`` — the same code path
+These exercise ``verify_noop_structural`` — the same code path
 ``darth-infra deploy --verify-noop`` runs — against hand-rolled fake
-CloudFormation clients. The real-stack acceptance criteria in ticket 11 require
-AWS credentials and are left to the release manager; these tests prove the
-decision logic and change-set cleanup.
+CloudFormation clients and a stubbed template builder. The real-stack
+acceptance criteria in ticket 11 require AWS credentials and are validated
+against live stacks; these tests prove the comparison logic: parameter
+resolution, condition evaluation, nested-stack recursion, and the GetAtt
+fallback that avoids false positives on stable cross-references.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from darth_infra.cli.cfn import ResolvedLookupData, deploy_changeset
+from darth_infra.cli import cfn
+from darth_infra.cli.cfn import ResolvedLookupData, verify_noop_structural
 from darth_infra.config.models import ProjectConfig, ServiceConfig
 
 
-class _ListResourcesPaginator:
-    def paginate(self, **_: object) -> list[dict[str, object]]:
+class _Template:
+    def __init__(self, body: dict) -> None:
+        self._body = body
+
+    def to_dict(self) -> dict:
+        return self._body
+
+
+class _Paginator:
+    def __init__(self, nested: list[tuple[str, str]]) -> None:
+        self._nested = nested
+
+    def paginate(self, **_: object):
         return [
             {
                 "StackResourceSummaries": [
                     {
-                        "LogicalResourceId": "EcsCluster",
-                        "ResourceType": "AWS::ECS::Cluster",
-                        "PhysicalResourceId": "demo-ecs-prod",
+                        "LogicalResourceId": lid,
+                        "ResourceType": "AWS::CloudFormation::Stack",
+                        "PhysicalResourceId": phys,
                     }
+                    for lid, phys in self._nested
                 ]
             }
         ]
 
 
 class _FakeCloudFormation:
-    """Minimal fake CloudFormation client for the verify-noop path.
+    """Fake CloudFormation client keyed by stack name/ARN."""
 
-    ``changeset_result`` is either a single describe result for the root change
-    set (keyed internally as ``change-set-arn``) or a mapping of change-set
-    name/ARN -> describe result, so nested-stack recursion can be exercised.
-    """
+    def __init__(
+        self,
+        templates: dict[str, dict],
+        params: dict[str, list[dict]],
+        nested: list[tuple[str, str]],
+    ) -> None:
+        self._templates = templates
+        self._params = params
+        self._nested = nested
 
-    def __init__(self, changeset_result: dict[str, object]) -> None:
-        if "Status" in changeset_result:
-            self._results = {"change-set-arn": changeset_result}
-        else:
-            self._results = dict(changeset_result)
-        self.created = False
-        self.executed = False
-        self.include_nested_stacks: bool | None = None
-        self.deleted_change_sets: list[str] = []
+    def get_template(self, *, StackName: str, TemplateStage: str) -> dict:
+        return {"TemplateBody": self._templates[StackName]}
 
-    def describe_stacks(self, *, StackName: str) -> dict[str, object]:
-        # Existing, healthy stack -> UPDATE change set (verify runs on real stacks).
-        return {"Stacks": [{"StackStatus": "UPDATE_COMPLETE"}]}
+    def describe_stacks(self, *, StackName: str) -> dict:
+        return {"Stacks": [{"Parameters": self._params.get(StackName, [])}]}
 
-    def get_paginator(self, name: str) -> _ListResourcesPaginator:
+    def get_paginator(self, name: str) -> _Paginator:
         assert name == "list_stack_resources"
-        return _ListResourcesPaginator()
-
-    def create_change_set(self, **kwargs: object) -> dict[str, str]:
-        self.created = True
-        self.include_nested_stacks = bool(kwargs.get("IncludeNestedStacks"))
-        return {"Id": "change-set-arn"}
-
-    def describe_change_set(
-        self, *, ChangeSetName: str, **_: object
-    ) -> dict[str, object]:
-        return self._results.get(ChangeSetName, {"Status": "CREATE_COMPLETE", "Changes": []})
-
-    def delete_change_set(self, *, ChangeSetName: str) -> None:
-        self.deleted_change_sets.append(ChangeSetName)
-
-    def execute_change_set(self, **_: object) -> None:  # pragma: no cover
-        self.executed = True
-
-    def describe_stack_events(self, **_: object) -> dict[str, object]:
-        return {"StackEvents": []}
+        return _Paginator(self._nested)
 
 
 def _lookups() -> ResolvedLookupData:
     return ResolvedLookupData(
-        vpc_id="vpc-12345678",
+        vpc_id="vpc-1",
         vpc_cidr="10.0.0.0/16",
-        private_subnet_ids=["subnet-11111111"],
-        public_subnet_ids=["subnet-22222222"],
+        private_subnet_ids=["subnet-1"],
+        public_subnet_ids=["subnet-2"],
         shared_listener_arn="listener-arn",
-        shared_alb_security_group_id="sg-12345678",
+        shared_alb_security_group_id="sg-1",
         shared_alb_dns_name="alb.example.com",
-        shared_alb_canonical_hosted_zone_id="ZALB123",
-        hosted_zone_id="ZHOSTED123",
-        default_listener_priority=None,
+        shared_alb_canonical_hosted_zone_id="ZALB",
+        hosted_zone_id="ZHZ",
+        default_listener_priority=49991,
         path_rule_priorities={},
         rds_snapshot_identifier="",
         rds_source_secret_arn="",
@@ -97,208 +88,228 @@ def _lookups() -> ResolvedLookupData:
 
 
 def _config() -> ProjectConfig:
-    return ProjectConfig(
-        project_name="demo",
-        services=[ServiceConfig(name="web", image="nginx:latest")],
-    )
+    return ProjectConfig(project_name="demo", services=[ServiceConfig(name="web")])
 
 
 def _run(
-    tmp_path: Path,
     monkeypatch,
-    changeset_result: dict[str, object],
-) -> tuple[int, _FakeCloudFormation]:
-    template_path = tmp_path / "packaged-root.yaml"
-    template_path.write_text("AWSTemplateFormatVersion: '2010-09-09'\n")
-
-    fake_cf = _FakeCloudFormation(changeset_result)
-
-    def fake_client(service: str, **_: object) -> object:
-        if service == "cloudformation":
-            return fake_cf
-        return object()
-
-    monkeypatch.setattr("darth_infra.cli.cfn.boto3.client", fake_client)
-
-    rc = deploy_changeset(
-        _config(),
-        "prod",
-        template_path,
-        _lookups(),
-        no_execute=True,
-        changeset_name="verify-prod",
-        verify_noop=True,
+    *,
+    generated: dict[str, dict],
+    deployed_templates: dict[str, dict],
+    deployed_params: dict[str, list[dict]],
+    nested: list[tuple[str, str]],
+    build_params: list[dict] | None = None,
+) -> int:
+    fake_cf = _FakeCloudFormation(deployed_templates, deployed_params, nested)
+    monkeypatch.setattr(cfn.boto3, "client", lambda *a, **k: fake_cf)
+    monkeypatch.setattr(
+        "darth_infra.scaffold.builders.build_project_templates",
+        lambda config: {k: _Template(v) for k, v in generated.items()},
     )
-    return rc, fake_cf
+    monkeypatch.setattr(
+        cfn,
+        "_build_parameters",
+        lambda config, env, lookups: build_params
+        or [
+            {"ParameterKey": "ProjectName", "ParameterValue": "demo"},
+            {"ParameterKey": "EnvironmentName", "ParameterValue": "prod"},
+            {"ParameterKey": "AlbMode", "ParameterValue": "shared"},
+            {"ParameterKey": "DefaultListenerPriority", "ParameterValue": "49991"},
+        ],
+    )
+    return verify_noop_structural(_config(), "prod", _lookups())
 
 
-def test_empty_change_set_passes_and_is_deleted(tmp_path: Path, monkeypatch) -> None:
-    # CloudFormation fails creation of an empty change set: the success signal.
-    rc, fake_cf = _run(
-        tmp_path,
+def test_identical_templates_pass(monkeypatch, capsys) -> None:
+    root = {"Resources": {"Cluster": {"Type": "AWS::ECS::Cluster", "Properties": {}}}}
+    rc = _run(
         monkeypatch,
-        {
-            "Status": "FAILED",
-            "StatusReason": "The submitted information didn't contain changes. "
-            "Submit different information to create a change set.",
-            "Changes": [],
-        },
+        generated={"templates/generated/root.yaml": root},
+        deployed_templates={"demo-ecs-prod": root},
+        deployed_params={"demo-ecs-prod": []},
+        nested=[],
     )
-
     assert rc == 0
-    assert fake_cf.created is True
-    assert fake_cf.executed is False
-    assert fake_cf.deleted_change_sets == ["change-set-arn"]
+    assert "structural no-op confirmed" in capsys.readouterr().out
 
 
-def test_change_set_with_resource_changes_fails_and_is_deleted(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    rc, fake_cf = _run(
-        tmp_path,
-        monkeypatch,
-        {
-            "Status": "CREATE_COMPLETE",
-            "StatusReason": "",
-            "Changes": [
-                {
-                    "ResourceChange": {
-                        "Action": "Modify",
-                        "LogicalResourceId": "WebTaskDefinition",
-                        "ResourceType": "AWS::ECS::TaskDefinition",
-                    }
-                },
-                {
-                    "ResourceChange": {
-                        "Action": "Modify",
-                        "LogicalResourceId": "WebService",
-                        "ResourceType": "AWS::ECS::Service",
-                    }
-                },
-            ],
-        },
-    )
-
-    assert rc == 1
-    assert fake_cf.executed is False
-    assert fake_cf.deleted_change_sets == ["change-set-arn"]
-
-    output = capsys.readouterr().out
-    assert "WebTaskDefinition" in output
-    assert "WebService" in output
-
-
-def test_change_set_complete_without_changes_passes_and_is_deleted(
-    tmp_path: Path, monkeypatch
-) -> None:
-    rc, fake_cf = _run(
-        tmp_path,
-        monkeypatch,
-        {"Status": "CREATE_COMPLETE", "StatusReason": "", "Changes": []},
-    )
-
-    assert rc == 0
-    assert fake_cf.executed is False
-    assert fake_cf.deleted_change_sets == ["change-set-arn"]
-
-
-def _stack_wrapper(logical_id: str, nested_arn: str) -> dict[str, object]:
-    return {
-        "ResourceChange": {
-            "Action": "Modify",
-            "LogicalResourceId": logical_id,
-            "ResourceType": "AWS::CloudFormation::Stack",
-            "ChangeSetId": nested_arn,
+def test_priority_literal_vs_resolved_ref_is_noop(monkeypatch) -> None:
+    # Deployed hardcodes 49991; new refs a parameter that resolves to 49991.
+    deployed_root = {
+        "Resources": {
+            "Rule": {
+                "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+                "Properties": {"Priority": 49991},
+            }
         }
     }
-
-
-def test_nested_stack_template_churn_only_passes(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    # Root shows only nested-stack wrappers (new TemplateURL from reserialized
-    # child templates); the nested change sets have no leaf changes.
-    rc, fake_cf = _run(
-        tmp_path,
+    gen_root = {
+        "Resources": {
+            "Rule": {
+                "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+                "Properties": {"Priority": {"Ref": "DefaultListenerPriority"}},
+            }
+        }
+    }
+    rc = _run(
         monkeypatch,
-        {
-            "change-set-arn": {
-                "Status": "CREATE_COMPLETE",
-                "Changes": [
-                    _stack_wrapper("ServiceWeb", "nested-web"),
-                    _stack_wrapper("ServiceWorker", "nested-worker"),
-                ],
-            },
-            "nested-web": {"Status": "CREATE_COMPLETE", "Changes": []},
-            "nested-worker": {"Status": "CREATE_COMPLETE", "Changes": []},
-        },
+        generated={"templates/generated/root.yaml": gen_root},
+        deployed_templates={"demo-ecs-prod": deployed_root},
+        deployed_params={"demo-ecs-prod": []},
+        nested=[],
     )
-
     assert rc == 0
-    assert fake_cf.include_nested_stacks is True
-    assert fake_cf.executed is False
-    assert fake_cf.deleted_change_sets == ["change-set-arn"]
-    assert "No real infrastructure changes" in capsys.readouterr().out
 
 
-def test_real_leaf_change_inside_nested_stack_fails(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    # A confirmed (Static) leaf change inside a nested stack must fail the gate.
-    rc, fake_cf = _run(
-        tmp_path,
-        monkeypatch,
-        {
-            "change-set-arn": {
-                "Status": "CREATE_COMPLETE",
-                "Changes": [_stack_wrapper("ServiceWeb", "nested-web")],
-            },
-            "nested-web": {
-                "Status": "CREATE_COMPLETE",
-                "Changes": [
-                    {
-                        "ResourceChange": {
-                            "Action": "Modify",
-                            "LogicalResourceId": "TaskDefinition",
-                            "ResourceType": "AWS::ECS::TaskDefinition",
-                            "Details": [{"Evaluation": "Static"}],
-                        }
-                    }
-                ],
-            },
+def test_condition_gated_off_resource_ignored(monkeypatch) -> None:
+    # A dedicated-ALB listener exists in both templates but its condition is
+    # false (shared ALB), so its Tags difference must not fail the gate.
+    conditions = {"UseDedicatedAlb": {"Fn::Equals": [{"Ref": "AlbMode"}, "dedicated"]}}
+    deployed_root = {
+        "Conditions": conditions,
+        "Resources": {
+            "DedicatedListener": {
+                "Type": "AWS::ElasticLoadBalancingV2::Listener",
+                "Condition": "UseDedicatedAlb",
+                "Properties": {"Tags": [{"Key": "Project", "Value": "demo"}]},
+            }
         },
-    )
-
-    assert rc == 1
-    assert fake_cf.deleted_change_sets == ["change-set-arn"]
-    assert "TaskDefinition" in capsys.readouterr().out
-
-
-def test_dynamic_attribute_ripple_passes_but_is_reported(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
-    # A Modify whose evaluations are all Dynamic (e.g. a SecurityGroupIngress
-    # GetAtt-ing a nested-stack output) is an uncertain ripple, not a failure.
-    rc, fake_cf = _run(
-        tmp_path,
+    }
+    gen_root = {
+        "Conditions": conditions,
+        "Resources": {
+            "DedicatedListener": {
+                "Type": "AWS::ElasticLoadBalancingV2::Listener",
+                "Condition": "UseDedicatedAlb",
+                "Properties": {},
+            }
+        },
+    }
+    rc = _run(
         monkeypatch,
-        {
-            "Status": "CREATE_COMPLETE",
-            "Changes": [
-                {
-                    "ResourceChange": {
-                        "Action": "Modify",
-                        "LogicalResourceId": "RdsIngressFromWeb",
-                        "ResourceType": "AWS::EC2::SecurityGroupIngress",
-                        "Details": [{"Evaluation": "Dynamic"}],
-                    }
-                }
+        generated={"templates/generated/root.yaml": gen_root},
+        deployed_templates={"demo-ecs-prod": deployed_root},
+        deployed_params={"demo-ecs-prod": [{"ParameterKey": "AlbMode", "ParameterValue": "shared"}]},
+        nested=[],
+    )
+    assert rc == 0
+
+
+def test_real_property_change_fails(monkeypatch, capsys) -> None:
+    deployed_root = {
+        "Resources": {
+            "Svc": {"Type": "AWS::ECS::Service", "Properties": {"DesiredCount": 2}}
+        }
+    }
+    gen_root = {
+        "Resources": {
+            "Svc": {"Type": "AWS::ECS::Service", "Properties": {"DesiredCount": 3}}
+        }
+    }
+    rc = _run(
+        monkeypatch,
+        generated={"templates/generated/root.yaml": gen_root},
+        deployed_templates={"demo-ecs-prod": deployed_root},
+        deployed_params={"demo-ecs-prod": []},
+        nested=[],
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "changed resource Svc" in out
+    assert ".DesiredCount" in out
+
+
+def test_nested_stack_getatt_param_no_false_positive(monkeypatch) -> None:
+    # EcsService.Cluster = Ref(ClusterArn); root passes ClusterArn as a GetAtt.
+    # Deployed child has the concrete ARN. The GetAtt fallback must treat this
+    # as unchanged, and TemplateURL churn on the wrapper must be ignored.
+    root = {
+        "Resources": {
+            "ServiceWeb": {
+                "Type": "AWS::CloudFormation::Stack",
+                "Properties": {
+                    "TemplateURL": "services/web.yaml",
+                    "Parameters": {"ClusterArn": {"Fn::GetAtt": ["Cluster", "Arn"]}},
+                },
+            }
+        }
+    }
+    deployed_root = {
+        "Resources": {
+            "ServiceWeb": {
+                "Type": "AWS::CloudFormation::Stack",
+                "Properties": {
+                    "TemplateURL": "https://s3/old-hash.template",
+                    "Parameters": {"ClusterArn": "arn:aws:ecs:::cluster/demo-prod"},
+                },
+            }
+        }
+    }
+    child = {
+        "Resources": {
+            "EcsService": {
+                "Type": "AWS::ECS::Service",
+                "Properties": {"Cluster": {"Ref": "ClusterArn"}},
+            }
+        }
+    }
+    rc = _run(
+        monkeypatch,
+        generated={
+            "templates/generated/root.yaml": root,
+            "templates/generated/services/web.yaml": child,
+        },
+        deployed_templates={
+            "demo-ecs-prod": deployed_root,
+            "web-phys": child,
+        },
+        deployed_params={
+            "demo-ecs-prod": [],
+            "web-phys": [
+                {"ParameterKey": "ClusterArn", "ParameterValue": "arn:aws:ecs:::cluster/demo-prod"}
             ],
         },
+        nested=[("ServiceWeb", "web-phys")],
     )
-
     assert rc == 0
-    assert fake_cf.deleted_change_sets == ["change-set-arn"]
-    output = capsys.readouterr().out
-    assert "RdsIngressFromWeb" in output
-    assert "attribute-driven" in output
+
+
+def test_real_change_inside_nested_stack_fails(monkeypatch, capsys) -> None:
+    root = {
+        "Resources": {
+            "ServiceWeb": {
+                "Type": "AWS::CloudFormation::Stack",
+                "Properties": {"TemplateURL": "services/web.yaml", "Parameters": {}},
+            }
+        }
+    }
+    deployed_child = {
+        "Resources": {
+            "TaskDefinition": {
+                "Type": "AWS::ECS::TaskDefinition",
+                "Properties": {"Cpu": "256"},
+            }
+        }
+    }
+    gen_child = {
+        "Resources": {
+            "TaskDefinition": {
+                "Type": "AWS::ECS::TaskDefinition",
+                "Properties": {"Cpu": "512"},
+            }
+        }
+    }
+    rc = _run(
+        monkeypatch,
+        generated={
+            "templates/generated/root.yaml": root,
+            "templates/generated/services/web.yaml": gen_child,
+        },
+        deployed_templates={"demo-ecs-prod": root, "web-phys": deployed_child},
+        deployed_params={"demo-ecs-prod": [], "web-phys": []},
+        nested=[("ServiceWeb", "web-phys")],
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "ServiceWeb" in out
+    assert "TaskDefinition" in out

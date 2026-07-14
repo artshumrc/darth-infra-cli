@@ -580,16 +580,13 @@ def deploy_changeset(
     *,
     no_execute: bool,
     changeset_name: str | None,
-    verify_noop: bool = False,
 ) -> int:
     """Create (and possibly execute) a CloudFormation change set for a stack.
 
-    When ``verify_noop`` is True the function acts as a read-only release gate:
-    it never executes the change set, treats any resource change as a failure
-    (nonzero return with a printed diff), and always deletes the change set it
-    created — including the empty-change-set case, where CloudFormation itself
-    fails creation with "didn't contain changes" (the success signal). Normal
-    deploy behavior is unchanged when ``verify_noop`` is False.
+    The read-only no-op release gate is a separate function,
+    ``verify_noop_structural`` — it compares templates structurally rather than
+    relying on a change set, which avoids CloudFormation's conservative false
+    positives on nested-stack updates.
     """
     cf = boto3.client("cloudformation", region_name=config.aws_region)
     stack_name = f"{config.project_name}-ecs-{env_name}"
@@ -655,112 +652,68 @@ def deploy_changeset(
             {"Key": "deployment-type", "Value": "ecs"},
         ],
     }
-    if verify_noop:
-        # Recurse into nested stacks so the gate sees leaf-resource changes,
-        # not just the root-level TemplateURL churn every serializer change
-        # produces. See _classify_noop_changes for how the results are graded.
-        create_kwargs["IncludeNestedStacks"] = True
     resp = cf.create_change_set(**create_kwargs)
     cs_arn = resp["Id"]
     execute_kwargs["ChangeSetName"] = cs_arn
 
-    try:
-        status, reason, changes = _wait_for_changeset(cf, cs_arn)
-        if status == "FAILED":
-            if "didn't contain changes" in reason.lower():
-                console.print("[green]No infrastructure changes detected.[/green]")
-                return 0
-            console.print(f"[red]Change set failed: {reason}[/red]")
-            _print_changeset_failure_diagnostics(cf, cs_arn, stack_name)
-            if "resourceexistencecheck" in reason.lower():
-                console.print(
-                    "[yellow]Early validation indicates one or more referenced AWS resources do not exist or are not accessible.[/yellow]"
-                )
-                console.print(
-                    "[yellow]Check IDs/ARNs for VPC, subnets, shared ALB listener/security group, and external secrets.[/yellow]"
-                )
-            _print_recent_stack_events(
-                cf,
-                stack_name,
-                label=f"Stack events for {stack_name}",
-                max_events=15,
-            )
-            return 1
-
-        console.print(f"[bold]Change set:[/bold] [cyan]{cs_name}[/cyan]")
-
-        if verify_noop:
-            real, benign, uncertain = _classify_noop_changes(cf, cs_arn)
-            if benign:
-                console.print(
-                    f"[dim]Ignoring {len(benign)} nested-stack wrapper change(s) "
-                    f"(TemplateURL/parameter reformatting; leaf contents inspected "
-                    f"below).[/dim]"
-                )
-            for rc in uncertain:
-                console.print(
-                    f"[yellow]~ attribute-driven (unresolved statically): "
-                    f"{rc.get('LogicalResourceId', '?')} "
-                    f"({rc.get('ResourceType', '?')}) — likely a no-op ripple from "
-                    f"a nested-stack update.[/yellow]"
-                )
-            if real:
-                console.print(
-                    f"[red]No-op verification FAILED: {len(real)} real leaf "
-                    f"infrastructure change(s):[/red]"
-                )
-                for rc in real:
-                    console.print(
-                        f"[red]  - {rc.get('Action', '?')}: "
-                        f"{rc.get('LogicalResourceId', '?')} "
-                        f"({rc.get('ResourceType', '?')})[/red]"
-                    )
-                return 1
-            console.print(
-                "[green]No real infrastructure changes detected "
-                "(nested-stack template churn only).[/green]"
-            )
+    status, reason, changes = _wait_for_changeset(cf, cs_arn)
+    if status == "FAILED":
+        if "didn't contain changes" in reason.lower():
+            console.print("[green]No infrastructure changes detected.[/green]")
             return 0
-
-        if changes:
-            for c in changes:
-                rc = c.get("ResourceChange", {})
-                console.print(
-                    f"- {rc.get('Action', '?')}: {rc.get('LogicalResourceId', '?')} ({rc.get('ResourceType', '?')})"
-                )
-        else:
-            console.print("- (no detailed resource changes returned)")
-
-        if no_execute:
+        console.print(f"[red]Change set failed: {reason}[/red]")
+        _print_changeset_failure_diagnostics(cf, cs_arn, stack_name)
+        if "resourceexistencecheck" in reason.lower():
             console.print(
-                "[yellow]Change set created but not executed (--no-execute).[/yellow]"
+                "[yellow]Early validation indicates one or more referenced AWS resources do not exist or are not accessible.[/yellow]"
             )
-            return 0
-
-        if config.active_preview and (
-            change_set_type == "CREATE" or existing_status == "CREATE_FAILED"
-        ):
-            execute_kwargs["DisableRollback"] = True
-
-        cf.execute_change_set(**execute_kwargs)
-        console.print("[bold]Executing change set...[/bold]")
-        success = _monitor_stack_deploy(
-            cf=cf,
-            config=config,
-            env_name=env_name,
-            stack_name=stack_name,
-            poll_interval_seconds=15,
+            console.print(
+                "[yellow]Check IDs/ARNs for VPC, subnets, shared ALB listener/security group, and external secrets.[/yellow]"
+            )
+        _print_recent_stack_events(
+            cf,
+            stack_name,
+            label=f"Stack events for {stack_name}",
+            max_events=15,
         )
-        if success:
-            return 0
-
-        _print_stack_failure_details(cf, stack_name)
         return 1
-    finally:
-        # The release gate must never leave the change set behind, regardless of
-        # which branch above returned. Normal deploys keep their change set.
-        if verify_noop:
-            _delete_change_set(cf, cs_arn)
+
+    console.print(f"[bold]Change set:[/bold] [cyan]{cs_name}[/cyan]")
+
+    if changes:
+        for c in changes:
+            rc = c.get("ResourceChange", {})
+            console.print(
+                f"- {rc.get('Action', '?')}: {rc.get('LogicalResourceId', '?')} ({rc.get('ResourceType', '?')})"
+            )
+    else:
+        console.print("- (no detailed resource changes returned)")
+
+    if no_execute:
+        console.print(
+            "[yellow]Change set created but not executed (--no-execute).[/yellow]"
+        )
+        return 0
+
+    if config.active_preview and (
+        change_set_type == "CREATE" or existing_status == "CREATE_FAILED"
+    ):
+        execute_kwargs["DisableRollback"] = True
+
+    cf.execute_change_set(**execute_kwargs)
+    console.print("[bold]Executing change set...[/bold]")
+    success = _monitor_stack_deploy(
+        cf=cf,
+        config=config,
+        env_name=env_name,
+        stack_name=stack_name,
+        poll_interval_seconds=15,
+    )
+    if success:
+        return 0
+
+    _print_stack_failure_details(cf, stack_name)
+    return 1
 
 
 def _validate_create_stack_named_resource_collisions(
@@ -1469,78 +1422,6 @@ def cancel_stack_update(config: ProjectConfig, env_name: str) -> int:
             return 1
 
         time.sleep(5)
-
-
-_NESTED_STACK_TYPE = "AWS::CloudFormation::Stack"
-
-
-def _classify_noop_changes(
-    cf, root_cs_arn: str
-) -> tuple[list[dict], list[dict], list[dict]]:
-    """Recursively walk a change set created with ``IncludeNestedStacks`` and
-    grade its resource changes for the no-op gate.
-
-    Returns ``(real, benign, uncertain)`` lists of ``ResourceChange`` dicts:
-
-    - ``benign``: ``AWS::CloudFormation::Stack`` wrapper resources. During a
-      template-serializer migration these always report as ``Modify`` because
-      ``aws cloudformation package`` content-hashes each nested template into a
-      new ``TemplateURL``; their actual contents are captured by recursing into
-      the nested change set, so the wrapper itself carries no real change.
-    - ``real``: any ``Add``/``Remove`` of a non-wrapper resource, or a
-      ``Modify`` with at least one ``Static`` property evaluation — a change
-      CloudFormation resolved concretely. These fail the gate.
-    - ``uncertain``: a ``Modify`` whose property evaluations are all
-      ``Dynamic`` — driven by a referenced attribute of an updated resource
-      that CloudFormation could not resolve statically (typically a no-op
-      ripple, e.g. a ``SecurityGroupIngress`` that ``GetAtt``s a nested-stack
-      output). Reported but not failed.
-
-    Deleting the root change set also removes the nested change sets it spawned,
-    so callers only need to delete ``root_cs_arn``.
-    """
-    real: list[dict] = []
-    benign: list[dict] = []
-    uncertain: list[dict] = []
-    seen: set[str] = set()
-    pending = [root_cs_arn]
-    while pending:
-        arn = pending.pop()
-        if arn in seen:
-            continue
-        seen.add(arn)
-        try:
-            desc = cf.describe_change_set(ChangeSetName=arn)
-        except Exception:  # pragma: no cover - defensive
-            continue
-        for change in desc.get("Changes", []):
-            rc = change.get("ResourceChange", {})
-            nested = rc.get("ChangeSetId")
-            if nested:
-                pending.append(nested)
-            if rc.get("ResourceType") == _NESTED_STACK_TYPE:
-                benign.append(rc)
-                continue
-            details = rc.get("Details", [])
-            if (
-                rc.get("Action") == "Modify"
-                and details
-                and all(d.get("Evaluation") == "Dynamic" for d in details)
-            ):
-                uncertain.append(rc)
-            else:
-                real.append(rc)
-    return real, benign, uncertain
-
-
-def _delete_change_set(cf, cs_arn: str) -> None:
-    """Best-effort deletion of a change set created by the release gate."""
-    try:
-        cf.delete_change_set(ChangeSetName=cs_arn)
-    except Exception as exc:  # pragma: no cover - defensive cleanup
-        console.print(
-            f"[yellow]Could not delete change set {cs_arn}: {exc}[/yellow]"
-        )
 
 
 def _wait_for_changeset(cf, cs_arn: str) -> tuple[str, str, list[dict]]:
@@ -3121,6 +3002,258 @@ def _stack_owned_service_discovery_namespace_ids(
         == "AWS::ServiceDiscovery::PrivateDnsNamespace"
         and str(resource.get("PhysicalResourceId", "")).strip()
     }
+
+
+def _load_deployed_stack(cf, stack: str) -> tuple[dict, dict[str, str]]:
+    """Fetch a deployed stack's template (as a long-form dict) and its current
+    parameter values."""
+    from cfn_tools import load_yaml
+
+    body = cf.get_template(StackName=stack, TemplateStage="Original")["TemplateBody"]
+    if isinstance(body, str):
+        template = json.loads(json.dumps(load_yaml(body)))
+    else:
+        template = json.loads(json.dumps(body))
+    desc = cf.describe_stacks(StackName=stack)["Stacks"][0]
+    params = {
+        p["ParameterKey"]: p.get("ParameterValue")
+        for p in desc.get("Parameters", [])
+    }
+    return template, params
+
+
+def _canon(value, params: dict) -> object:
+    """Canonicalize a template value for structural comparison: resolve a
+    ``Ref`` to a known scalar parameter value, coerce scalars to ``str``, and
+    recurse. Refs to non-scalar (e.g. GetAtt-derived) parameters and other
+    intrinsics are kept symbolically."""
+    if isinstance(value, dict):
+        if set(value.keys()) == {"Ref"}:
+            resolved = params.get(value["Ref"])
+            if isinstance(resolved, (str, int, float, bool)):
+                return str(resolved)
+        return {k: _canon(v, params) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_canon(v, params) for v in value]
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)):
+        return str(value)
+    return value
+
+
+def _eval_condition(name: str, conditions: dict, params: dict, memo: dict) -> bool:
+    if name in memo:
+        return memo[name]
+    memo[name] = _eval_cond_expr(conditions.get(name), conditions, params, memo)
+    return memo[name]
+
+
+def _eval_cond_operand(expr, conditions: dict, params: dict, memo: dict):
+    if isinstance(expr, dict):
+        if set(expr.keys()) == {"Ref"}:
+            return params.get(expr["Ref"])
+        if set(expr.keys()) == {"Condition"}:
+            return _eval_condition(expr["Condition"], conditions, params, memo)
+    return expr
+
+
+def _eval_cond_expr(expr, conditions: dict, params: dict, memo: dict) -> bool:
+    if not isinstance(expr, dict) or len(expr) != 1:
+        return bool(expr)
+    (fn, arg), = expr.items()
+    if fn == "Condition":
+        return _eval_condition(arg, conditions, params, memo)
+    if fn == "Fn::Equals":
+        a, b = (
+            _eval_cond_operand(arg[0], conditions, params, memo),
+            _eval_cond_operand(arg[1], conditions, params, memo),
+        )
+        aval = a if isinstance(a, bool) else (None if a is None else str(a))
+        bval = b if isinstance(b, bool) else (None if b is None else str(b))
+        return aval == bval
+    if fn == "Fn::Not":
+        return not _eval_cond_expr(arg[0], conditions, params, memo)
+    if fn == "Fn::And":
+        return all(_eval_cond_expr(item, conditions, params, memo) for item in arg)
+    if fn == "Fn::Or":
+        return any(_eval_cond_expr(item, conditions, params, memo) for item in arg)
+    return False
+
+
+def _resource_active(resource: dict, conditions: dict, params: dict, memo: dict) -> bool:
+    cond = resource.get("Condition")
+    if not cond:
+        return True
+    return _eval_condition(cond, conditions, params, memo)
+
+
+def _resolve_nested_param_values(
+    nested_params: dict, root_params: dict, deployed_child_params: dict
+) -> dict:
+    """Resolve the parameter values a root stack passes to a nested stack.
+
+    ``Ref``s to root parameters resolve to their (scalar) value. Values that
+    stay intrinsic (e.g. ``GetAtt`` of a stable resource) fall back to the
+    deployed child's current value, so an unchanged cross-reference does not
+    read as a change; if the referenced resource were really changing it would
+    surface as its own finding."""
+    resolved: dict[str, object] = {}
+    for key, value in (nested_params or {}).items():
+        if isinstance(value, dict) and set(value.keys()) == {"Ref"} and isinstance(
+            root_params.get(value["Ref"]), (str, int, float, bool)
+        ):
+            resolved[key] = str(root_params[value["Ref"]])
+        elif isinstance(value, (str, int, float, bool)):
+            resolved[key] = str(value)
+        else:
+            resolved[key] = deployed_child_params.get(key, value)
+    return resolved
+
+
+def _diff_stack_resources(
+    label: str,
+    deployed: dict,
+    deployed_params: dict,
+    generated: dict,
+    generated_params: dict,
+) -> list[str]:
+    """Compare deployed vs generated stack resources, condition-aware and with
+    parameter references resolved. Returns human-readable finding lines for
+    real resource differences (empty == no-op for this stack)."""
+    findings: list[str] = []
+    dep_conds = deployed.get("Conditions", {})
+    gen_conds = generated.get("Conditions", {})
+    dep_memo: dict = {}
+    gen_memo: dict = {}
+    dres = deployed.get("Resources", {})
+    gres = generated.get("Resources", {})
+    for lid in sorted(set(dres) | set(gres)):
+        d = dres.get(lid)
+        g = gres.get(lid)
+        d_active = d is not None and _resource_active(d, dep_conds, deployed_params, dep_memo)
+        g_active = g is not None and _resource_active(g, gen_conds, generated_params, gen_memo)
+        if not d_active and not g_active:
+            continue
+        if d_active != g_active:
+            rtype = (g or d).get("Type")
+            verb = "removed" if not g_active else "added"
+            findings.append(f"[{label}] {verb} resource {lid} ({rtype})")
+            continue
+        # Nested stacks: their real contents are compared by recursion, and
+        # TemplateURL/Parameters are plumbing (content hashes + inputs).
+        if g.get("Type") == "AWS::CloudFormation::Stack":
+            continue
+        dp = _canon(d.get("Properties", {}), deployed_params)
+        gp = _canon(g.get("Properties", {}), generated_params)
+        if dp != gp:
+            findings.append(f"[{label}] changed resource {lid} ({g.get('Type')})")
+            for pk in sorted(set(dp) | set(gp)):
+                if dp.get(pk) != gp.get(pk):
+                    findings.append(f"    .{pk}")
+    return findings
+
+
+def verify_noop_structural(
+    config: ProjectConfig,
+    env_name: str,
+    lookups: ResolvedLookupData,
+) -> int:
+    """Structural no-op release gate.
+
+    Compares each deployed stack template (root + nested) against the
+    freshly-built templates, resolving parameter references and evaluating
+    conditions so that deploy-time-looked-up values, packaging artifacts
+    (nested TemplateURL content hashes), and condition-gated-off resources do
+    not register as changes. Read-only. Returns 0 when no real resource change
+    would occur, 1 otherwise."""
+    from ..scaffold.builders import build_project_templates
+
+    cf = boto3.client("cloudformation", region_name=config.aws_region)
+    stack_name = f"{config.project_name}-ecs-{env_name}"
+
+    generated = {
+        path: template.to_dict()
+        for path, template in build_project_templates(config).items()
+    }
+    gen_root = generated["templates/generated/root.yaml"]
+    new_root_params = {
+        p["ParameterKey"]: p["ParameterValue"]
+        for p in _build_parameters(config, env_name, lookups)
+    }
+
+    try:
+        deployed_root, deployed_root_params = _load_deployed_stack(cf, stack_name)
+    except ClientError:
+        console.print(
+            f"[red]Stack '{stack_name}' does not exist or is not readable; "
+            f"cannot verify a no-op deploy.[/red]"
+        )
+        return 1
+
+    findings = _diff_stack_resources(
+        "root", deployed_root, deployed_root_params, gen_root, new_root_params
+    )
+
+    nested_physical: dict[str, str] = {}
+    for page in cf.get_paginator("list_stack_resources").paginate(StackName=stack_name):
+        for res in page["StackResourceSummaries"]:
+            if res["ResourceType"] == "AWS::CloudFormation::Stack":
+                nested_physical[res["LogicalResourceId"]] = res["PhysicalResourceId"]
+
+    gen_memo: dict = {}
+    gen_conds = gen_root.get("Conditions", {})
+    skipped_static: list[str] = []
+    for lid, res in gen_root.get("Resources", {}).items():
+        if res.get("Type") != "AWS::CloudFormation::Stack":
+            continue
+        if not _resource_active(res, gen_conds, new_root_params, gen_memo):
+            continue
+        url = res.get("Properties", {}).get("TemplateURL", "")
+        child_key = "templates/generated/" + url
+        gen_child = generated.get(child_key)
+        if gen_child is None:
+            # e.g. the static custom/overrides.yaml placeholder — not built by
+            # build_project_templates; a fixed WaitConditionHandle placeholder.
+            skipped_static.append(f"{lid} ({url})")
+            continue
+        physical = nested_physical.get(lid)
+        if physical is None:
+            findings.append(f"[root] nested stack {lid} not deployed")
+            continue
+        try:
+            deployed_child, deployed_child_params = _load_deployed_stack(cf, physical)
+        except ClientError:
+            findings.append(f"[{lid}] deployed template not readable")
+            continue
+        child_params = _resolve_nested_param_values(
+            res.get("Properties", {}).get("Parameters", {}),
+            new_root_params,
+            deployed_child_params,
+        )
+        findings += _diff_stack_resources(
+            lid, deployed_child, deployed_child_params, gen_child, child_params
+        )
+
+    if skipped_static:
+        console.print(
+            f"[dim]Skipped {len(skipped_static)} static nested template(s) not "
+            f"built from config: {', '.join(skipped_static)}.[/dim]"
+        )
+    if findings:
+        console.print(
+            f"[red]No-op verification FAILED: {len(findings)} structural "
+            f"change line(s):[/red]"
+        )
+        for line in findings:
+            console.print(f"[red]  {line}[/red]")
+        return 1
+    console.print(
+        "[green]No real infrastructure changes — structural no-op confirmed "
+        "(nested-stack template churn and deploy-time-resolved values "
+        "ignored).[/green]"
+    )
+    return 0
 
 
 def _build_parameters(

@@ -16,6 +16,7 @@ from .cfn import (
     resolve_lookup_data,
     run_seed_copy_tasks,
     validate_built_deploy_templates,
+    verify_noop_structural,
 )
 from .helpers import (
     console,
@@ -147,17 +148,23 @@ def deploy(
         validate_built_deploy_templates(
             build_project_templates(config), config, env_name, lookups
         )
-        bucket = ensure_artifact_bucket(config)
-        packaged_template = package_template(project_dir, config, env_name, bucket)
-        rc = deploy_changeset(
-            config,
-            env_name,
-            packaged_template,
-            lookups,
-            no_execute=no_execute or verify_noop,
-            changeset_name=changeset_name,
-            verify_noop=verify_noop,
-        )
+
+        if verify_noop:
+            # Read-only structural comparison of deployed vs freshly-built
+            # templates — no packaging, no change set. This avoids CloudFormation's
+            # conservative false positives on nested-stack updates.
+            rc = verify_noop_structural(config, env_name, lookups)
+        else:
+            bucket = ensure_artifact_bucket(config)
+            packaged_template = package_template(project_dir, config, env_name, bucket)
+            rc = deploy_changeset(
+                config,
+                env_name,
+                packaged_template,
+                lookups,
+                no_execute=no_execute,
+                changeset_name=changeset_name,
+            )
     except Exception as exc:
         console.print(f"[red]Deploy setup failed: {exc}[/red]")
         raise SystemExit(1)
@@ -165,8 +172,7 @@ def deploy(
     if verify_noop:
         if rc == 0:
             console.print(
-                f"[green]✓ No-op verification passed for {env_name}: "
-                f"no infrastructure changes.[/green]"
+                f"[green]✓ No-op verification passed for {env_name}.[/green]"
             )
         else:
             console.print(
