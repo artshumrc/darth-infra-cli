@@ -2793,6 +2793,23 @@ def _resolve_stack_owned_listener_rule_priorities(
     )
 
 
+def _listener_arn_from_rule_arn(rule_arn: str) -> str:
+    """Derive the listener ARN a listener-rule belongs to from the rule's ARN.
+
+    A rule ARN
+    ``…:listener-rule/app/<lb>/<lb-id>/<listener-id>/<rule-id>`` maps to its
+    listener ``…:listener/app/<lb>/<lb-id>/<listener-id>``. Returns "" if the
+    ARN is not a recognizable listener-rule ARN.
+    """
+    marker = ":listener-rule/"
+    if marker not in rule_arn:
+        return ""
+    prefix, tail = rule_arn.split(marker, 1)
+    # tail: app/<lb>/<lb-id>/<listener-id>/<rule-id> — drop the rule-id segment.
+    listener_tail = tail.rsplit("/", 1)[0]
+    return f"{prefix}:listener/{listener_tail}"
+
+
 def _resolve_stack_owned_listener_rule_priorities_by_label(
     config: ProjectConfig,
     env_name: str,
@@ -2822,9 +2839,11 @@ def _resolve_stack_owned_listener_rule_priorities_by_label(
             continue
 
         for rule in response.get("Rules", []):
+            # describe_rules(RuleArns=...) does not populate a ListenerArn field
+            # on each rule, so derive the listener from the rule's own ARN.
             if (
                 listener_arn
-                and str(rule.get("ListenerArn", "")).strip() != listener_arn
+                and _listener_arn_from_rule_arn(rule_arn) != listener_arn
             ):
                 continue
             priority = rule.get("Priority")
