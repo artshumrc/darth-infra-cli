@@ -35,4 +35,4 @@ Last updated: 2026-07-14
 | 08 | `08-ec2-launch-type.md` | Completed | 03 |
 | 09 | `09-structural-deploy-validation.md` | Completed | 03, 05 |
 | 10 | `10-cutover.md` | Completed | 04, 05, 06, 07, 08, 09 |
-| 11 | `11-release-verification.md` | Not Started | 10 |
+| 11 | `11-release-verification.md` | Needs Human Validation or Intervention | 10 |

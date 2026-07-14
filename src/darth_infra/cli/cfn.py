@@ -580,7 +580,17 @@ def deploy_changeset(
     *,
     no_execute: bool,
     changeset_name: str | None,
+    verify_noop: bool = False,
 ) -> int:
+    """Create (and possibly execute) a CloudFormation change set for a stack.
+
+    When ``verify_noop`` is True the function acts as a read-only release gate:
+    it never executes the change set, treats any resource change as a failure
+    (nonzero return with a printed diff), and always deletes the change set it
+    created — including the empty-change-set case, where CloudFormation itself
+    fails creation with "didn't contain changes" (the success signal). Normal
+    deploy behavior is unchanged when ``verify_noop`` is False.
+    """
     cf = boto3.client("cloudformation", region_name=config.aws_region)
     stack_name = f"{config.project_name}-ecs-{env_name}"
 
@@ -648,63 +658,79 @@ def deploy_changeset(
     cs_arn = resp["Id"]
     execute_kwargs["ChangeSetName"] = cs_arn
 
-    status, reason, changes = _wait_for_changeset(cf, cs_arn)
-    if status == "FAILED":
-        if "didn't contain changes" in reason.lower():
+    try:
+        status, reason, changes = _wait_for_changeset(cf, cs_arn)
+        if status == "FAILED":
+            if "didn't contain changes" in reason.lower():
+                console.print("[green]No infrastructure changes detected.[/green]")
+                return 0
+            console.print(f"[red]Change set failed: {reason}[/red]")
+            _print_changeset_failure_diagnostics(cf, cs_arn, stack_name)
+            if "resourceexistencecheck" in reason.lower():
+                console.print(
+                    "[yellow]Early validation indicates one or more referenced AWS resources do not exist or are not accessible.[/yellow]"
+                )
+                console.print(
+                    "[yellow]Check IDs/ARNs for VPC, subnets, shared ALB listener/security group, and external secrets.[/yellow]"
+                )
+            _print_recent_stack_events(
+                cf,
+                stack_name,
+                label=f"Stack events for {stack_name}",
+                max_events=15,
+            )
+            return 1
+
+        console.print(f"[bold]Change set:[/bold] [cyan]{cs_name}[/cyan]")
+        if changes:
+            for c in changes:
+                rc = c.get("ResourceChange", {})
+                console.print(
+                    f"- {rc.get('Action', '?')}: {rc.get('LogicalResourceId', '?')} ({rc.get('ResourceType', '?')})"
+                )
+        else:
+            console.print("- (no detailed resource changes returned)")
+
+        if verify_noop:
+            if changes:
+                console.print(
+                    f"[red]No-op verification FAILED: {len(changes)} infrastructure "
+                    f"change(s) detected (listed above).[/red]"
+                )
+                return 1
             console.print("[green]No infrastructure changes detected.[/green]")
             return 0
-        console.print(f"[red]Change set failed: {reason}[/red]")
-        _print_changeset_failure_diagnostics(cf, cs_arn, stack_name)
-        if "resourceexistencecheck" in reason.lower():
+
+        if no_execute:
             console.print(
-                "[yellow]Early validation indicates one or more referenced AWS resources do not exist or are not accessible.[/yellow]"
+                "[yellow]Change set created but not executed (--no-execute).[/yellow]"
             )
-            console.print(
-                "[yellow]Check IDs/ARNs for VPC, subnets, shared ALB listener/security group, and external secrets.[/yellow]"
-            )
-        _print_recent_stack_events(
-            cf,
-            stack_name,
-            label=f"Stack events for {stack_name}",
-            max_events=15,
+            return 0
+
+        if config.active_preview and (
+            change_set_type == "CREATE" or existing_status == "CREATE_FAILED"
+        ):
+            execute_kwargs["DisableRollback"] = True
+
+        cf.execute_change_set(**execute_kwargs)
+        console.print("[bold]Executing change set...[/bold]")
+        success = _monitor_stack_deploy(
+            cf=cf,
+            config=config,
+            env_name=env_name,
+            stack_name=stack_name,
+            poll_interval_seconds=15,
         )
+        if success:
+            return 0
+
+        _print_stack_failure_details(cf, stack_name)
         return 1
-
-    console.print(f"[bold]Change set:[/bold] [cyan]{cs_name}[/cyan]")
-    if changes:
-        for c in changes:
-            rc = c.get("ResourceChange", {})
-            console.print(
-                f"- {rc.get('Action', '?')}: {rc.get('LogicalResourceId', '?')} ({rc.get('ResourceType', '?')})"
-            )
-    else:
-        console.print("- (no detailed resource changes returned)")
-
-    if no_execute:
-        console.print(
-            "[yellow]Change set created but not executed (--no-execute).[/yellow]"
-        )
-        return 0
-
-    if config.active_preview and (
-        change_set_type == "CREATE" or existing_status == "CREATE_FAILED"
-    ):
-        execute_kwargs["DisableRollback"] = True
-
-    cf.execute_change_set(**execute_kwargs)
-    console.print("[bold]Executing change set...[/bold]")
-    success = _monitor_stack_deploy(
-        cf=cf,
-        config=config,
-        env_name=env_name,
-        stack_name=stack_name,
-        poll_interval_seconds=15,
-    )
-    if success:
-        return 0
-
-    _print_stack_failure_details(cf, stack_name)
-    return 1
+    finally:
+        # The release gate must never leave the change set behind, regardless of
+        # which branch above returned. Normal deploys keep their change set.
+        if verify_noop:
+            _delete_change_set(cf, cs_arn)
 
 
 def _validate_create_stack_named_resource_collisions(
@@ -1413,6 +1439,16 @@ def cancel_stack_update(config: ProjectConfig, env_name: str) -> int:
             return 1
 
         time.sleep(5)
+
+
+def _delete_change_set(cf, cs_arn: str) -> None:
+    """Best-effort deletion of a change set created by the release gate."""
+    try:
+        cf.delete_change_set(ChangeSetName=cs_arn)
+    except Exception as exc:  # pragma: no cover - defensive cleanup
+        console.print(
+            f"[yellow]Could not delete change set {cs_arn}: {exc}[/yellow]"
+        )
 
 
 def _wait_for_changeset(cf, cs_arn: str) -> tuple[str, str, list[dict]]:
