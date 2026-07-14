@@ -18,12 +18,21 @@ or modified.
 
 ## The no-op verification gate
 
-The gate is packaged as a flag on the existing deploy command, so it exercises
-the exact rendering + packaging + change-set code path that a real deploy runs
-(`generate_project` → `build_project_templates` → `validate_built_deploy_templates`
-→ `resolve_lookup_data` → `package_template` → `deploy_changeset`). It is
-read-only with respect to infrastructure: it creates a CloudFormation change
-set **without executing it**, inspects it, and always deletes it afterward.
+The gate is a flag on the existing deploy command. It renders and resolves the
+templates the same way a real deploy does (`generate_project` →
+`resolve_lookup_data` → `build_project_templates`), then does a **read-only
+structural comparison** of the deployed stack templates (fetched with
+`get-template`, root + nested) against the freshly-built templates. It makes no
+changes to infrastructure and creates no change set.
+
+It deliberately does **not** use a CloudFormation change set: change sets over
+nested stacks emit conservative false positives (e.g. predicting an ECS service
+"replacement" for an unchanged cluster) whenever a nested stack updates — and
+the serializer migration updates every nested stack. The structural comparison
+resolves parameter references, evaluates conditions (so condition-gated-off
+resources like dedicated-ALB listeners on a shared-ALB stack are skipped), and
+ignores nested-stack `TemplateURL` content-hash churn, reporting only real
+leaf-resource differences.
 
 ```bash
 # Run from the target project directory (the one with darth-infra.toml).
@@ -37,40 +46,32 @@ echo $?   # 0 = no infrastructure changes (PASS); nonzero = changes detected (FA
 
 ### Expected output — PASS (no real changes)
 
-Two shapes both pass with exit code `0`. If the generated templates happen to
-match what is deployed byte-for-byte, CloudFormation refuses to create an empty
-change set and that failure is the success signal (`No infrastructure changes
-detected.`). On the cutover the usual shape is nested-stack template churn only:
-
 ```
 Verifying no-op deploy for <project> environment <env>...
-...
-Change set: verify-<env>-<timestamp>
-Ignoring 5 nested-stack wrapper change(s) (TemplateURL/parameter reformatting; leaf contents inspected below).
-No real infrastructure changes detected (nested-stack template churn only).
+Refreshing CloudFormation templates from darth-infra.toml...
+Skipped 1 static nested template(s) not built from config: CustomOverrides (../custom/overrides.yaml).
+No real infrastructure changes — structural no-op confirmed (nested-stack template churn and deploy-time-resolved values ignored).
 ✓ No-op verification passed for <env>.
 ```
 
-The change set is deleted before the command returns. If any resources are
-listed as `~ attribute-driven (unresolved statically)`, those are ripples
-CloudFormation could not resolve (typically a `SecurityGroupIngress` that
-references a nested-stack output). They do **not** fail the gate, but glance at
-them — they should be resources that legitimately depend on an updated stack.
+Exit code `0`. The static `CustomOverrides` placeholder is a fixed
+WaitConditionHandle stack that is not built from config, so it is skipped.
 
 ### Expected output — FAIL (real leaf changes would occur)
 
 ```
 Verifying no-op deploy for <project> environment <env>...
 ...
-Change set: verify-<env>-<timestamp>
-No-op verification FAILED: 2 real leaf infrastructure change(s):
-  - Modify: TaskDefinition (AWS::ECS::TaskDefinition)
-  - Add: SomeNewBucket (AWS::S3::Bucket)
+No-op verification FAILED: 3 structural change line(s):
+  [ServiceWeb] changed resource TaskDefinition (AWS::ECS::TaskDefinition)
+      .ContainerDefinitions
+  [root] added resource SomeNewBucket (AWS::S3::Bucket)
 ✗ No-op verification failed for <env>: infrastructure changes detected (see above).
 ```
 
-Exit code `1` (nonzero). The change set is still deleted before returning.
-Investigate every listed resource before publishing the release.
+Exit code `1` (nonzero). Each `[stack] changed/added/removed resource …` line
+names a real resource-level difference, with the changed property paths under
+it. Investigate every one before publishing the release.
 
 ## Release procedure
 

@@ -65,28 +65,27 @@ every stack reports no changes.
 ## Implementation notes
 
 - Packaged as a `--verify-noop` flag on `darth-infra deploy`
-  (`src/darth_infra/cli/deploy_cmd.py`). It reuses the same code path a real
-  deploy runs and threads a new `verify_noop` keyword into `deploy_changeset`
-  (`src/darth_infra/cli/cfn.py`). Normal deploy behavior is unchanged when the
-  flag is absent (default `False`).
-- Semantics: never executes a change set; empty change set (CloudFormation
-  "didn't contain changes" failure) → exit 0 / "no changes"; created change set
-  with resource changes → nonzero + printed resource list; no resource changes
-  → exit 0. The change set is always deleted (new `_delete_change_set` helper,
-  called from a `finally` block so every return path cleans up).
+  (`src/darth_infra/cli/deploy_cmd.py`). Normal deploy behavior is unchanged
+  when the flag is absent.
+- The flag runs `verify_noop_structural` (`src/darth_infra/cli/cfn.py`): a
+  read-only structural comparison of the deployed stack templates against the
+  freshly-built ones (see finding 3 below for the semantics and why it replaced
+  the original change-set approach). No packaging and no change set. Exit 0 =
+  no real leaf-resource change; nonzero + named resources otherwise.
 - `--verify-noop` rejects combination with `--cancel`, `--with-images`, and
   `--no-execute`.
-- Unit tests with mocked boto3 (hand-rolled fakes, matching the repo's existing
-  `test_cli_cfn_deploy_changeset.py` style):
-  `tests/test_cli_cfn_verify_noop.py` — proves the empty-change-set → exit 0
-  path, the resource-changes → nonzero + named resources path, and that created
-  change sets are deleted in every path. Full suite: 103 passed.
+- Unit tests with mocked boto3 (`tests/test_cli_cfn_verify_noop.py`): identical
+  templates pass; a literal-vs-resolved-ref value (priority) is a no-op; a
+  condition-gated-off resource is ignored; a real property change fails; a
+  nested-stack GetAtt param does not false-positive; a real change inside a
+  nested stack fails.
 
 ## Handoff to release manager
 
-The three real-stack acceptance criteria above cannot be satisfied without AWS
-credentials and existing deployed stacks, so they are left for a human. The
-tooling, unit tests, and documentation are complete and committed.
+The gate now runs read-only (no change sets to clean up), so the original
+"delete leftover change sets" criterion no longer applies. Validated on the
+real bta prod stack (exit 0). The release manager should run it against every
+remaining real stack before publishing.
 
 Procedure (full version in `.tracker/troposphere-migration/README.md`):
 
@@ -104,14 +103,6 @@ Procedure (full version in `.tracker/troposphere-migration/README.md`):
    # edit darth-infra.toml on a sandbox env, then:
    uv run darth-infra deploy --env <sandbox-env> --verify-noop
    echo $?   # expect nonzero; output lists the changed resources
-   ```
-
-3. Verify no change sets were left behind:
-
-   ```bash
-   aws cloudformation list-change-sets --region <region> \
-     --stack-name <project>-ecs-<env>
-   # expect no verify-<env>-* change sets remaining
    ```
 
 Run step 1 against every real stack; publish the minor release only when all
@@ -148,20 +139,31 @@ old-Jinja vs new-troposphere, plus the deployed stack) found:
    parameter that `_build_parameters` supplies as `49991` (resolves to the same
    leaf value — no infra change, only nested-stack churn).
 
-3. **Gate-semantics limitation (RESOLVED, commit `c2eaab3`).** Even with a
-   perfect no-op, the original gate failed: `aws cloudformation package`
-   content-hashes each nested template, so troposphere's (necessarily
-   different) YAML bytes produce new `TemplateURL`s and every
-   `AWS::CloudFormation::Stack` resource shows as `Modify` at the root level.
-   The strict "empty changeset" signal is unreachable for this nested-stack
-   architecture on the cutover. Fixed by making the gate create the changeset
-   with `IncludeNestedStacks=True` and grade changes recursively
-   (`_classify_noop_changes`): `AWS::CloudFormation::Stack` wrappers are treated
-   as benign churn (their real contents are inspected by recursing), a `Modify`
-   with any `Static` evaluation or any `Add`/`Remove` of a non-wrapper resource
-   FAILS, and a `Modify` with only `Dynamic` (attribute-driven) evaluations is
-   reported as an uncertain ripple but does not fail. Still needs one real-stack
-   run to validate against live CloudFormation behavior.
+3. **Gate rebuilt as a structural comparison (commit `62932a9`; validated on
+   real prod, exit 0).** A change-set-based gate cannot verify this cutover:
+   `aws cloudformation package` content-hashes each nested template, so
+   troposphere's different bytes give every nested stack a new `TemplateURL`,
+   and change sets over nested stacks emit conservative false positives (they
+   predicted an `EcsService` *replacement* for an unchanged `Cluster`). The gate
+   is now `verify_noop_structural`: it fetches each deployed stack template
+   (root + nested) and compares against the freshly-built templates, resolving
+   parameter refs (a deploy-time-looked-up priority that is a literal in the
+   deployed template but a `Ref` in the new one reads as unchanged), falling
+   back to the deployed value for `GetAtt`-valued nested params (stable
+   cross-references like `ClusterArn` don't false-positive), evaluating
+   `Conditions` (condition-gated-off resources are skipped), and ignoring
+   nested-stack `TemplateURL` churn (child contents compared by recursion). The
+   superseded change-set gate (`_classify_noop_changes`) was removed.
+
+4. **Priority churn (pre-existing bug, fixed `2153adc`).** While verifying, the
+   deployed listener rule showed priority `49991`→`1`. Root cause was in the
+   deploy layer (present on `main`): `_resolve_stack_owned_listener_rule_priorities_by_label`
+   filtered rules on `rule["ListenerArn"]`, but `describe_rules(RuleArns=…)`
+   doesn't return that field, so stack-owned priorities were never preserved and
+   got reassigned on every deploy. Now derives the listener from the rule ARN.
+
+Net: with commits `bcdc8ce`, `2153adc`, and `62932a9`, `darth-infra deploy
+--env prod --verify-noop` reports a clean no-op against the real bta prod stack.
 
 ## Blocked by
 
