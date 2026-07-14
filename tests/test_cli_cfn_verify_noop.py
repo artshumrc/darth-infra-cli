@@ -195,6 +195,111 @@ def test_condition_gated_off_resource_ignored(monkeypatch) -> None:
     assert rc == 0
 
 
+def test_condition_gated_off_fn_if_tags_collapse_to_noop(monkeypatch) -> None:
+    # The generated template appends preview-only tags via Fn::If gated on a
+    # condition that is false for a normal deploy (the ExtraTag* param is "").
+    # Those entries resolve to AWS::NoValue and are not emitted, so they must
+    # not read as a Tags difference against a deployed stack that lacks them.
+    conditions = {
+        "HasExtraTagPullRequest": {
+            "Fn::Not": [{"Fn::Equals": [{"Ref": "ExtraTagPullRequest"}, ""]}]
+        }
+    }
+    deployed_root = {
+        "Resources": {
+            "Cluster": {
+                "Type": "AWS::ECS::Cluster",
+                "Properties": {"Tags": [{"Key": "Project", "Value": "demo"}]},
+            }
+        }
+    }
+    gen_root = {
+        "Conditions": conditions,
+        "Resources": {
+            "Cluster": {
+                "Type": "AWS::ECS::Cluster",
+                "Properties": {
+                    "Tags": [
+                        {"Key": "Project", "Value": "demo"},
+                        {
+                            "Fn::If": [
+                                "HasExtraTagPullRequest",
+                                {"Key": "pull-request", "Value": {"Ref": "ExtraTagPullRequest"}},
+                                {"Ref": "AWS::NoValue"},
+                            ]
+                        },
+                    ]
+                },
+            }
+        },
+    }
+    rc = _run(
+        monkeypatch,
+        generated={"templates/generated/root.yaml": gen_root},
+        deployed_templates={"demo-ecs-prod": deployed_root},
+        deployed_params={"demo-ecs-prod": []},
+        nested=[],
+        build_params=[
+            {"ParameterKey": "ProjectName", "ParameterValue": "demo"},
+            {"ParameterKey": "EnvironmentName", "ParameterValue": "prod"},
+            {"ParameterKey": "ExtraTagPullRequest", "ParameterValue": ""},
+        ],
+    )
+    assert rc == 0
+
+
+def test_active_fn_if_tag_still_compared(monkeypatch, capsys) -> None:
+    # When the Fn::If condition is TRUE, the tag is really emitted, so a genuine
+    # difference (deployed lacks it) must still fail the gate.
+    conditions = {
+        "HasExtraTagPullRequest": {
+            "Fn::Not": [{"Fn::Equals": [{"Ref": "ExtraTagPullRequest"}, ""]}]
+        }
+    }
+    deployed_root = {
+        "Resources": {
+            "Cluster": {
+                "Type": "AWS::ECS::Cluster",
+                "Properties": {"Tags": [{"Key": "Project", "Value": "demo"}]},
+            }
+        }
+    }
+    gen_root = {
+        "Conditions": conditions,
+        "Resources": {
+            "Cluster": {
+                "Type": "AWS::ECS::Cluster",
+                "Properties": {
+                    "Tags": [
+                        {"Key": "Project", "Value": "demo"},
+                        {
+                            "Fn::If": [
+                                "HasExtraTagPullRequest",
+                                {"Key": "pull-request", "Value": {"Ref": "ExtraTagPullRequest"}},
+                                {"Ref": "AWS::NoValue"},
+                            ]
+                        },
+                    ]
+                },
+            }
+        },
+    }
+    rc = _run(
+        monkeypatch,
+        generated={"templates/generated/root.yaml": gen_root},
+        deployed_templates={"demo-ecs-prod": deployed_root},
+        deployed_params={"demo-ecs-prod": []},
+        nested=[],
+        build_params=[
+            {"ParameterKey": "ProjectName", "ParameterValue": "demo"},
+            {"ParameterKey": "EnvironmentName", "ParameterValue": "prod"},
+            {"ParameterKey": "ExtraTagPullRequest", "ParameterValue": "pr-42"},
+        ],
+    )
+    assert rc == 1
+    assert ".Tags" in capsys.readouterr().out
+
+
 def test_real_property_change_fails(monkeypatch, capsys) -> None:
     deployed_root = {
         "Resources": {

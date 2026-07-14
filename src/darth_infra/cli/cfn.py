@@ -3022,19 +3022,49 @@ def _load_deployed_stack(cf, stack: str) -> tuple[dict, dict[str, str]]:
     return template, params
 
 
-def _canon(value, params: dict) -> object:
+# Sentinel returned by _canon for ``{"Ref": "AWS::NoValue"}`` (and any
+# ``Fn::If`` that resolves to it): the enclosing list/dict must drop the entry
+# entirely, matching CloudFormation's own removal semantics.
+_CANON_NO_VALUE = object()
+
+
+def _canon(value, params: dict, conditions: dict | None = None, memo: dict | None = None) -> object:
     """Canonicalize a template value for structural comparison: resolve a
-    ``Ref`` to a known scalar parameter value, coerce scalars to ``str``, and
-    recurse. Refs to non-scalar (e.g. GetAtt-derived) parameters and other
-    intrinsics are kept symbolically."""
+    ``Ref`` to a known scalar parameter value, evaluate ``Fn::If`` against the
+    stack's conditions (dropping ``AWS::NoValue`` branches so condition-gated-off
+    tags/properties disappear the way CloudFormation drops them), coerce scalars
+    to ``str``, and recurse. Refs to non-scalar (e.g. GetAtt-derived) parameters
+    and other intrinsics are kept symbolically."""
+    conditions = conditions or {}
+    memo = memo if memo is not None else {}
     if isinstance(value, dict):
         if set(value.keys()) == {"Ref"}:
-            resolved = params.get(value["Ref"])
+            ref = value["Ref"]
+            if ref == "AWS::NoValue":
+                return _CANON_NO_VALUE
+            resolved = params.get(ref)
             if isinstance(resolved, (str, int, float, bool)):
                 return str(resolved)
-        return {k: _canon(v, params) for k, v in value.items()}
+            return {"Ref": ref}
+        if set(value.keys()) == {"Fn::If"} and isinstance(value["Fn::If"], list):
+            cond_name, true_val, false_val = value["Fn::If"]
+            chosen = true_val if _eval_condition(cond_name, conditions, params, memo) else false_val
+            return _canon(chosen, params, conditions, memo)
+        canon: dict = {}
+        for k, v in value.items():
+            cv = _canon(v, params, conditions, memo)
+            if cv is _CANON_NO_VALUE:
+                continue
+            canon[k] = cv
+        return canon
     if isinstance(value, list):
-        return [_canon(v, params) for v in value]
+        out = []
+        for v in value:
+            cv = _canon(v, params, conditions, memo)
+            if cv is _CANON_NO_VALUE:
+                continue
+            out.append(cv)
+        return out
     if isinstance(value, bool):
         return str(value)
     if isinstance(value, (int, float)):
@@ -3144,8 +3174,8 @@ def _diff_stack_resources(
         # TemplateURL/Parameters are plumbing (content hashes + inputs).
         if g.get("Type") == "AWS::CloudFormation::Stack":
             continue
-        dp = _canon(d.get("Properties", {}), deployed_params)
-        gp = _canon(g.get("Properties", {}), generated_params)
+        dp = _canon(d.get("Properties", {}), deployed_params, dep_conds, dep_memo)
+        gp = _canon(g.get("Properties", {}), generated_params, gen_conds, gen_memo)
         if dp != gp:
             findings.append(f"[{label}] changed resource {lid} ({g.get('Type')})")
             for pk in sorted(set(dp) | set(gp)):
