@@ -77,3 +77,23 @@ unconditional dedicated-ALB/DNS resources, and cfn-lint rejects `Tags` on the
 two ALB listener resources. Ticket 06 does not modify those out-of-scope
 resources, so human resolution of ticket 04 is required before this ticket can
 meet the full-suite acceptance criterion and be marked completed.
+
+## Resolution (2026-07-14)
+
+The ticket-04 blocker is gone: tickets 04 and 05 have since landed. Verified the
+current tree against every acceptance criterion — the Cloud Map service-discovery
+and non-CloudFront S3 slices were already implemented in
+`src/darth_infra/scaffold/builders/__init__.py` (folded into commit f286653), so
+no builder code needed to be written for this ticket.
+
+- Full suite: `uv run pytest` -> 93 passed.
+- Scoped suite: `uv run pytest tests/ -k "discovery or s3"` -> 14 passed,
+  including structural Jinja-parity for the service-discovery namespace/service +
+  ECS `ServiceRegistries` wiring and for create-mode (`Bucketmediafiles`) and
+  existing-mode (`shared-assets`, no bucket resource) S3 connections.
+- cfn-lint: rendered the `_s3_config` and `_service_discovery_config` root and
+  service templates and ran `cfn-lint --non-zero-exit-code error` over all four —
+  exit 0 (W-level warnings only). Confirms create-mode + existing-mode S3 and
+  service-discovery output are valid.
+
+Only tracker/ticket files changed for this ticket.
