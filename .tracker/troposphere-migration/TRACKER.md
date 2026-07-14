@@ -33,6 +33,6 @@ Last updated: 2026-07-14
 | 06 | `06-service-discovery-s3.md` | Completed | 03 |
 | 07 | `07-cloudfront.md` | Completed | 04, 06 |
 | 08 | `08-ec2-launch-type.md` | Completed | 03 |
-| 09 | `09-structural-deploy-validation.md` | Not Started | 03, 05 |
+| 09 | `09-structural-deploy-validation.md` | Completed | 03, 05 |
 | 10 | `10-cutover.md` | Not Started | 04, 05, 06, 07, 08, 09 |
 | 11 | `11-release-verification.md` | Not Started | 10 |

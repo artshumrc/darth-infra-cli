@@ -50,12 +50,12 @@ it must not read or parse the YAML files.
 
 ## Acceptance criteria
 
-- [ ] Unit tests prove the structural validator raises on a template mapping
+- [x] Unit tests prove the structural validator raises on a template mapping
       missing the SES policy (when config enables it) and on missing RDS
       secret wiring — and passes on correct fixtures from tickets 03/05.
-- [ ] A checklist in the PR description maps every text marker in the old
+- [x] A checklist in the PR description maps every text marker in the old
       function to its structural assertion.
-- [ ] Full suite green; shipping deploy path behavior unchanged.
+- [x] Full suite green; shipping deploy path behavior unchanged.
 
 Commands:
 
@@ -63,6 +63,38 @@ Commands:
 uv run pytest
 uv run pytest tests/ -k "validation"
 ```
+
+## Text marker → structural assertion checklist
+
+The new `validate_built_deploy_templates` (parallel to the still-shipping
+`validate_rendered_deploy_templates`) consumes `build_project_templates`
+output and inspects each `Template.to_dict()`. Every old text marker maps to a
+structural assertion; none dropped.
+
+| Old text marker (in rendered YAML) | Structural assertion on built objects |
+| --- | --- |
+| `root.yaml` file exists | `"templates/generated/root.yaml"` key present in the templates mapping (else `FileNotFoundError`) |
+| `services/{name}.yaml` file exists | `"templates/generated/services/{name}.yaml"` key present (else `FileNotFoundError`) |
+| `PolicyName: SesSendEmail` | `TaskRole` resource has an `iam.Policy` with `PolicyName == "SesSendEmail"` |
+| `- ses:SendEmail` | that policy's flattened `Action` set contains `ses:SendEmail` |
+| `- ses:SendRawEmail` | that policy's flattened `Action` set contains `ses:SendRawEmail` |
+| `- ses:GetSendQuota` | that policy's flattened `Action` set contains `ses:GetSendQuota` |
+| RDS env-key mapping table (`DATABASE_*`/`POSTGRES_*` → host/port/dbname/username/password) | expected RDS secret set derived identically; `json_key` resolved via the same `_RDS_SECRET_KEY_BY_ENV` table with `existing_secret_name` fallback |
+| `ValueFrom: !Sub '${RdsSecretArn}:{json_key}::'` (rds secret) | container `Secrets` entry with matching `Name` has `ValueFrom == {"Fn::Sub": "${RdsSecretArn}:{json_key}::"}` |
+| `- Name: {secret_name}` (rds secret) | `Name` present in the container-definition `Secrets` list |
+| `- Name: {secret_name}` (non-rds secret) | `Name` present in the container-definition `Secrets` list |
+| `ValueFrom: !Ref {param_name}` (non-rds secret) | that container `Secrets` entry has `ValueFrom == {"Ref": param_name}` |
+| `- !Ref {param_name}` (exec-role policy) | `TaskExecutionRole` `ReadSecrets` policy statement `Resource` list contains `{"Ref": param_name}` |
+| `{param_name}: !Ref Secret{suffix}` (generate source, root) | some nested-stack `Parameters[param_name] == {"Ref": "Secret{suffix}"}` |
+| external secret ARN resolves (`lookups.external_secret_arns[name]` non-empty) | preserved verbatim: raises if the env/existing secret ARN did not resolve |
+| `{param_name}: !Ref EnvSecretArn{suffix}` (env/existing source, root) | some nested-stack `Parameters[param_name] == {"Ref": "EnvSecretArn{suffix}"}` |
+| `- !Ref {source_name}` for `RdsSecretArn` (exec-role policy) | `TaskExecutionRole` `ReadSecrets` `Resource` list contains `{"Ref": "RdsSecretArn"}` |
+| `RdsSecretArn: !Ref RdsCredentialsSecret` (root, when `config.rds`) | some nested-stack `Parameters["RdsSecretArn"] == {"Ref": "RdsCredentialsSecret"}` |
+
+Landing note: the new function is defined in `cli/cfn.py` beside the old one
+but is NOT wired into the deploy path — `deploy_cmd.py` still calls
+`validate_rendered_deploy_templates`. Ticket 10 performs the swap. Tests in
+`tests/test_structural_deploy_validation.py`.
 
 ## Blocked by
 

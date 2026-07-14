@@ -383,6 +383,246 @@ def validate_rendered_deploy_templates(
         )
 
 
+_RDS_SECRET_KEY_BY_ENV = {
+    "DATABASE_HOST": "host",
+    "DATABASE_PORT": "port",
+    "DATABASE_DB": "dbname",
+    "DATABASE_USER": "username",
+    "DATABASE_PASSWORD": "password",
+    "POSTGRES_HOST": "host",
+    "POSTGRES_PORT": "port",
+    "POSTGRES_DB": "dbname",
+    "POSTGRES_USER": "username",
+    "POSTGRES_PASSWORD": "password",
+}
+
+_ROOT_TEMPLATE_KEY = "templates/generated/root.yaml"
+
+
+def _find_policy_document(resources: dict, role_id: str, policy_name: str):
+    """Return the PolicyDocument dict for ``policy_name`` on ``role_id``, or None."""
+    role = resources.get(role_id)
+    if not role:
+        return None
+    for policy in role.get("Properties", {}).get("Policies", []) or []:
+        if policy.get("PolicyName") == policy_name:
+            return policy.get("PolicyDocument", {})
+    return None
+
+
+def _policy_actions(policy_document: dict) -> set[str]:
+    """Flatten every Action across every statement of a policy document."""
+    actions: set[str] = set()
+    for statement in (policy_document or {}).get("Statement", []) or []:
+        action = statement.get("Action")
+        if isinstance(action, str):
+            actions.add(action)
+        elif isinstance(action, list):
+            actions.update(a for a in action if isinstance(a, str))
+    return actions
+
+
+def _read_secrets_resources(resources: dict) -> list:
+    """Return the Resource list of the TaskExecutionRole ReadSecrets policy."""
+    document = _find_policy_document(resources, "TaskExecutionRole", "ReadSecrets")
+    if document is None:
+        return []
+    statements = document.get("Statement", []) or []
+    if not statements:
+        return []
+    resource = statements[0].get("Resource", [])
+    if isinstance(resource, list):
+        return resource
+    return [resource]
+
+
+def _container_secrets(resources: dict) -> list:
+    """Return the Secrets list of the primary container definition."""
+    task_definition = resources.get("TaskDefinition")
+    if not task_definition:
+        return []
+    containers = (
+        task_definition.get("Properties", {}).get("ContainerDefinitions", []) or []
+    )
+    if not containers:
+        return []
+    return containers[0].get("Secrets", []) or []
+
+
+def _root_stack_parameter_sets(root_resources: dict) -> list[dict]:
+    """Return the Parameters mapping of every nested CloudFormation stack."""
+    parameter_sets: list[dict] = []
+    for resource in root_resources.values():
+        if resource.get("Type") != "AWS::CloudFormation::Stack":
+            continue
+        parameter_sets.append(resource.get("Properties", {}).get("Parameters", {}) or {})
+    return parameter_sets
+
+
+def validate_built_deploy_templates(
+    templates: dict,
+    config: ProjectConfig,
+    env_name: str,
+    lookups: ResolvedLookupData,
+) -> None:
+    """Structurally validate built templates before any AWS call.
+
+    Parallel to :func:`validate_rendered_deploy_templates`, but inspects the
+    troposphere ``Template`` objects produced by ``build_project_templates``
+    (via ``Template.to_dict()``) instead of substring-matching rendered YAML.
+    Every guarantee the text markers provided is preserved as a structural
+    assertion. Raises before returning when a required template element is
+    missing, naming the service and the missing element.
+    """
+    root_template = templates.get(_ROOT_TEMPLATE_KEY)
+    if root_template is None:
+        raise FileNotFoundError(f"Missing template: {_ROOT_TEMPLATE_KEY}")
+    root_dict = root_template.to_dict()
+    root_resources = root_dict.get("Resources", {})
+    root_parameter_sets = _root_stack_parameter_sets(root_resources)
+
+    secrets_by_name = {sec.name: sec for sec in config.secrets}
+
+    for service in config.services:
+        service_key = f"templates/generated/services/{service.name}.yaml"
+        service_template = templates.get(service_key)
+        if service_template is None:
+            raise FileNotFoundError(f"Missing service template: {service_key}")
+        service_dict = service_template.to_dict()
+        service_resources = service_dict.get("Resources", {})
+        container_secrets = _container_secrets(service_resources)
+        container_secret_names = {
+            secret.get("Name") for secret in container_secrets
+        }
+        exec_role_resources = _read_secrets_resources(service_resources)
+
+        if service.enable_ses_send_email:
+            document = _find_policy_document(
+                service_resources, "TaskRole", "SesSendEmail"
+            )
+            required_actions = {
+                "ses:SendEmail",
+                "ses:SendRawEmail",
+                "ses:GetSendQuota",
+            }
+            if document is None or not required_actions.issubset(
+                _policy_actions(document)
+            ):
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    "SES task-role policy is missing required permissions"
+                )
+
+        expected_secret_names = list(service.secrets)
+        if config.rds and service.name in config.rds.expose_to:
+            for secret_name in (
+                "POSTGRES_DB",
+                "POSTGRES_USER",
+                "POSTGRES_PASSWORD",
+                "POSTGRES_HOST",
+                "POSTGRES_PORT",
+            ):
+                if secret_name not in expected_secret_names:
+                    expected_secret_names.append(secret_name)
+
+        expected_sources = set()
+        for secret_name in expected_secret_names:
+            secret_cfg = secrets_by_name.get(secret_name)
+            source = getattr(getattr(secret_cfg, "source", None), "value", None)
+            if source is None:
+                if (
+                    config.rds
+                    and service.name in config.rds.expose_to
+                    and secret_name in _RDS_SECRET_KEY_BY_ENV
+                ):
+                    source = "rds"
+                else:
+                    source = "generate"
+
+            if source == "rds":
+                expected_sources.add("RdsSecretArn")
+                json_key = _RDS_SECRET_KEY_BY_ENV.get(
+                    secret_name,
+                    str(secret_cfg.existing_secret_name).strip() if secret_cfg else "",
+                )
+                expected_value_from = {"Fn::Sub": f"${{RdsSecretArn}}:{json_key}::"}
+                if not any(
+                    secret.get("Name") == secret_name
+                    and secret.get("ValueFrom") == expected_value_from
+                    for secret in container_secrets
+                ):
+                    raise RuntimeError(
+                        f"Preflight validation failed for service '{service.name}': "
+                        f"secret '{secret_name}' is missing the expected RDS ValueFrom mapping"
+                    )
+                if secret_name not in container_secret_names:
+                    raise RuntimeError(
+                        f"Preflight validation failed for service '{service.name}': "
+                        f"secret '{secret_name}' is missing from the ECS task definition"
+                    )
+                continue
+
+            param_name = f"SecretArn{_secret_logical_suffix(secret_name)}"
+            expected_ref = {"Ref": param_name}
+            if secret_name not in container_secret_names:
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    f"secret '{secret_name}' is missing from the ECS task definition"
+                )
+            if not any(
+                secret.get("Name") == secret_name
+                and secret.get("ValueFrom") == expected_ref
+                for secret in container_secrets
+            ):
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    f"secret '{secret_name}' is missing the expected task ValueFrom reference"
+                )
+            if expected_ref not in exec_role_resources:
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    f"secret '{secret_name}' is missing from the task execution role policy"
+                )
+
+            if source == "generate":
+                expected_root_value = {
+                    "Ref": f"Secret{_secret_logical_suffix(secret_name)}"
+                }
+            else:
+                expected_arn = lookups.external_secret_arns.get(secret_name, "").strip()
+                if not expected_arn:
+                    raise RuntimeError(
+                        f"Preflight validation failed: external secret '{secret_name}' did not resolve to an ARN"
+                    )
+                expected_root_value = {
+                    "Ref": f"EnvSecretArn{_secret_logical_suffix(secret_name)}"
+                }
+
+            if not any(
+                params.get(param_name) == expected_root_value
+                for params in root_parameter_sets
+            ):
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    f"secret '{secret_name}' is missing from the root stack nested-service parameters"
+                )
+
+        for source_name in sorted(expected_sources):
+            if {"Ref": source_name} not in exec_role_resources:
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    f"required secret source '{source_name}' is missing from the task execution role policy"
+                )
+
+    if config.rds and not any(
+        params.get("RdsSecretArn") == {"Ref": "RdsCredentialsSecret"}
+        for params in root_parameter_sets
+    ):
+        raise RuntimeError(
+            "Preflight validation failed: root stack is missing the nested RDS secret ARN wiring"
+        )
+
+
 def _validate_subnet_ids(
     ec2, *, subnet_ids: list[str], vpc_id: str, label: str
 ) -> None:
