@@ -7,11 +7,17 @@ from darth_infra.config.models import (
     AlbConfig,
     AlbMode,
     AlbPathRule,
+    EbsVolumeConfig,
     EnvironmentOverride,
+    LaunchType,
     ProjectConfig,
     RdsConfig,
+    S3BucketConfig,
+    S3BucketConnection,
+    S3BucketMode,
     SecretConfig,
     SecretSource,
+    ServiceDiscoveryConfig,
     ServiceConfig,
 )
 from darth_infra.scaffold.builders import build_project_templates
@@ -97,6 +103,142 @@ def _dedicated_alb_config(*, certificate: bool = True) -> ProjectConfig:
             default_target_service="web",
             default_listener_priority=100,
         ),
+    )
+
+
+def _rds_secrets_config() -> ProjectConfig:
+    return ProjectConfig(
+        project_name="demo",
+        services=[
+            ServiceConfig(
+                name="web",
+                secrets=[
+                    "APP_SECRET",
+                    "EXISTING_TOKEN",
+                    "ENV_TOKEN",
+                    "DATABASE_HOST",
+                    "DATABASE_PORT",
+                    "DATABASE_DB",
+                    "DATABASE_USER",
+                    "DATABASE_PASSWORD",
+                ],
+            )
+        ],
+        secrets=[
+            SecretConfig(name="APP_SECRET", source=SecretSource.GENERATE),
+            SecretConfig(
+                name="EXISTING_TOKEN",
+                source=SecretSource.EXISTING,
+                existing_secret_name="shared/existing-token",
+            ),
+            SecretConfig(name="ENV_TOKEN", source=SecretSource.ENV),
+            SecretConfig(
+                name="DATABASE_HOST",
+                source=SecretSource.RDS,
+                existing_secret_name="host",
+            ),
+            SecretConfig(
+                name="DATABASE_PORT",
+                source=SecretSource.RDS,
+                existing_secret_name="port",
+            ),
+            SecretConfig(
+                name="DATABASE_DB",
+                source=SecretSource.RDS,
+                existing_secret_name="dbname",
+            ),
+            SecretConfig(
+                name="DATABASE_USER",
+                source=SecretSource.RDS,
+                existing_secret_name="username",
+            ),
+            SecretConfig(
+                name="DATABASE_PASSWORD",
+                source=SecretSource.RDS,
+                existing_secret_name="password",
+            ),
+        ],
+        rds=RdsConfig(
+            database_name="demo_db",
+            instance_type="db.t4g.small",
+            allocated_storage_gb=30,
+            engine_version="16",
+            backup_retention_days=14,
+            expose_to=["web"],
+        ),
+    )
+
+
+def _service_discovery_config() -> ProjectConfig:
+    return ProjectConfig(
+        project_name="demo",
+        services=[
+            ServiceConfig(
+                name="web", port=8000, enable_service_discovery=True
+            )
+        ],
+        service_discovery=ServiceDiscoveryConfig(
+            namespace_template="{project}-{env}.local"
+        ),
+        service_discovery_configured=True,
+    )
+
+
+def _s3_config() -> ProjectConfig:
+    return ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        s3_buckets=[
+            S3BucketConfig(
+                name="media-files",
+                cors=True,
+                connections=[
+                    S3BucketConnection(
+                        service="web", env_key="MEDIA_BUCKET"
+                    )
+                ],
+            ),
+            S3BucketConfig(
+                name="shared-assets",
+                mode=S3BucketMode.EXISTING,
+                existing_bucket_name="company-shared-assets",
+                connections=[
+                    S3BucketConnection(
+                        service="web",
+                        env_key="SHARED_ASSETS_BUCKET",
+                        read_only=True,
+                    )
+                ],
+            ),
+        ],
+    )
+
+
+def _ec2_config() -> ProjectConfig:
+    return ProjectConfig(
+        project_name="demo",
+        services=[
+            ServiceConfig(
+                name="worker",
+                port=None,
+                launch_type=LaunchType.EC2,
+                ec2_instance_type="t4g.small",
+                cpu=512,
+                memory_mib=1024,
+                desired_count=2,
+                user_data_script_content=(
+                    "echo '${literal}' > /var/tmp/user-data-value"
+                ),
+                ebs_volumes=[
+                    EbsVolumeConfig(
+                        name="worker-data",
+                        size_gb=40,
+                        mount_path="/data",
+                        device_name="/dev/xvdf",
+                    )
+                ],
+            )
+        ],
     )
 
 
@@ -464,6 +606,165 @@ def test_builders_add_dedicated_alb_without_certificate_listener_variant() -> No
     assert root["Resources"]["DedicatedAlbHttpListener"] == expected
 
 
+def test_builders_add_rds_and_secret_root_resources() -> None:
+    config = _rds_secrets_config()
+    root = template_to_dict(
+        build_project_templates(config)["templates/generated/root.yaml"]
+    )
+    jinja_root = _jinja_root_to_dict(config)
+
+    for logical_id in (
+        "SecretAPPSECRET",
+        "RdsCredentialsSecret",
+        "RdsSecurityGroup",
+        "RdsSubnetGroup",
+        "Database",
+        "RdsSecretAttachment",
+        "ServiceWeb",
+        "RdsIngressFromWeb",
+    ):
+        assert root["Resources"][logical_id] == jinja_root["Resources"][logical_id]
+
+
+def test_builders_wire_all_secret_sources_and_rds_environment_keys() -> None:
+    config = _rds_secrets_config()
+    service = template_to_dict(
+        build_project_templates(config)[
+            "templates/generated/services/web.yaml"
+        ]
+    )
+
+    assert service == _jinja_service_to_dict(config)
+    container = service["Resources"]["TaskDefinition"]["Properties"][
+        "ContainerDefinitions"
+    ][0]
+    assert container["Secrets"] == [
+        {"Name": "APP_SECRET", "ValueFrom": {"Ref": "SecretArnAPPSECRET"}},
+        {
+            "Name": "EXISTING_TOKEN",
+            "ValueFrom": {"Ref": "SecretArnEXISTINGTOKEN"},
+        },
+        {"Name": "ENV_TOKEN", "ValueFrom": {"Ref": "SecretArnENVTOKEN"}},
+        {
+            "Name": "DATABASE_HOST",
+            "ValueFrom": {"Fn::Sub": "${RdsSecretArn}:host::"},
+        },
+        {
+            "Name": "DATABASE_PORT",
+            "ValueFrom": {"Fn::Sub": "${RdsSecretArn}:port::"},
+        },
+        {
+            "Name": "DATABASE_DB",
+            "ValueFrom": {"Fn::Sub": "${RdsSecretArn}:dbname::"},
+        },
+        {
+            "Name": "DATABASE_USER",
+            "ValueFrom": {"Fn::Sub": "${RdsSecretArn}:username::"},
+        },
+        {
+            "Name": "DATABASE_PASSWORD",
+            "ValueFrom": {"Fn::Sub": "${RdsSecretArn}:password::"},
+        },
+        {
+            "Name": "POSTGRES_DB",
+            "ValueFrom": {"Fn::Sub": "${RdsSecretArn}:dbname::"},
+        },
+        {
+            "Name": "POSTGRES_USER",
+            "ValueFrom": {"Fn::Sub": "${RdsSecretArn}:username::"},
+        },
+        {
+            "Name": "POSTGRES_PASSWORD",
+            "ValueFrom": {"Fn::Sub": "${RdsSecretArn}:password::"},
+        },
+        {
+            "Name": "POSTGRES_HOST",
+            "ValueFrom": {"Fn::Sub": "${RdsSecretArn}:host::"},
+        },
+        {
+            "Name": "POSTGRES_PORT",
+            "ValueFrom": {"Fn::Sub": "${RdsSecretArn}:port::"},
+        },
+    ]
+
+
+def test_builders_add_service_discovery_namespace_and_service_registry() -> None:
+    config = _service_discovery_config()
+    templates = build_project_templates(config)
+    root = template_to_dict(templates["templates/generated/root.yaml"])
+    service = template_to_dict(
+        templates["templates/generated/services/web.yaml"]
+    )
+    jinja_root = _jinja_root_to_dict(config)
+
+    assert root["Resources"]["ServiceNamespace"] == jinja_root["Resources"][
+        "ServiceNamespace"
+    ]
+    assert root["Resources"]["ServiceWeb"] == jinja_root["Resources"][
+        "ServiceWeb"
+    ]
+    assert service == _jinja_service_to_dict(config)
+
+
+def test_builders_add_managed_and_existing_s3_bucket_connections() -> None:
+    config = _s3_config()
+    templates = build_project_templates(config)
+    root = template_to_dict(templates["templates/generated/root.yaml"])
+    service = template_to_dict(
+        templates["templates/generated/services/web.yaml"]
+    )
+    jinja_root = _jinja_root_to_dict(config)
+
+    assert root["Resources"]["Bucketmediafiles"] == jinja_root["Resources"][
+        "Bucketmediafiles"
+    ]
+    assert "Bucketsharedassets" not in root["Resources"]
+    assert root["Resources"]["ServiceWeb"] == jinja_root["Resources"][
+        "ServiceWeb"
+    ]
+    assert service == _jinja_service_to_dict(config)
+
+
+def test_builders_add_ec2_launch_type_resources_and_capacity_wiring() -> None:
+    config = _ec2_config()
+    service = template_to_dict(
+        build_project_templates(config)[
+            "templates/generated/services/worker.yaml"
+        ]
+    )
+    expected = _jinja_service_to_dict(config)
+    expected["Resources"]["Ec2InstanceProfile"]["Properties"].pop("Tags")
+
+    assert service == expected
+    resources = service["Resources"]
+    assert {
+        "Ec2InstanceRole",
+        "Ec2InstanceProfile",
+        "LaunchTemplate",
+        "AutoScalingGroup",
+    } <= resources.keys()
+    user_data = resources["LaunchTemplate"]["Properties"][
+        "LaunchTemplateData"
+    ]["UserData"]["Fn::Base64"]["Fn::Sub"]
+    assert "echo '\\${!literal}' > /var/tmp/user-data-value" in user_data
+    assert resources["EcsService"]["Properties"]["LaunchType"] == "EC2"
+
+
+def test_builders_do_not_add_ec2_resources_to_fargate_service() -> None:
+    service = template_to_dict(
+        build_project_templates(_config())[
+            "templates/generated/services/web.yaml"
+        ]
+    )
+
+    assert {
+        "Ec2InstanceRole",
+        "Ec2InstanceProfile",
+        "LaunchTemplate",
+        "AutoScalingGroup",
+    }.isdisjoint(service["Resources"])
+
+
 def test_builders_add_feature_conditional_parameters_and_conditions() -> None:
     config = ProjectConfig(
         project_name="demo",
@@ -538,8 +839,24 @@ def test_builder_root_template_passes_cfn_lint(tmp_path: Path) -> None:
 
 
 def test_builder_service_template_passes_cfn_lint(tmp_path: Path) -> None:
-    service = build_project_templates(_shared_alb_config())[
+    service = build_project_templates(_rds_secrets_config())[
         "templates/generated/services/web.yaml"
     ]
 
     assert_template_passes_cfn_lint(service, tmp_path / "web.yaml")
+
+
+def test_builder_s3_service_template_passes_cfn_lint(tmp_path: Path) -> None:
+    service = build_project_templates(_s3_config())[
+        "templates/generated/services/web.yaml"
+    ]
+
+    assert_template_passes_cfn_lint(service, tmp_path / "web-s3.yaml")
+
+
+def test_builder_ec2_service_template_passes_cfn_lint(tmp_path: Path) -> None:
+    service = build_project_templates(_ec2_config())[
+        "templates/generated/services/worker.yaml"
+    ]
+
+    assert_template_passes_cfn_lint(service, tmp_path / "worker-ec2.yaml")

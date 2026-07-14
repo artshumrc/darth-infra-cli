@@ -62,3 +62,25 @@ uv run pytest tests/ -k "ec2 or launch"
 ## Blocked by
 
 - 03 (`03-service-stack-core.md`)
+
+## Implementation blocker
+
+On 2026-07-14, the EC2 builder path and structural Jinja-parity tests were
+completed. The parity test passes, including the legacy `$${literal}` user-data
+escaping, EC2 role/profile, launch template, EBS mappings, auto-scaling group,
+task-definition branches, and ECS service launch type. The Fargate isolation
+test also passes.
+
+The mandatory `cfn-lint` gate conflicts with exact legacy parity in two places:
+
+- The Jinja template adds `Tags` to `AWS::IAM::InstanceProfile`, but
+  `cfn-lint 1.53.0` rejects that property with `E3002`.
+- The required legacy `${` to `$${` user-data escaping is preserved exactly,
+  but `cfn-lint` interprets the remaining `${literal}` portion as an unresolved
+  `Fn::Sub` variable and rejects it with `E1021`.
+
+Decision (2026-07-14): remove the unsupported instance-profile `Tags` and use
+CloudFormation's launch-template-safe literal escaping (`\${!literal}`).
+Exact structural parity is explicitly waived for those invalid legacy shapes;
+all logical IDs and supported properties remain unchanged. Partial
+implementation and tests are left uncommitted in the worktree.

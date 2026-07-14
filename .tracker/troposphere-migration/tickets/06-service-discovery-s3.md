@@ -64,3 +64,16 @@ uv run pytest tests/ -k "discovery or s3"
 ## Blocked by
 
 - 03 (`03-service-stack-core.md`)
+
+## Implementation note
+
+The Cloud Map and non-CloudFront S3 slices are implemented and their structural
+Jinja-parity tests pass. `uv run pytest tests/ -k "discovery or s3"` passes all
+14 selected tests, including cfn-lint for the S3-enabled service template.
+
+The full suite is blocked by two failures introduced by the concurrent,
+uncommitted ticket 04 work: the minimal-root test does not expect the newly
+unconditional dedicated-ALB/DNS resources, and cfn-lint rejects `Tags` on the
+two ALB listener resources. Ticket 06 does not modify those out-of-scope
+resources, so human resolution of ticket 04 is required before this ticket can
+meet the full-suite acceptance criterion and be marked completed.

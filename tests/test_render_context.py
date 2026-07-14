@@ -75,7 +75,7 @@ def test_context_derives_stable_cloudformation_names() -> None:
     service = context.services_ctx[0]
     assert service.name_pascal == "WebApi"
     assert service.default_listener_priority_param_name == "DefaultListenerPriority"
-    assert service.secret_params[0].param_name == "SecretArnDbSecretKey"
+    assert service.secret_params[0].param_name == "SecretArndbsecretkey"
     assert service.secret_params[0].rds_json_key == "dbname"
     assert [rule.priority_param_name for rule in service.service_path_rules] == [
         "PathRulePriorityApiV2"

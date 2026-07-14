@@ -6,6 +6,7 @@ from typing import TypeAlias
 
 from troposphere import (
     And,
+    Base64,
     Condition,
     Equals,
     GetAtt,
@@ -22,6 +23,7 @@ from troposphere import (
     Template,
 )
 from troposphere import (
+    autoscaling,
     cloudformation,
     ec2,
     ecr,
@@ -29,7 +31,11 @@ from troposphere import (
     elasticloadbalancingv2,
     iam,
     logs,
+    rds,
     route53,
+    s3,
+    secretsmanager,
+    servicediscovery,
 )
 
 from ...config.models import ProjectConfig
@@ -126,6 +132,23 @@ def _build_service_template(
         template.add_condition(
             tag.condition_name, Not(Equals(Ref(tag.parameter_name), ""))
         )
+    if service.has_rds:
+        template.add_parameter(Parameter("RdsSecretArn", Type="String"))
+    if service.svc.enable_service_discovery:
+        template.add_parameter(Parameter("CloudMapNamespaceId", Type="String"))
+    for secret in service.secret_params:
+        if secret.requires_param:
+            template.add_parameter(Parameter(secret.param_name, Type="String"))
+    for s3_access in service.s3_vars:
+        template.add_parameter(Parameter(s3_access.param_name, Type="String"))
+        template.add_parameter(Parameter(s3_access.arn_param_name, Type="String"))
+        if s3_access.fallback_param_name:
+            template.add_parameter(
+                Parameter(s3_access.fallback_param_name, Type="String")
+            )
+            template.add_parameter(
+                Parameter(s3_access.fallback_arn_param_name, Type="String")
+            )
 
     tags = _service_tags(context, service)
     log_group = template.add_resource(
@@ -181,6 +204,30 @@ def _build_service_template(
             )
         )
 
+    execution_policies = []
+    if service.secret_params or service.has_rds:
+        secret_resources = [
+            Ref(secret.param_name)
+            for secret in service.secret_params
+            if secret.requires_param
+        ]
+        if service.has_rds:
+            secret_resources.append(Ref("RdsSecretArn"))
+        execution_policies.append(
+            iam.Policy(
+                PolicyName="ReadSecrets",
+                PolicyDocument={
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": ["secretsmanager:GetSecretValue"],
+                            "Resource": secret_resources,
+                        }
+                    ],
+                },
+            )
+        )
     task_execution_role = template.add_resource(
         iam.Role(
             "TaskExecutionRole",
@@ -189,7 +236,7 @@ def _build_service_template(
                 "arn:aws:iam::aws:policy/service-role/"
                 "AmazonECSTaskExecutionRolePolicy"
             ],
-            Policies=[],
+            Policies=execution_policies,
             Tags=tags,
         )
     )
@@ -235,6 +282,57 @@ def _build_service_template(
                 },
             )
         )
+    if service.s3_vars:
+        s3_statements = []
+        for s3_access in service.s3_vars:
+            s3_statements.append(
+                {
+                    "Effect": "Allow",
+                    "Action": (
+                        ["s3:GetObject", "s3:ListBucket"]
+                        if s3_access.read_only
+                        else [
+                            "s3:GetObject",
+                            "s3:PutObject",
+                            "s3:DeleteObject",
+                            "s3:ListBucket",
+                        ]
+                    ),
+                    "Resource": [
+                        Ref(s3_access.arn_param_name),
+                        Join(
+                            "",
+                            [Ref(s3_access.arn_param_name), "/*"],
+                        ),
+                    ],
+                }
+            )
+            if s3_access.fallback_arn_param_name:
+                s3_statements.append(
+                    {
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:ListBucket"],
+                        "Resource": [
+                            Ref(s3_access.fallback_arn_param_name),
+                            Join(
+                                "",
+                                [
+                                    Ref(s3_access.fallback_arn_param_name),
+                                    "/*",
+                                ],
+                            ),
+                        ],
+                    }
+                )
+        task_policies.append(
+            iam.Policy(
+                PolicyName="S3Access",
+                PolicyDocument={
+                    "Version": "2012-10-17",
+                    "Statement": s3_statements,
+                },
+            )
+        )
     task_role = template.add_resource(
         iam.Role(
             "TaskRole",
@@ -244,6 +342,150 @@ def _build_service_template(
         )
     )
 
+    if service.launch_type == "ec2":
+        instance_role = template.add_resource(
+            iam.Role(
+                "Ec2InstanceRole",
+                AssumeRolePolicyDocument={
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {"Service": "ec2.amazonaws.com"},
+                            "Action": "sts:AssumeRole",
+                        }
+                    ],
+                },
+                ManagedPolicyArns=[
+                    "arn:aws:iam::aws:policy/service-role/"
+                    "AmazonEC2ContainerServiceforEC2Role"
+                ],
+                Tags=tags,
+            )
+        )
+        instance_profile = template.add_resource(
+            iam.InstanceProfile(
+                "Ec2InstanceProfile", Roles=[Ref(instance_role)]
+            )
+        )
+
+        user_data_lines = [
+            "#!/bin/bash",
+            'echo "ECS_CLUSTER=${ProjectName}-${EnvironmentName}" '
+            ">> /etc/ecs/ecs.config",
+            'echo "ECS_ENABLE_TASK_IAM_ROLE=true" >> /etc/ecs/ecs.config',
+        ]
+        for volume in service.ebs_params:
+            user_data_lines.extend(
+                [
+                    f"if ! blkid {volume.device_name}; then",
+                    f"  mkfs.{volume.filesystem_type} {volume.device_name}",
+                    "fi",
+                    f"mkdir -p {volume.mount_path}",
+                    (
+                        f'echo "{volume.device_name} {volume.mount_path} '
+                        f'{volume.filesystem_type} defaults,nofail 0 2" '
+                        ">> /etc/fstab"
+                    ),
+                    f"mount {volume.mount_path}",
+                ]
+            )
+        if service.user_data_script_content:
+            user_data_lines.append(service.user_data_script_content)
+        user_data = "\n".join(user_data_lines) + "\n"
+
+        block_device_mappings = [
+            ec2.LaunchTemplateBlockDeviceMapping(
+                DeviceName=volume.device_name,
+                Ebs=ec2.EBSBlockDevice(
+                    VolumeType=volume.volume_type,
+                    VolumeSize=volume.size_gb,
+                    DeleteOnTermination=False,
+                ),
+            )
+            for volume in service.ebs_params
+        ]
+        if not block_device_mappings:
+            block_device_mappings.append(
+                ec2.LaunchTemplateBlockDeviceMapping(
+                    DeviceName="/dev/xvda",
+                    Ebs=ec2.EBSBlockDevice(
+                        VolumeType="gp3", VolumeSize=30
+                    ),
+                )
+            )
+
+        launch_template = template.add_resource(
+            ec2.LaunchTemplate(
+                "LaunchTemplate",
+                TagSpecifications=[
+                    ec2.TagSpecifications(
+                        ResourceType="launch-template", Tags=tags
+                    )
+                ],
+                LaunchTemplateData=ec2.LaunchTemplateData(
+                    IamInstanceProfile=ec2.IamInstanceProfile(
+                        Arn=GetAtt(instance_profile, "Arn")
+                    ),
+                    ImageId=(
+                        "{{resolve:ssm:/aws/service/ecs/optimized-ami/"
+                        "amazon-linux-2/arm64/recommended/image_id}}"
+                        if service.architecture == "arm64"
+                        else "{{resolve:ssm:/aws/service/ecs/optimized-ami/"
+                        "amazon-linux-2/recommended/image_id}}"
+                    ),
+                    InstanceType=service.svc.ec2_instance_type or "t3.medium",
+                    SecurityGroupIds=[Ref(task_security_group)],
+                    UserData=Base64(Sub(user_data)),
+                    BlockDeviceMappings=block_device_mappings,
+                    TagSpecifications=[
+                        ec2.TagSpecifications(
+                            ResourceType=resource_type, Tags=tags
+                        )
+                        for resource_type in ("instance", "volume")
+                    ],
+                ),
+            )
+        )
+        propagated_tags = [
+            autoscaling.Tag(
+                "Name",
+                Sub(
+                    f"${{ProjectName}}-${{EnvironmentName}}-{service.name}"
+                ),
+                True,
+            ),
+            autoscaling.Tag("Project", Ref("ProjectName"), True),
+            autoscaling.Tag("Environment", Ref("EnvironmentName"), True),
+            autoscaling.Tag("Service", service.name, True),
+            *(
+                If(
+                    tag.condition_name,
+                    {
+                        "Key": tag.key,
+                        "Value": Ref(tag.parameter_name),
+                        "PropagateAtLaunch": True,
+                    },
+                    Ref("AWS::NoValue"),
+                )
+                for tag in context.tag_parameters
+            ),
+        ]
+        template.add_resource(
+            autoscaling.AutoScalingGroup(
+                "AutoScalingGroup",
+                VPCZoneIdentifier=Split(",", Ref("PrivateSubnetIds")),
+                MinSize=str(service.svc.desired_count),
+                MaxSize=str(max(service.svc.desired_count * 2, 2)),
+                DesiredCapacity=str(service.svc.desired_count),
+                LaunchTemplate=autoscaling.LaunchTemplateSpecification(
+                    LaunchTemplateId=Ref(launch_template),
+                    Version=GetAtt(launch_template, "LatestVersionNumber"),
+                ),
+                Tags=propagated_tags,
+            )
+        )
+
     environment = [
         ecs.Environment(Name="ENVIRONMENT", Value=Ref("EnvironmentName")),
         ecs.Environment(Name="SERVICE_NAME", Value=service.name),
@@ -252,6 +494,23 @@ def _build_service_template(
             for name, value in service.svc.environment_variables.items()
         ),
     ]
+    if service.has_rds:
+        environment.append(
+            ecs.Environment(Name="DB_SECRET_ARN", Value=Ref("RdsSecretArn"))
+        )
+    for s3_access in service.s3_vars:
+        environment.append(
+            ecs.Environment(
+                Name=s3_access.env_key, Value=Ref(s3_access.param_name)
+            )
+        )
+        if s3_access.fallback_env_key and s3_access.fallback_param_name:
+            environment.append(
+                ecs.Environment(
+                    Name=s3_access.fallback_env_key,
+                    Value=Ref(s3_access.fallback_param_name),
+                )
+            )
     container = ecs.ContainerDefinition(
         Name=service.name,
         Image=(
@@ -272,28 +531,80 @@ def _build_service_template(
         ),
         Environment=environment,
     )
+    if service.secret_params or service.has_rds:
+        container.Secrets = [
+            ecs.Secret(
+                Name=secret.secret_name,
+                ValueFrom=(
+                    Sub(f"${{RdsSecretArn}}:{secret.rds_json_key}::")
+                    if secret.source == "rds"
+                    else Ref(secret.param_name)
+                ),
+            )
+            for secret in service.secret_params
+        ]
     if service.svc.command:
         container.Command = ["sh", "-c", service.svc.command]
+    if service.launch_type == "ec2":
+        container.Cpu = service.svc.cpu
+        container.Memory = service.svc.memory_mib
+        if service.ebs_params:
+            container.MountPoints = [
+                ecs.MountPoint(
+                    ContainerPath=volume.mount_path,
+                    SourceVolume=volume.name,
+                    ReadOnly=False,
+                )
+                for volume in service.ebs_params
+            ]
     if service.svc.port is not None:
         container.PortMappings = [
             ecs.PortMapping(ContainerPort=service.svc.port, Protocol="tcp")
         ]
-    task_definition = template.add_resource(
-        ecs.TaskDefinition(
-            "TaskDefinition",
-            Family=Sub(
-                f"${{ProjectName}}-${{EnvironmentName}}-{service.name}"
-            ),
-            NetworkMode="awsvpc",
-            RequiresCompatibilities=["FARGATE"],
-            Cpu=str(service.svc.cpu),
-            Memory=str(service.svc.memory_mib),
-            ExecutionRoleArn=GetAtt(task_execution_role, "Arn"),
-            TaskRoleArn=GetAtt(task_role, "Arn"),
-            Tags=tags,
-            ContainerDefinitions=[container],
+    task_definition_properties: dict[str, object] = {
+        "Family": Sub(
+            f"${{ProjectName}}-${{EnvironmentName}}-{service.name}"
+        ),
+        "NetworkMode": "awsvpc",
+        "RequiresCompatibilities": [
+            "EC2" if service.launch_type == "ec2" else "FARGATE"
+        ],
+        "ExecutionRoleArn": GetAtt(task_execution_role, "Arn"),
+        "TaskRoleArn": GetAtt(task_role, "Arn"),
+        "Tags": tags,
+        "ContainerDefinitions": [container],
+    }
+    if service.launch_type == "fargate":
+        task_definition_properties.update(
+            Cpu=str(service.svc.cpu), Memory=str(service.svc.memory_mib)
         )
+    elif service.ebs_params:
+        task_definition_properties["Volumes"] = [
+            ecs.Volume(
+                Name=volume.name,
+                Host=ecs.Host(SourcePath=volume.mount_path),
+            )
+            for volume in service.ebs_params
+        ]
+    task_definition = template.add_resource(
+        ecs.TaskDefinition("TaskDefinition", **task_definition_properties)
     )
+
+    cloud_map_service = None
+    if service.svc.enable_service_discovery:
+        cloud_map_service = template.add_resource(
+            servicediscovery.Service(
+                "CloudMapService",
+                Name=service.name,
+                NamespaceId=Ref("CloudMapNamespaceId"),
+                DnsConfig=servicediscovery.DnsConfig(
+                    DnsRecords=[
+                        servicediscovery.DnsRecord(Type="A", TTL=10)
+                    ]
+                ),
+                Tags=tags,
+            )
+        )
 
     target_group = None
     if service.has_alb_target:
@@ -383,7 +694,7 @@ def _build_service_template(
         Cluster=Ref("ClusterArn"),
         DesiredCount=service.svc.desired_count,
         EnableExecuteCommand=service.svc.enable_exec,
-        LaunchType="FARGATE",
+        LaunchType="EC2" if service.launch_type == "ec2" else "FARGATE",
         TaskDefinition=Ref(task_definition),
         PropagateTags="TASK_DEFINITION",
         Tags=tags,
@@ -409,6 +720,10 @@ def _build_service_template(
                 ContainerPort=service.svc.port,
                 TargetGroupArn=Ref(target_group),
             )
+        ]
+    if cloud_map_service is not None:
+        ecs_service.ServiceRegistries = [
+            ecs.ServiceRegistry(RegistryArn=GetAtt(cloud_map_service, "Arn"))
         ]
     template.add_resource(ecs_service)
 
@@ -503,6 +818,29 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
                 Parameter(secret.external_parameter_name, Type="String")
             )
 
+    for bucket in context.s3_buckets:
+        if not bucket.provision_bucket:
+            continue
+        bucket_properties: dict[str, object] = {
+            "BucketName": Sub(
+                f"${{ProjectName}}-${{EnvironmentName}}-{bucket.name}"
+            ),
+            "Tags": _resource_tags(context),
+        }
+        if bucket.cors:
+            bucket_properties["CorsConfiguration"] = s3.CorsConfiguration(
+                CorsRules=[
+                    s3.CorsRules(
+                        AllowedHeaders=["*"],
+                        AllowedMethods=["GET", "PUT", "POST", "DELETE", "HEAD"],
+                        AllowedOrigins=["*"],
+                    )
+                ]
+            )
+        root.add_resource(
+            s3.Bucket(bucket.bucket_logical_id, **bucket_properties)
+        )
+
     root.add_condition("IsProd", Equals(Ref("EnvironmentName"), "prod"))
     root.add_condition(
         "UseDedicatedAlb", Equals(Ref("AlbMode"), "dedicated")
@@ -548,6 +886,154 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
             Tags=_resource_tags(context),
         )
     )
+    service_namespace = None
+    if context.has_service_discovery:
+        service_namespace = root.add_resource(
+            servicediscovery.PrivateDnsNamespace(
+                "ServiceNamespace",
+                Condition="CreateServiceNamespace",
+                Name=Sub(context.service_discovery_namespace_cfn),
+                Vpc=Ref("VpcId"),
+                Tags=_resource_tags(context),
+            )
+        )
+
+    secrets_by_name = {secret.name: secret for secret in context.secrets}
+    for secret in context.secrets:
+        if secret.source.value == "generate":
+            root.add_resource(
+                secretsmanager.Secret(
+                    secret.generated_secret_logical_id,
+                    Name=Sub(
+                        "/darth-infra/${ProjectName}/${EnvironmentName}/"
+                        f"{secret.name}"
+                    ),
+                    GenerateSecretString=secretsmanager.GenerateSecretString(
+                        PasswordLength=secret.length,
+                        ExcludePunctuation=True,
+                    ),
+                    Tags=_resource_tags(context),
+                )
+            )
+
+    rds_secret = None
+    rds_security_group = None
+    rds_secret_attachment = None
+    if context.rds is not None:
+        rds_secret = root.add_resource(
+            secretsmanager.Secret(
+                "RdsCredentialsSecret",
+                Name=Sub("${ProjectName}-${EnvironmentName}-rds-credentials"),
+                GenerateSecretString=If(
+                    "HasRdsSnapshot",
+                    Ref("AWS::NoValue"),
+                    secretsmanager.GenerateSecretString(
+                        SecretStringTemplate=(
+                            '{"username": '
+                            f'"{context.rds_master_username}"}}'
+                        ),
+                        GenerateStringKey="password",
+                        PasswordLength=32,
+                        ExcludeCharacters='"@/\\',
+                    ),
+                ),
+                SecretString=If(
+                    "HasRdsSnapshot",
+                    Sub(
+                        '{"username":"{{resolve:secretsmanager:'
+                        '${SourceSecretArn}:SecretString:username}}",'
+                        '"password":"{{resolve:secretsmanager:'
+                        '${SourceSecretArn}:SecretString:password}}"}',
+                        {"SourceSecretArn": Ref("RdsSourceSecretArn")},
+                    ),
+                    Ref("AWS::NoValue"),
+                ),
+                Tags=_resource_tags(context),
+            )
+        )
+        rds_security_group = root.add_resource(
+            ec2.SecurityGroup(
+                "RdsSecurityGroup",
+                GroupDescription=Sub("${ProjectName}-${EnvironmentName} rds"),
+                VpcId=Ref("VpcId"),
+                Tags=_resource_tags(context),
+            )
+        )
+        rds_subnet_group = root.add_resource(
+            rds.DBSubnetGroup(
+                "RdsSubnetGroup",
+                DBSubnetGroupDescription=Sub(
+                    "${ProjectName}-${EnvironmentName} DB subnets"
+                ),
+                SubnetIds=Ref("PrivateSubnetIds"),
+                Tags=_resource_tags(context),
+            )
+        )
+        database = root.add_resource(
+            rds.DBInstance(
+                "Database",
+                DeletionPolicy=If("IsProd", "Snapshot", "Delete"),
+                UpdateReplacePolicy=If("IsProd", "Snapshot", "Delete"),
+                DBInstanceIdentifier=Sub(
+                    "${ProjectName}-${EnvironmentName}-db"
+                ),
+                DBInstanceClass=Ref("RdsInstanceType"),
+                Engine="postgres",
+                EngineVersion=context.rds.engine_version,
+                MasterUsername=If(
+                    "HasRdsSnapshot",
+                    Ref("AWS::NoValue"),
+                    Join(
+                        "",
+                        [
+                            "{{resolve:secretsmanager:",
+                            Ref(rds_secret),
+                            ":SecretString:username}}",
+                        ],
+                    ),
+                ),
+                MasterUserPassword=If(
+                    "HasRdsSnapshot",
+                    Ref("AWS::NoValue"),
+                    Join(
+                        "",
+                        [
+                            "{{resolve:secretsmanager:",
+                            Ref(rds_secret),
+                            ":SecretString:password}}",
+                        ],
+                    ),
+                ),
+                AllocatedStorage=str(context.rds.allocated_storage_gb),
+                BackupRetentionPeriod=context.rds.backup_retention_days,
+                CopyTagsToSnapshot=True,
+                DBName=If(
+                    "HasRdsSnapshot",
+                    Ref("AWS::NoValue"),
+                    context.rds.database_name,
+                ),
+                DBSnapshotIdentifier=If(
+                    "HasRdsSnapshot",
+                    Ref("RdsSnapshotIdentifier"),
+                    Ref("AWS::NoValue"),
+                ),
+                VPCSecurityGroups=[Ref(rds_security_group)],
+                DBSubnetGroupName=Ref(rds_subnet_group),
+                PubliclyAccessible=False,
+                DeletionProtection=If("IsProd", True, False),
+                StorageType="gp3",
+                Tags=_resource_tags(context),
+            )
+        )
+        rds_secret_attachment = root.add_resource(
+            secretsmanager.SecretTargetAttachment(
+                "RdsSecretAttachment",
+                SecretId=Ref(rds_secret),
+                TargetId=Ref(database),
+                TargetType="AWS::RDS::DBInstance",
+            )
+        )
+
     dedicated_alb = root.add_resource(
         elasticloadbalancingv2.LoadBalancer(
             "DedicatedAlb",
@@ -693,15 +1179,81 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
                 for rule in service.service_path_rules
             }
         )
+        if service.has_rds:
+            service_parameters["RdsSecretArn"] = Ref("RdsCredentialsSecret")
+        if service.svc.enable_service_discovery:
+            service_parameters["CloudMapNamespaceId"] = If(
+                "HasExistingCloudMapNamespace",
+                Ref("ExistingCloudMapNamespaceId"),
+                Ref(service_namespace),
+            )
+        for s3_access in service.s3_vars:
+            if s3_access.bucket_ref:
+                service_parameters[s3_access.param_name] = Ref(
+                    s3_access.bucket_ref
+                )
+                service_parameters[s3_access.arn_param_name] = GetAtt(
+                    s3_access.bucket_ref, "Arn"
+                )
+            else:
+                service_parameters[s3_access.param_name] = (
+                    s3_access.bucket_name_literal
+                )
+                service_parameters[s3_access.arn_param_name] = Sub(
+                    f"arn:aws:s3:::{s3_access.bucket_name_literal}"
+                )
+            if s3_access.fallback_param_name:
+                service_parameters[s3_access.fallback_param_name] = (
+                    s3_access.fallback_bucket_name_literal
+                )
+                service_parameters[s3_access.fallback_arn_param_name] = Sub(
+                    "arn:aws:s3:::"
+                    f"{s3_access.fallback_bucket_name_literal}"
+                )
+        for secret in service.secret_params:
+            if secret.source == "generate":
+                secret_context = secrets_by_name[secret.secret_name]
+                service_parameters[secret.param_name] = Ref(
+                    secret_context.generated_secret_logical_id
+                )
+            elif secret.source in {"env", "existing"}:
+                secret_context = secrets_by_name[secret.secret_name]
+                service_parameters[secret.param_name] = Ref(
+                    secret_context.external_parameter_name
+                )
         service_stack = cloudformation.Stack(
             f"Service{service.name_pascal}",
             TemplateURL=f"services/{service.name}.yaml",
             Parameters=service_parameters,
             Tags=_resource_tags(context),
         )
+        dependencies = []
+        if service.has_rds and rds_secret_attachment is not None:
+            dependencies.append(rds_secret_attachment.title)
         if repository is not None:
-            service_stack.DependsOn = repository.title
+            dependencies.append(repository.title)
+        if len(dependencies) == 1:
+            service_stack.DependsOn = dependencies[0]
+        elif dependencies:
+            service_stack.DependsOn = dependencies
         root.add_resource(service_stack)
+
+    if rds_security_group is not None:
+        for service in context.services_ctx:
+            if service.has_rds:
+                root.add_resource(
+                    ec2.SecurityGroupIngress(
+                        f"RdsIngressFrom{service.name_pascal}",
+                        GroupId=Ref(rds_security_group),
+                        IpProtocol="tcp",
+                        FromPort=5432,
+                        ToPort=5432,
+                        SourceSecurityGroupId=GetAtt(
+                            f"Service{service.name_pascal}",
+                            "Outputs.TaskSecurityGroupId",
+                        ),
+                    )
+                )
 
     root.add_resource(
         route53.RecordSetType(

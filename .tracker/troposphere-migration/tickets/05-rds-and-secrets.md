@@ -68,3 +68,16 @@ uv run pytest tests/ -k "rds or secret"
 ## Blocked by
 
 - 03 (`03-service-stack-core.md`)
+
+## Verification blocker
+
+On 2026-07-14, the RDS and Secrets Manager implementation and focused tests
+were completed. `uv run pytest tests/ -k "rds or secret"` passes all 17
+selected tests, and the RDS-enabled service template passes `cfn-lint`.
+
+The mandatory full-suite gate cannot pass while ticket 04's partial
+implementation remains in the worktree: the minimal root-resource test sees
+the new dedicated-ALB resources, and root-template lint rejects the legacy
+listener `Tags` with `E3002`. The full run otherwise passes 85 of 87 tests.
+Ticket 05 must be rerun, committed, and marked completed after the ticket 04
+listener-tag decision is resolved.

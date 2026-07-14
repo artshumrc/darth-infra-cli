@@ -207,7 +207,7 @@ def _resolve_user_data_script_content(
             content = src_script.read_text().strip()
     if not content:
         return None
-    return content.replace("${", "$${")
+    return content.replace("${", r"\${!")
 
 
 def _derive_rds_master_username(database_name: str) -> str:
@@ -437,7 +437,9 @@ def derive_render_context(config: ProjectConfig) -> RenderContext:
             secret_params.append(
                 SecretParameterContext(
                     secret_name=secret_name,
-                    param_name=f"SecretArn{_pascalize(secret_name)}",
+                    param_name=(
+                        f"SecretArn{_secret_logical_id_fragment(secret_name)}"
+                    ),
                     source=source,
                     requires_param=source != "rds",
                     rds_json_key=rds_key,
@@ -452,7 +454,9 @@ def derive_render_context(config: ProjectConfig) -> RenderContext:
                 secret_params.append(
                     SecretParameterContext(
                         secret_name=secret_name,
-                        param_name=f"SecretArn{_pascalize(secret_name)}",
+                        param_name=(
+                            f"SecretArn{_secret_logical_id_fragment(secret_name)}"
+                        ),
                         source="rds",
                         requires_param=False,
                         rds_json_key=rds_secret_key_by_env[secret_name],
