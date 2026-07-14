@@ -636,25 +636,31 @@ def deploy_changeset(
         "StackName": stack_name,
     }
 
-    resp = cf.create_change_set(
-        StackName=stack_name,
-        ChangeSetName=cs_name,
-        ChangeSetType=change_set_type,
-        Description=f"darth-infra deploy {env_name}",
-        TemplateBody=template_body,
-        Capabilities=[
+    create_kwargs: dict[str, object] = {
+        "StackName": stack_name,
+        "ChangeSetName": cs_name,
+        "ChangeSetType": change_set_type,
+        "Description": f"darth-infra deploy {env_name}",
+        "TemplateBody": template_body,
+        "Capabilities": [
             "CAPABILITY_IAM",
             "CAPABILITY_NAMED_IAM",
             "CAPABILITY_AUTO_EXPAND",
         ],
-        Parameters=parameters,
-        Tags=[
+        "Parameters": parameters,
+        "Tags": [
             {"Key": "darth-project", "Value": config.project_name},
             {"Key": "darth-environment", "Value": env_name},
             {"Key": "managed-by", "Value": "darth-infra"},
             {"Key": "deployment-type", "Value": "ecs"},
         ],
-    )
+    }
+    if verify_noop:
+        # Recurse into nested stacks so the gate sees leaf-resource changes,
+        # not just the root-level TemplateURL churn every serializer change
+        # produces. See _classify_noop_changes for how the results are graded.
+        create_kwargs["IncludeNestedStacks"] = True
+    resp = cf.create_change_set(**create_kwargs)
     cs_arn = resp["Id"]
     execute_kwargs["ChangeSetName"] = cs_arn
 
@@ -682,6 +688,40 @@ def deploy_changeset(
             return 1
 
         console.print(f"[bold]Change set:[/bold] [cyan]{cs_name}[/cyan]")
+
+        if verify_noop:
+            real, benign, uncertain = _classify_noop_changes(cf, cs_arn)
+            if benign:
+                console.print(
+                    f"[dim]Ignoring {len(benign)} nested-stack wrapper change(s) "
+                    f"(TemplateURL/parameter reformatting; leaf contents inspected "
+                    f"below).[/dim]"
+                )
+            for rc in uncertain:
+                console.print(
+                    f"[yellow]~ attribute-driven (unresolved statically): "
+                    f"{rc.get('LogicalResourceId', '?')} "
+                    f"({rc.get('ResourceType', '?')}) — likely a no-op ripple from "
+                    f"a nested-stack update.[/yellow]"
+                )
+            if real:
+                console.print(
+                    f"[red]No-op verification FAILED: {len(real)} real leaf "
+                    f"infrastructure change(s):[/red]"
+                )
+                for rc in real:
+                    console.print(
+                        f"[red]  - {rc.get('Action', '?')}: "
+                        f"{rc.get('LogicalResourceId', '?')} "
+                        f"({rc.get('ResourceType', '?')})[/red]"
+                    )
+                return 1
+            console.print(
+                "[green]No real infrastructure changes detected "
+                "(nested-stack template churn only).[/green]"
+            )
+            return 0
+
         if changes:
             for c in changes:
                 rc = c.get("ResourceChange", {})
@@ -690,16 +730,6 @@ def deploy_changeset(
                 )
         else:
             console.print("- (no detailed resource changes returned)")
-
-        if verify_noop:
-            if changes:
-                console.print(
-                    f"[red]No-op verification FAILED: {len(changes)} infrastructure "
-                    f"change(s) detected (listed above).[/red]"
-                )
-                return 1
-            console.print("[green]No infrastructure changes detected.[/green]")
-            return 0
 
         if no_execute:
             console.print(
@@ -1439,6 +1469,68 @@ def cancel_stack_update(config: ProjectConfig, env_name: str) -> int:
             return 1
 
         time.sleep(5)
+
+
+_NESTED_STACK_TYPE = "AWS::CloudFormation::Stack"
+
+
+def _classify_noop_changes(
+    cf, root_cs_arn: str
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Recursively walk a change set created with ``IncludeNestedStacks`` and
+    grade its resource changes for the no-op gate.
+
+    Returns ``(real, benign, uncertain)`` lists of ``ResourceChange`` dicts:
+
+    - ``benign``: ``AWS::CloudFormation::Stack`` wrapper resources. During a
+      template-serializer migration these always report as ``Modify`` because
+      ``aws cloudformation package`` content-hashes each nested template into a
+      new ``TemplateURL``; their actual contents are captured by recursing into
+      the nested change set, so the wrapper itself carries no real change.
+    - ``real``: any ``Add``/``Remove`` of a non-wrapper resource, or a
+      ``Modify`` with at least one ``Static`` property evaluation — a change
+      CloudFormation resolved concretely. These fail the gate.
+    - ``uncertain``: a ``Modify`` whose property evaluations are all
+      ``Dynamic`` — driven by a referenced attribute of an updated resource
+      that CloudFormation could not resolve statically (typically a no-op
+      ripple, e.g. a ``SecurityGroupIngress`` that ``GetAtt``s a nested-stack
+      output). Reported but not failed.
+
+    Deleting the root change set also removes the nested change sets it spawned,
+    so callers only need to delete ``root_cs_arn``.
+    """
+    real: list[dict] = []
+    benign: list[dict] = []
+    uncertain: list[dict] = []
+    seen: set[str] = set()
+    pending = [root_cs_arn]
+    while pending:
+        arn = pending.pop()
+        if arn in seen:
+            continue
+        seen.add(arn)
+        try:
+            desc = cf.describe_change_set(ChangeSetName=arn)
+        except Exception:  # pragma: no cover - defensive
+            continue
+        for change in desc.get("Changes", []):
+            rc = change.get("ResourceChange", {})
+            nested = rc.get("ChangeSetId")
+            if nested:
+                pending.append(nested)
+            if rc.get("ResourceType") == _NESTED_STACK_TYPE:
+                benign.append(rc)
+                continue
+            details = rc.get("Details", [])
+            if (
+                rc.get("Action") == "Modify"
+                and details
+                and all(d.get("Evaluation") == "Dynamic" for d in details)
+            ):
+                uncertain.append(rc)
+            else:
+                real.append(rc)
+    return real, benign, uncertain
 
 
 def _delete_change_set(cf, cs_arn: str) -> None:

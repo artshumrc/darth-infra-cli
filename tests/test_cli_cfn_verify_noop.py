@@ -31,12 +31,21 @@ class _ListResourcesPaginator:
 
 
 class _FakeCloudFormation:
-    """Minimal fake CloudFormation client for the verify-noop path."""
+    """Minimal fake CloudFormation client for the verify-noop path.
+
+    ``changeset_result`` is either a single describe result for the root change
+    set (keyed internally as ``change-set-arn``) or a mapping of change-set
+    name/ARN -> describe result, so nested-stack recursion can be exercised.
+    """
 
     def __init__(self, changeset_result: dict[str, object]) -> None:
-        self._changeset_result = changeset_result
+        if "Status" in changeset_result:
+            self._results = {"change-set-arn": changeset_result}
+        else:
+            self._results = dict(changeset_result)
         self.created = False
         self.executed = False
+        self.include_nested_stacks: bool | None = None
         self.deleted_change_sets: list[str] = []
 
     def describe_stacks(self, *, StackName: str) -> dict[str, object]:
@@ -47,12 +56,15 @@ class _FakeCloudFormation:
         assert name == "list_stack_resources"
         return _ListResourcesPaginator()
 
-    def create_change_set(self, **_: object) -> dict[str, str]:
+    def create_change_set(self, **kwargs: object) -> dict[str, str]:
         self.created = True
+        self.include_nested_stacks = bool(kwargs.get("IncludeNestedStacks"))
         return {"Id": "change-set-arn"}
 
-    def describe_change_set(self, **_: object) -> dict[str, object]:
-        return self._changeset_result
+    def describe_change_set(
+        self, *, ChangeSetName: str, **_: object
+    ) -> dict[str, object]:
+        return self._results.get(ChangeSetName, {"Status": "CREATE_COMPLETE", "Changes": []})
 
     def delete_change_set(self, *, ChangeSetName: str) -> None:
         self.deleted_change_sets.append(ChangeSetName)
@@ -188,3 +200,105 @@ def test_change_set_complete_without_changes_passes_and_is_deleted(
     assert rc == 0
     assert fake_cf.executed is False
     assert fake_cf.deleted_change_sets == ["change-set-arn"]
+
+
+def _stack_wrapper(logical_id: str, nested_arn: str) -> dict[str, object]:
+    return {
+        "ResourceChange": {
+            "Action": "Modify",
+            "LogicalResourceId": logical_id,
+            "ResourceType": "AWS::CloudFormation::Stack",
+            "ChangeSetId": nested_arn,
+        }
+    }
+
+
+def test_nested_stack_template_churn_only_passes(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    # Root shows only nested-stack wrappers (new TemplateURL from reserialized
+    # child templates); the nested change sets have no leaf changes.
+    rc, fake_cf = _run(
+        tmp_path,
+        monkeypatch,
+        {
+            "change-set-arn": {
+                "Status": "CREATE_COMPLETE",
+                "Changes": [
+                    _stack_wrapper("ServiceWeb", "nested-web"),
+                    _stack_wrapper("ServiceWorker", "nested-worker"),
+                ],
+            },
+            "nested-web": {"Status": "CREATE_COMPLETE", "Changes": []},
+            "nested-worker": {"Status": "CREATE_COMPLETE", "Changes": []},
+        },
+    )
+
+    assert rc == 0
+    assert fake_cf.include_nested_stacks is True
+    assert fake_cf.executed is False
+    assert fake_cf.deleted_change_sets == ["change-set-arn"]
+    assert "No real infrastructure changes" in capsys.readouterr().out
+
+
+def test_real_leaf_change_inside_nested_stack_fails(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    # A confirmed (Static) leaf change inside a nested stack must fail the gate.
+    rc, fake_cf = _run(
+        tmp_path,
+        monkeypatch,
+        {
+            "change-set-arn": {
+                "Status": "CREATE_COMPLETE",
+                "Changes": [_stack_wrapper("ServiceWeb", "nested-web")],
+            },
+            "nested-web": {
+                "Status": "CREATE_COMPLETE",
+                "Changes": [
+                    {
+                        "ResourceChange": {
+                            "Action": "Modify",
+                            "LogicalResourceId": "TaskDefinition",
+                            "ResourceType": "AWS::ECS::TaskDefinition",
+                            "Details": [{"Evaluation": "Static"}],
+                        }
+                    }
+                ],
+            },
+        },
+    )
+
+    assert rc == 1
+    assert fake_cf.deleted_change_sets == ["change-set-arn"]
+    assert "TaskDefinition" in capsys.readouterr().out
+
+
+def test_dynamic_attribute_ripple_passes_but_is_reported(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    # A Modify whose evaluations are all Dynamic (e.g. a SecurityGroupIngress
+    # GetAtt-ing a nested-stack output) is an uncertain ripple, not a failure.
+    rc, fake_cf = _run(
+        tmp_path,
+        monkeypatch,
+        {
+            "Status": "CREATE_COMPLETE",
+            "Changes": [
+                {
+                    "ResourceChange": {
+                        "Action": "Modify",
+                        "LogicalResourceId": "RdsIngressFromWeb",
+                        "ResourceType": "AWS::EC2::SecurityGroupIngress",
+                        "Details": [{"Evaluation": "Dynamic"}],
+                    }
+                }
+            ],
+        },
+    )
+
+    assert rc == 0
+    assert fake_cf.deleted_change_sets == ["change-set-arn"]
+    output = capsys.readouterr().out
+    assert "RdsIngressFromWeb" in output
+    assert "attribute-driven" in output
