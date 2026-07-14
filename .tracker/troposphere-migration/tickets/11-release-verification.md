@@ -124,6 +124,43 @@ uv run darth-infra deploy <env> --verify-noop   # or: uv run python scripts/veri
 echo $?                                          # 0 = no changes
 ```
 
+## Real-stack verification run — findings (2026-07-14)
+
+First real run against the `bta-infrastructure` prod stack
+(`darth-infra deploy --env prod --verify-noop`) reported 7 changes — the gate
+did its job. Diagnosis of the changeset (semantic diff of generated templates
+old-Jinja vs new-troposphere, plus the deployed stack) found:
+
+1. **Real regression (FIXED, commit `bcdc8ce`).** The service-template builder
+   never declared the CloudFront-URL parameters the root stack passes it
+   (`cf_param_name` for cloudfront-enabled S3 buckets; `cloudfront_vars` for
+   ALB CloudFront) and never injected the matching env vars
+   (`cloudfront_env_key`, e.g. `DJANGO_MEDIA_URL`). The generated child
+   template received undeclared parameters (nested stack rejected at execution)
+   and dropped CDN env vars. A ticket-06/07 service-side gap that the
+   root-side-only parameter tests missed; now covered by
+   `test_full_featured_cloudfront_service_declares_params_and_env`. After the
+   fix, the semantic diff of every bta service template is empty.
+
+2. **Benign, non-blocking.** `DedicatedAlb*Listener` `Tags` removal (ticket 04
+   cfn-lint fix; invisible on bta because prod uses a shared ALB) and
+   `DefaultListenerPriority` moving from a hardcoded `49991` to a `Ref`
+   parameter that `_build_parameters` supplies as `49991` (resolves to the same
+   leaf value — no infra change, only nested-stack churn).
+
+3. **Gate-semantics limitation (needs a decision).** Even with a perfect
+   no-op, the gate as implemented fails: `aws cloudformation package`
+   content-hashes each nested template, so troposphere's (necessarily
+   different) YAML bytes produce new `TemplateURL`s and every
+   `AWS::CloudFormation::Stack` resource shows as `Modify` at the root level.
+   The strict "empty changeset" signal is therefore unreachable for this
+   nested-stack architecture on the cutover. To verify the *effective* no-op
+   (no leaf-resource changes) the gate must create the changeset with
+   `IncludeNestedStacks=True` and classify: ignore `AWS::CloudFormation::Stack`
+   wrapper changes whose only diff is `TemplateURL`/`Parameters`, and FAIL only
+   on real leaf Add/Remove/Modify. Until that lands, verify manually by
+   inspecting the nested changeset once per stack.
+
 ## Blocked by
 
 - 10 (`10-cutover.md`)
