@@ -15,7 +15,7 @@ minor release. See `SPEC.md` in this directory and
 
 ## Current Status
 
-Overall status: `Not Started`
+Overall status: `In Progress`
 
 Current ticket: none
 
@@ -25,7 +25,7 @@ Last updated: 2026-07-14
 
 | Number | Filename | Status | Depends On |
 | --- | --- | --- | --- |
-| 01 | `01-typed-render-context.md` | Not Started | None |
+| 01 | `01-typed-render-context.md` | Completed | None |
 | 02 | `02-pipeline-and-root-core.md` | Not Started | 01 |
 | 03 | `03-service-stack-core.md` | Not Started | 02 |
 | 04 | `04-dedicated-alb-dns.md` | Not Started | 03 |
