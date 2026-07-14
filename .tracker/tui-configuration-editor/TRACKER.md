@@ -11,14 +11,14 @@ Overall status: `In Progress`
 
 Current ticket: None
 
-Last updated: 2026-07-14
+Last updated: 2026-07-14 (ticket 02 completed)
 
 ## Ledger
 
 | Number | Filename | Status | Depends On |
 | --- | --- | --- | --- |
 | 01 | `01-schema-field-registry.md` | Completed | None |
-| 02 | `02-document-preserving-session.md` | Not Started | 01 |
+| 02 | `02-document-preserving-session.md` | Completed | 01 |
 | 03 | `03-document-diff-merge-reversion.md` | Not Started | 02 |
 | 04 | `04-editor-shell-project.md` | Not Started | 01, 02 |
 | 05 | `05-network-aws-discovery.md` | Not Started | 04 |
