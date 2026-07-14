@@ -25,6 +25,7 @@ from troposphere import (
 from troposphere import (
     autoscaling,
     cloudformation,
+    cloudfront,
     ec2,
     ecr,
     ecs,
@@ -94,6 +95,125 @@ def _task_assume_role_policy() -> dict[str, object]:
             }
         ],
     }
+
+
+def _alb_cached_behavior_forwarded_values(
+    behavior: object,
+) -> cloudfront.ForwardedValues:
+    if behavior.query_strings == "none":
+        forwarded_values = cloudfront.ForwardedValues(QueryString=False)
+    else:
+        forwarded_values = cloudfront.ForwardedValues(QueryString=True)
+        if (
+            behavior.query_strings == "allowlist"
+            and behavior.query_string_allowlist
+        ):
+            forwarded_values.QueryStringCacheKeys = list(
+                behavior.query_string_allowlist
+            )
+    if behavior.cookies == "all":
+        forwarded_values.Cookies = cloudfront.Cookies(Forward="all")
+    elif behavior.cookies == "allowlist":
+        forwarded_values.Cookies = cloudfront.Cookies(
+            Forward="whitelist",
+            WhitelistedNames=list(behavior.cookie_allowlist),
+        )
+    else:
+        forwarded_values.Cookies = cloudfront.Cookies(Forward="none")
+    headers = ["Host"]
+    if behavior.forward_authorization_header:
+        headers.append("Authorization")
+    forwarded_values.Headers = headers
+    return forwarded_values
+
+
+def _build_alb_cloudfront(context: RenderContext) -> cloudfront.Distribution:
+    alb_cloudfront = context.alb_cloudfront
+    distribution_config = cloudfront.DistributionConfig(
+        Enabled=True,
+        PriceClass=alb_cloudfront.price_class,
+        Origins=[
+            cloudfront.Origin(
+                DomainName=If(
+                    "UseDedicatedAlb",
+                    GetAtt("DedicatedAlb", "DNSName"),
+                    Ref("SharedAlbDnsName"),
+                ),
+                Id="AlbOrigin",
+                CustomOriginConfig=cloudfront.CustomOriginConfig(
+                    HTTPPort=80,
+                    HTTPSPort=443,
+                    OriginProtocolPolicy=(
+                        "https-only"
+                        if alb_cloudfront.origin_https_only
+                        else "http-only"
+                    ),
+                ),
+            )
+        ],
+        DefaultCacheBehavior=cloudfront.DefaultCacheBehavior(
+            TargetOriginId="AlbOrigin",
+            ViewerProtocolPolicy="redirect-to-https",
+            AllowedMethods=[
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PUT",
+                "PATCH",
+                "POST",
+                "DELETE",
+            ],
+            CachedMethods=["GET", "HEAD", "OPTIONS"],
+            Compress=True,
+            MinTTL=0,
+            DefaultTTL=0,
+            MaxTTL=0,
+            ForwardedValues=cloudfront.ForwardedValues(
+                QueryString=True,
+                Cookies=cloudfront.Cookies(Forward="all"),
+                Headers=["*"],
+            ),
+        ),
+    )
+    if alb_cloudfront.comment:
+        distribution_config.Comment = alb_cloudfront.comment
+    if alb_cloudfront.custom_domain:
+        distribution_config.Aliases = [alb_cloudfront.custom_domain]
+    if alb_cloudfront.certificate_arn:
+        distribution_config.ViewerCertificate = cloudfront.ViewerCertificate(
+            AcmCertificateArn=alb_cloudfront.certificate_arn,
+            SslSupportMethod="sni-only",
+            MinimumProtocolVersion="TLSv1.2_2021",
+        )
+    if alb_cloudfront.cached_behaviors:
+        distribution_config.CacheBehaviors = [
+            cloudfront.CacheBehavior(
+                PathPattern=behavior.path_pattern,
+                TargetOriginId="AlbOrigin",
+                ViewerProtocolPolicy="redirect-to-https",
+                AllowedMethods=[
+                    "GET",
+                    "HEAD",
+                    "OPTIONS",
+                    "PUT",
+                    "PATCH",
+                    "POST",
+                    "DELETE",
+                ],
+                CachedMethods=["GET", "HEAD", "OPTIONS"],
+                Compress=behavior.compress,
+                MinTTL=behavior.min_ttl_seconds,
+                DefaultTTL=behavior.default_ttl_seconds,
+                MaxTTL=behavior.max_ttl_seconds,
+                ForwardedValues=_alb_cached_behavior_forwarded_values(behavior),
+            )
+            for behavior in alb_cloudfront.cached_behaviors
+        ]
+    return cloudfront.Distribution(
+        "AlbCloudFront",
+        DistributionConfig=distribution_config,
+        Tags=_resource_tags(context),
+    )
 
 
 def _build_service_template(
@@ -841,6 +961,91 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
             s3.Bucket(bucket.bucket_logical_id, **bucket_properties)
         )
 
+    for bucket in context.s3_buckets:
+        if not (bucket.cloudfront and bucket.provision_bucket):
+            continue
+        origin_id = f"S3{bucket.logical_id_fragment}Origin"
+        root.add_resource(
+            cloudfront.OriginAccessControl(
+                bucket.cloudfront_oac_logical_id,
+                OriginAccessControlConfig=(
+                    cloudfront.OriginAccessControlConfig(
+                        Name=Sub(
+                            "${ProjectName}-${EnvironmentName}-"
+                            f"{bucket.name}-oac"
+                        ),
+                        OriginAccessControlOriginType="s3",
+                        SigningBehavior="always",
+                        SigningProtocol="sigv4",
+                    )
+                ),
+            )
+        )
+        root.add_resource(
+            cloudfront.Distribution(
+                bucket.cloudfront_logical_id,
+                DistributionConfig=cloudfront.DistributionConfig(
+                    Enabled=True,
+                    Origins=[
+                        cloudfront.Origin(
+                            DomainName=GetAtt(
+                                bucket.bucket_logical_id, "RegionalDomainName"
+                            ),
+                            Id=origin_id,
+                            S3OriginConfig=cloudfront.S3OriginConfig(),
+                            OriginAccessControlId=GetAtt(
+                                bucket.cloudfront_oac_logical_id, "Id"
+                            ),
+                        )
+                    ],
+                    DefaultCacheBehavior=cloudfront.DefaultCacheBehavior(
+                        TargetOriginId=origin_id,
+                        ViewerProtocolPolicy="redirect-to-https",
+                        AllowedMethods=["GET", "HEAD", "OPTIONS"],
+                        CachedMethods=["GET", "HEAD"],
+                        Compress=True,
+                        ForwardedValues=cloudfront.ForwardedValues(
+                            QueryString=False,
+                            Cookies=cloudfront.Cookies(Forward="none"),
+                        ),
+                    ),
+                    PriceClass="PriceClass_100",
+                ),
+                Tags=_resource_tags(context),
+            )
+        )
+        root.add_resource(
+            s3.BucketPolicy(
+                bucket.bucket_policy_logical_id,
+                Bucket=Ref(bucket.bucket_logical_id),
+                PolicyDocument={
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "AllowCloudFrontRead",
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "cloudfront.amazonaws.com"
+                            },
+                            "Action": "s3:GetObject",
+                            "Resource": Sub(
+                                f"${{{bucket.bucket_logical_id}.Arn}}/*"
+                            ),
+                            "Condition": {
+                                "StringEquals": {
+                                    "AWS:SourceArn": Sub(
+                                        "arn:aws:cloudfront::"
+                                        "${AWS::AccountId}:distribution/"
+                                        f"${{{bucket.cloudfront_logical_id}}}"
+                                    )
+                                }
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+
     root.add_condition("IsProd", Equals(Ref("EnvironmentName"), "prod"))
     root.add_condition(
         "UseDedicatedAlb", Equals(Ref("AlbMode"), "dedicated")
@@ -1126,6 +1331,9 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
     )
     root.add_resource(https_listener)
 
+    if context.has_alb_cloudfront:
+        root.add_resource(_build_alb_cloudfront(context))
+
     for service in context.services_ctx:
         repository = None
         if not service.svc.image:
@@ -1210,6 +1418,17 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
                     "arn:aws:s3:::"
                     f"{s3_access.fallback_bucket_name_literal}"
                 )
+            if s3_access.cf_param_name:
+                cloudfront_logical_id = (
+                    f"CloudFront{s3_access.bucket_name.replace('-', '')}"
+                )
+                service_parameters[s3_access.cf_param_name] = Sub(
+                    f"https://${{{cloudfront_logical_id}.DomainName}}"
+                )
+        for cloudfront_access in service.cloudfront_vars:
+            service_parameters[cloudfront_access.param_name] = Sub(
+                "https://${AlbCloudFront.DomainName}"
+            )
         for secret in service.secret_params:
             if secret.source == "generate":
                 secret_context = secrets_by_name[secret.secret_name]
@@ -1299,6 +1518,22 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
             ),
         )
     )
+    if context.has_alb_cloudfront:
+        root.add_output(
+            Output("CloudFrontDistributionId", Value=Ref("AlbCloudFront"))
+        )
+        root.add_output(
+            Output(
+                "CloudFrontDomainName",
+                Value=GetAtt("AlbCloudFront", "DomainName"),
+            )
+        )
+        root.add_output(
+            Output(
+                "CloudFrontUrl",
+                Value=Sub("https://${AlbCloudFront.DomainName}"),
+            )
+        )
 
     templates = {"templates/generated/root.yaml": root}
     for service in context.services_ctx:
