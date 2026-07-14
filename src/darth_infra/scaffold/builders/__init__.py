@@ -29,6 +29,7 @@ from troposphere import (
     elasticloadbalancingv2,
     iam,
     logs,
+    route53,
 )
 
 from ...config.models import ProjectConfig
@@ -547,6 +548,97 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
             Tags=_resource_tags(context),
         )
     )
+    dedicated_alb = root.add_resource(
+        elasticloadbalancingv2.LoadBalancer(
+            "DedicatedAlb",
+            Condition="UseDedicatedAlb",
+            Name=Sub("${ProjectName}-${EnvironmentName}-alb"),
+            Scheme="internet-facing",
+            SecurityGroups=[Ref("DedicatedAlbSecurityGroup")],
+            Subnets=Ref("PublicSubnetIds"),
+            Type="application",
+            Tags=_resource_tags(context),
+        )
+    )
+    root.add_resource(
+        ec2.SecurityGroup(
+            "DedicatedAlbSecurityGroup",
+            Condition="UseDedicatedAlb",
+            GroupDescription=Sub("${ProjectName}-${EnvironmentName} alb"),
+            VpcId=Ref("VpcId"),
+            SecurityGroupIngress=[
+                ec2.SecurityGroupRule(
+                    IpProtocol="tcp",
+                    FromPort=80,
+                    ToPort=80,
+                    CidrIp="0.0.0.0/0",
+                ),
+                If(
+                    "UseDedicatedAlbWithCert",
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": 443,
+                        "ToPort": 443,
+                        "CidrIp": "0.0.0.0/0",
+                    },
+                    Ref("AWS::NoValue"),
+                ),
+            ],
+            Tags=_resource_tags(context),
+        )
+    )
+    http_listener = elasticloadbalancingv2.Listener(
+        "DedicatedAlbHttpListener",
+        Condition="UseDedicatedAlb",
+        DefaultActions=[
+            If(
+                "UseDedicatedAlbWithCert",
+                {
+                    "Type": "redirect",
+                    "RedirectConfig": {
+                        "Protocol": "HTTPS",
+                        "Port": "443",
+                        "StatusCode": "HTTP_301",
+                    },
+                },
+                {
+                    "Type": "fixed-response",
+                    "FixedResponseConfig": {
+                        "StatusCode": "404",
+                        "ContentType": "text/plain",
+                        "MessageBody": "Not Found",
+                    },
+                },
+            )
+        ],
+        LoadBalancerArn=Ref(dedicated_alb),
+        Port=80,
+        Protocol="HTTP",
+    )
+    root.add_resource(http_listener)
+    https_listener = elasticloadbalancingv2.Listener(
+        "DedicatedAlbHttpsListener",
+        Condition="UseDedicatedAlbWithCert",
+        Certificates=[
+            elasticloadbalancingv2.Certificate(
+                CertificateArn=Ref("CertificateArn")
+            )
+        ],
+        DefaultActions=[
+            elasticloadbalancingv2.Action(
+                Type="fixed-response",
+                FixedResponseConfig=elasticloadbalancingv2.FixedResponseConfig(
+                    StatusCode="404",
+                    ContentType="text/plain",
+                    MessageBody="Not Found",
+                ),
+            )
+        ],
+        LoadBalancerArn=Ref(dedicated_alb),
+        Port=443,
+        Protocol="HTTPS",
+    )
+    root.add_resource(https_listener)
 
     for service in context.services_ctx:
         repository = None
@@ -571,8 +663,20 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
             "ClusterName": Ref(cluster),
             "ClusterArn": GetAtt(cluster, "Arn"),
             "ClusterDomain": Ref("ClusterDomain"),
-            "AlbListenerArn": Ref("SharedAlbListenerArn"),
-            "AlbSecurityGroupId": Ref("SharedAlbSecurityGroupId"),
+            "AlbListenerArn": If(
+                "UseDedicatedAlb",
+                If(
+                    "UseDedicatedAlbWithCert",
+                    Ref(https_listener),
+                    Ref(http_listener),
+                ),
+                Ref("SharedAlbListenerArn"),
+            ),
+            "AlbSecurityGroupId": If(
+                "UseDedicatedAlb",
+                Ref("DedicatedAlbSecurityGroup"),
+                Ref("SharedAlbSecurityGroupId"),
+            ),
         }
         service_parameters.update(
             {
@@ -600,6 +704,27 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
         root.add_resource(service_stack)
 
     root.add_resource(
+        route53.RecordSetType(
+            "DnsRecord",
+            Condition="HasHostedZone",
+            HostedZoneId=Ref("HostedZoneId"),
+            Name=Ref("ClusterDomain"),
+            Type="A",
+            AliasTarget=route53.AliasTarget(
+                DNSName=If(
+                    "UseDedicatedAlb",
+                    GetAtt(dedicated_alb, "DNSName"),
+                    Ref("SharedAlbDnsName"),
+                ),
+                HostedZoneId=If(
+                    "UseDedicatedAlb",
+                    GetAtt(dedicated_alb, "CanonicalHostedZoneID"),
+                    Ref("SharedAlbCanonicalHostedZoneId"),
+                ),
+            ),
+        )
+    )
+    root.add_resource(
         cloudformation.Stack(
             "CustomOverrides",
             TemplateURL="../custom/overrides.yaml",
@@ -608,6 +733,20 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
     )
     root.add_output(Output("ClusterName", Value=Ref(cluster)))
     root.add_output(Output("StackEnvironment", Value=Ref("EnvironmentName")))
+    root.add_output(
+        Output(
+            "AlbListenerArn",
+            Value=If(
+                "UseDedicatedAlb",
+                If(
+                    "UseDedicatedAlbWithCert",
+                    Ref(https_listener),
+                    Ref(http_listener),
+                ),
+                Ref("SharedAlbListenerArn"),
+            ),
+        )
+    )
 
     templates = {"templates/generated/root.yaml": root}
     for service in context.services_ctx:

@@ -28,7 +28,7 @@ Last updated: 2026-07-14
 | 01 | `01-typed-render-context.md` | Completed | None |
 | 02 | `02-pipeline-and-root-core.md` | Completed | 01 |
 | 03 | `03-service-stack-core.md` | Completed | 02 |
-| 04 | `04-dedicated-alb-dns.md` | Not Started | 03 |
+| 04 | `04-dedicated-alb-dns.md` | Completed | 03 |
 | 05 | `05-rds-and-secrets.md` | Not Started | 03 |
 | 06 | `06-service-discovery-s3.md` | Not Started | 03 |
 | 07 | `07-cloudfront.md` | Not Started | 04, 06 |

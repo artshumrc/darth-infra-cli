@@ -5,6 +5,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from darth_infra.config.models import (
     AlbConfig,
+    AlbMode,
     AlbPathRule,
     EnvironmentOverride,
     ProjectConfig,
@@ -78,6 +79,36 @@ def _shared_alb_config() -> ProjectConfig:
             ],
         ),
     )
+
+
+def _dedicated_alb_config(*, certificate: bool = True) -> ProjectConfig:
+    return ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        alb=AlbConfig(
+            mode=AlbMode.DEDICATED,
+            certificate_arn=(
+                "arn:aws:acm:us-east-1:123456789012:certificate/"
+                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                if certificate
+                else None
+            ),
+            domain="app.example.com",
+            default_target_service="web",
+            default_listener_priority=100,
+        ),
+    )
+
+
+def _jinja_root_to_dict(config: ProjectConfig) -> dict[str, object]:
+    context = _build_context(config)
+    environment = Environment(
+        loader=FileSystemLoader(str(TEMPLATES_DIR)),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    rendered = environment.get_template("root.yaml.j2").render(**context)
+    return dict(load_yaml(rendered))
 
 
 def _jinja_service_to_dict(config: ProjectConfig) -> dict[str, object]:
@@ -163,8 +194,13 @@ def test_builders_create_minimal_root_stack_core() -> None:
     resources = root["Resources"]
     assert set(resources) == {
         "EcsCluster",
+        "DedicatedAlb",
+        "DedicatedAlbSecurityGroup",
+        "DedicatedAlbHttpListener",
+        "DedicatedAlbHttpsListener",
         "EcrRepoWeb",
         "ServiceWeb",
+        "DnsRecord",
         "CustomOverrides",
     }
     assert resources["EcsCluster"] == {
@@ -201,8 +237,26 @@ def test_builders_create_minimal_root_stack_core() -> None:
                 "ClusterName": {"Ref": "EcsCluster"},
                 "ClusterArn": {"Fn::GetAtt": ["EcsCluster", "Arn"]},
                 "ClusterDomain": {"Ref": "ClusterDomain"},
-                "AlbListenerArn": {"Ref": "SharedAlbListenerArn"},
-                "AlbSecurityGroupId": {"Ref": "SharedAlbSecurityGroupId"},
+                "AlbListenerArn": {
+                    "Fn::If": [
+                        "UseDedicatedAlb",
+                        {
+                            "Fn::If": [
+                                "UseDedicatedAlbWithCert",
+                                {"Ref": "DedicatedAlbHttpsListener"},
+                                {"Ref": "DedicatedAlbHttpListener"},
+                            ]
+                        },
+                        {"Ref": "SharedAlbListenerArn"},
+                    ]
+                },
+                "AlbSecurityGroupId": {
+                    "Fn::If": [
+                        "UseDedicatedAlb",
+                        {"Ref": "DedicatedAlbSecurityGroup"},
+                        {"Ref": "SharedAlbSecurityGroupId"},
+                    ]
+                },
                 **{
                     parameter_name: {"Ref": parameter_name}
                     for _, parameter_name, _ in _BASE_TAG_PARAMETERS
@@ -221,6 +275,21 @@ def test_builders_create_minimal_root_stack_core() -> None:
     assert root["Outputs"] == {
         "ClusterName": {"Value": {"Ref": "EcsCluster"}},
         "StackEnvironment": {"Value": {"Ref": "EnvironmentName"}},
+        "AlbListenerArn": {
+            "Value": {
+                "Fn::If": [
+                    "UseDedicatedAlb",
+                    {
+                        "Fn::If": [
+                            "UseDedicatedAlbWithCert",
+                            {"Ref": "DedicatedAlbHttpsListener"},
+                            {"Ref": "DedicatedAlbHttpListener"},
+                        ]
+                    },
+                    {"Ref": "SharedAlbListenerArn"},
+                ]
+            }
+        },
     }
 
 
@@ -350,6 +419,51 @@ def test_builders_add_cluster_routing_priority_parameters() -> None:
     }
 
 
+def test_builders_add_dedicated_alb_certificate_and_dns_resources() -> None:
+    config = _dedicated_alb_config()
+    root = template_to_dict(
+        build_project_templates(config)["templates/generated/root.yaml"]
+    )
+    jinja_root = _jinja_root_to_dict(config)
+
+    for logical_id in (
+        "DedicatedAlb",
+        "DedicatedAlbSecurityGroup",
+        "DedicatedAlbHttpListener",
+        "DedicatedAlbHttpsListener",
+        "DnsRecord",
+    ):
+        expected = jinja_root["Resources"][logical_id]
+        if logical_id in {
+            "DedicatedAlbHttpListener",
+            "DedicatedAlbHttpsListener",
+        }:
+            expected["Properties"].pop("Tags")
+        assert root["Resources"][logical_id] == expected
+    assert root["Resources"]["ServiceWeb"] == jinja_root["Resources"][
+        "ServiceWeb"
+    ]
+    assert root["Outputs"]["AlbListenerArn"] == jinja_root["Outputs"][
+        "AlbListenerArn"
+    ]
+
+
+def test_builders_add_dedicated_alb_without_certificate_listener_variant() -> None:
+    config = _dedicated_alb_config(certificate=False)
+    root = template_to_dict(
+        build_project_templates(config)["templates/generated/root.yaml"]
+    )
+    jinja_root = _jinja_root_to_dict(config)
+
+    assert root["Parameters"]["CertificateArn"]["Default"] == ""
+    assert root["Conditions"]["UseDedicatedAlbNoCert"] == jinja_root[
+        "Conditions"
+    ]["UseDedicatedAlbNoCert"]
+    expected = jinja_root["Resources"]["DedicatedAlbHttpListener"]
+    expected["Properties"].pop("Tags")
+    assert root["Resources"]["DedicatedAlbHttpListener"] == expected
+
+
 def test_builders_add_feature_conditional_parameters_and_conditions() -> None:
     config = ProjectConfig(
         project_name="demo",
@@ -416,7 +530,9 @@ def test_builders_add_feature_conditional_parameters_and_conditions() -> None:
 
 
 def test_builder_root_template_passes_cfn_lint(tmp_path: Path) -> None:
-    root = build_project_templates(_config())["templates/generated/root.yaml"]
+    root = build_project_templates(_dedicated_alb_config())[
+        "templates/generated/root.yaml"
+    ]
 
     assert_template_passes_cfn_lint(root, tmp_path / "root.yaml")
 
