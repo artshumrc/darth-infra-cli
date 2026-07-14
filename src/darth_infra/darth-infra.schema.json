@@ -35,7 +35,8 @@
         },
         "cli_version_floor": {
           "type": "string",
-          "description": "Minimum darth-infra CLI version allowed to operate on this project."
+          "description": "Minimum darth-infra CLI version allowed to operate on this project.",
+          "readOnly": true
         },
         "vpc_id": {
           "type": ["string", "null"],

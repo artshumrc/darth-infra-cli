@@ -33,6 +33,11 @@
           "description": "Name tag of the existing VPC to deploy into.",
           "default": "artshumrc-prod-standard"
         },
+        "cli_version_floor": {
+          "type": "string",
+          "description": "Minimum darth-infra CLI version allowed to operate on this project.",
+          "readOnly": true
+        },
         "vpc_id": {
           "type": ["string", "null"],
           "description": "Explicit VPC ID to deploy into. When set, vpc_name lookup is skipped.",
@@ -232,6 +237,11 @@
             "description": "Enable ECS Exec for interactive shell access.",
             "default": true
           },
+          "enable_ses_send_email": {
+            "type": "boolean",
+            "description": "Grant this service Amazon SES send-email and quota-read permissions on its ECS task role.",
+            "default": false
+          },
           "launch_type": {
             "type": "string",
             "description": "ECS launch type. \"fargate\" (default) or \"ec2\".",
@@ -311,6 +321,20 @@
             },
             "default": []
           }
+        }
+      }
+    },
+    "service_discovery": {
+      "type": "object",
+      "description": "Cloud Map service discovery namespace settings.",
+      "additionalProperties": false,
+      "properties": {
+        "namespace_template": {
+          "type": "string",
+          "description": "Private DNS namespace template. Existing configs without this block keep legacy 'local'; new configs should use '{project}-{env}.local'.",
+          "default": "{project}-{env}.local",
+          "minLength": 1,
+          "examples": ["{project}-{env}.local", "local"]
         }
       }
     },
@@ -415,6 +439,38 @@
             "type": "boolean",
             "description": "Enable permissive CORS headers.",
             "default": false
+          },
+          "connections": {
+            "type": "array",
+            "description": "Service connections for this bucket.",
+            "items": {
+              "type": "object",
+              "required": ["service", "env_key"],
+              "additionalProperties": false,
+              "properties": {
+                "service": {
+                  "type": "string",
+                  "description": "Service name to grant bucket access."
+                },
+                "env_key": {
+                  "type": "string",
+                  "description": "Environment variable name for the bucket name (e.g. \"MEDIA_BUCKET\").",
+                  "pattern": "^[A-Z][A-Z0-9_]*$"
+                },
+                "cloudfront_env_key": {
+                  "type": ["string", "null"],
+                  "description": "Environment variable name for the CloudFront URL (optional, requires cloudfront=true).",
+                  "pattern": "^[A-Z][A-Z0-9_]*$",
+                  "default": null
+                },
+                "read_only": {
+                  "type": "boolean",
+                  "description": "If true, grant read-only (s3:GetObject, s3:ListBucket) access; otherwise read/write.",
+                  "default": false
+                }
+              }
+            },
+            "default": []
           }
         }
       },
