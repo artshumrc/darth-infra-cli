@@ -1,5 +1,17 @@
 # Domain Glossary
 
+## Configuration
+
+**Guided editor** — An interactive interface for every user-authored field in
+the persisted project configuration. Common fields are immediately visible;
+rare fields may be grouped into advanced panels, but remain editable and must
+round-trip without loss. Navigation is non-linear, with an optional guided
+order for creating or reviewing a project.
+
+**Document-preserving save** — An update to an existing project configuration
+that retains user-authored comments, ordering, and unrelated formatting while
+changing only the settings edited by the user.
+
 ## Deployment
 
 **No-op deploy** — A deploy against an already-provisioned stack whose changeset
