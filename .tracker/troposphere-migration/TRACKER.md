@@ -15,9 +15,13 @@ minor release. See `SPEC.md` in this directory and
 
 ## Current Status
 
-Overall status: `In Progress`
+Overall status: `In Progress` — all implementation tickets (01–10) Completed;
+only ticket 11's real-stack release gate remains, which requires a human with
+AWS credentials.
 
-Current ticket: 11
+Current ticket: 11 (awaiting human validation — the `--verify-noop` tooling is
+built, unit-tested, and documented; the against-real-stacks run and release
+publish are the remaining human steps).
 
 Last updated: 2026-07-14
 
