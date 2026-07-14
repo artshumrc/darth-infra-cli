@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cfn_flip import load_yaml
-from jinja2 import Environment, FileSystemLoader
-
 from darth_infra.config.models import (
     AlbConfig,
     AlbMode,
@@ -19,8 +16,14 @@ from darth_infra.config.models import (
     ServiceConfig,
 )
 from darth_infra.scaffold.builders import build_project_templates
-from darth_infra.scaffold.generator import TEMPLATES_DIR, _build_context
 
+from builders_expected import (
+    CF_CUSTOM_DOMAIN,
+    CF_DEDICATED_ALBCLOUDFRONT,
+    CF_NO_CUSTOM_DOMAIN_ALBCLOUDFRONT,
+    FULL_FEATURED_RESOURCES,
+    FULL_FEATURED_SERVICE_PARAMETERS,
+)
 from builders_harness import assert_template_passes_cfn_lint, template_to_dict
 
 
@@ -123,31 +126,6 @@ def _full_featured_config() -> ProjectConfig:
     )
 
 
-def _jinja_root_to_dict(config: ProjectConfig) -> dict[str, object]:
-    context = _build_context(config)
-    environment = Environment(
-        loader=FileSystemLoader(str(TEMPLATES_DIR)),
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
-    rendered = environment.get_template("root.yaml.j2").render(**context)
-    return dict(load_yaml(rendered))
-
-
-def _jinja_service_to_dict(config: ProjectConfig) -> dict[str, object]:
-    context = _build_context(config)
-    service_context = context["services_ctx"][0]
-    environment = Environment(
-        loader=FileSystemLoader(str(TEMPLATES_DIR)),
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
-    rendered = environment.get_template("nested/service.yaml.j2").render(
-        **{**context, **service_context}
-    )
-    return dict(load_yaml(rendered))
-
-
 def _root(config: ProjectConfig) -> dict[str, object]:
     return template_to_dict(
         build_project_templates(config)["templates/generated/root.yaml"]
@@ -173,45 +151,36 @@ def test_cached_behavior_can_also_forward_authorization() -> None:
     assert _alb_cf_default_headers(root) == ["Host", "Authorization"]
 
 
-def test_alb_cloudfront_matches_jinja_with_custom_domain_shared_alb() -> None:
+def test_alb_cloudfront_with_custom_domain_shared_alb() -> None:
     config = _config(custom_domain="cdn.example.com", forward_auth=True)
     root = _root(config)
-    jinja_root = _jinja_root_to_dict(config)
 
-    assert root["Resources"]["AlbCloudFront"] == jinja_root["Resources"][
-        "AlbCloudFront"
-    ]
+    assert root["Resources"]["AlbCloudFront"] == CF_CUSTOM_DOMAIN["AlbCloudFront"]
     for output in (
         "CloudFrontDistributionId",
         "CloudFrontDomainName",
         "CloudFrontUrl",
     ):
-        assert root["Outputs"][output] == jinja_root["Outputs"][output]
+        assert root["Outputs"][output] == CF_CUSTOM_DOMAIN["Outputs"][output]
 
 
 def test_alb_cloudfront_without_custom_domain_has_no_aliases_or_cert() -> None:
     config = _config(custom_domain=None)
     root = _root(config)
-    jinja_root = _jinja_root_to_dict(config)
 
     distribution_config = root["Resources"]["AlbCloudFront"]["Properties"][
         "DistributionConfig"
     ]
     assert "Aliases" not in distribution_config
     assert "ViewerCertificate" not in distribution_config
-    assert root["Resources"]["AlbCloudFront"] == jinja_root["Resources"][
-        "AlbCloudFront"
-    ]
+    assert root["Resources"]["AlbCloudFront"] == CF_NO_CUSTOM_DOMAIN_ALBCLOUDFRONT
 
 
-def test_alb_cloudfront_dedicated_alb_origin_matches_jinja() -> None:
+def test_alb_cloudfront_dedicated_alb_origin() -> None:
     config = _config(dedicated=True)
     root = _root(config)
-    jinja_root = _jinja_root_to_dict(config)
 
-    assert root["Resources"]["AlbCloudFront"] == jinja_root["Resources"][
-        "AlbCloudFront"
-    ]
+    assert root["Resources"]["AlbCloudFront"] == CF_DEDICATED_ALBCLOUDFRONT
 
 
 def test_service_listener_hosts_include_cluster_domain_and_cf_domain() -> None:
@@ -220,16 +189,14 @@ def test_service_listener_hosts_include_cluster_domain_and_cf_domain() -> None:
         build_project_templates(config)["templates/generated/services/web.yaml"]
     )
 
-    assert service == _jinja_service_to_dict(config)
     rule = service["Resources"]["DefaultHostHeaderRule"]["Properties"]
     host_values = rule["Conditions"][0]["HostHeaderConfig"]["Values"]
     assert host_values == [{"Ref": "ClusterDomain"}, "cdn.example.com"]
 
 
-def test_full_featured_cloudfront_resources_match_jinja() -> None:
+def test_full_featured_cloudfront_resources() -> None:
     config = _full_featured_config()
     root = _root(config)
-    jinja_root = _jinja_root_to_dict(config)
 
     for logical_id in (
         "AlbCloudFront",
@@ -237,9 +204,7 @@ def test_full_featured_cloudfront_resources_match_jinja() -> None:
         "CloudFrontmediafiles",
         "BucketPolicymediafiles",
     ):
-        assert root["Resources"][logical_id] == jinja_root["Resources"][
-            logical_id
-        ]
+        assert root["Resources"][logical_id] == FULL_FEATURED_RESOURCES[logical_id]
 
     behaviors = root["Resources"]["AlbCloudFront"]["Properties"][
         "DistributionConfig"
@@ -250,18 +215,14 @@ def test_full_featured_cloudfront_resources_match_jinja() -> None:
     ]
 
 
-def test_full_featured_cloudfront_service_parameters_match_jinja() -> None:
+def test_full_featured_cloudfront_service_parameters() -> None:
     config = _full_featured_config()
     root = _root(config)
-    jinja_root = _jinja_root_to_dict(config)
 
     built_parameters = root["Resources"]["ServiceWeb"]["Properties"][
         "Parameters"
     ]
-    jinja_parameters = jinja_root["Resources"]["ServiceWeb"]["Properties"][
-        "Parameters"
-    ]
-    assert built_parameters == jinja_parameters
+    assert built_parameters == FULL_FEATURED_SERVICE_PARAMETERS
     assert built_parameters["CloudFrontUrlCDNURL"] == {
         "Fn::Sub": "https://${AlbCloudFront.DomainName}"
     }

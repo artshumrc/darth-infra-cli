@@ -15,7 +15,7 @@ from .cfn import (
     package_template,
     resolve_lookup_data,
     run_seed_copy_tasks,
-    validate_rendered_deploy_templates,
+    validate_built_deploy_templates,
 )
 from .helpers import (
     console,
@@ -27,6 +27,7 @@ from .helpers import (
 )
 from .image_ops import build_images, push_images, select_internal_services
 from .version_floor import bump_cli_version_floor
+from ..scaffold.builders import build_project_templates
 from ..scaffold.generator import generate_project
 
 
@@ -119,7 +120,9 @@ def deploy(
         generate_project(config, project_dir, write_config=False)
 
         lookups = resolve_lookup_data(config, env_name)
-        validate_rendered_deploy_templates(project_dir, config, env_name, lookups)
+        validate_built_deploy_templates(
+            build_project_templates(config), config, env_name, lookups
+        )
         bucket = ensure_artifact_bucket(config)
         packaged_template = package_template(project_dir, config, env_name, bucket)
         rc = deploy_changeset(
@@ -174,7 +177,12 @@ def _prepare_images_for_deploy(config, project_dir, env_name: str) -> None:
 
         generate_project(bootstrap_config, project_dir, write_config=False)
         lookups = resolve_lookup_data(config, env_name)
-        validate_rendered_deploy_templates(project_dir, bootstrap_config, env_name, lookups)
+        validate_built_deploy_templates(
+            build_project_templates(bootstrap_config),
+            bootstrap_config,
+            env_name,
+            lookups,
+        )
         bucket = ensure_artifact_bucket(config)
         packaged_template = package_template(project_dir, config, env_name, bucket)
         bootstrap_rc = deploy_changeset(

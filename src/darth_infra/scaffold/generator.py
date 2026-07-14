@@ -1,17 +1,38 @@
-"""Scaffold generator - renders CloudFormation templates into a project directory."""
+"""Scaffold generator - renders a CloudFormation project into a directory.
+
+CFN templates are built as troposphere object trees (see
+:mod:`darth_infra.scaffold.builders`) and serialized to YAML. Only the prose
+``README.md`` remains Jinja-templated.
+"""
 
 from __future__ import annotations
 
-from dataclasses import asdict
 import shutil
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
 from ..config.models import ProjectConfig
-from .context import derive_render_context
+from .builders import build_project_templates
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates" / "cfn"
+
+
+_OVERRIDES_PLACEHOLDER = """AWSTemplateFormatVersion: '2010-09-09'
+Description: User-managed CloudFormation overrides for {project_name}
+
+Resources:
+  # Placeholder so this nested stack is valid before custom resources are added.
+  NoopHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
+
+Outputs: {{}}
+"""
+
+
+def _render_overrides_placeholder(config: ProjectConfig) -> str:
+    """Return the static user-overrides nested-stack placeholder content."""
+    return _OVERRIDES_PLACEHOLDER.format(project_name=config.project_name)
 
 
 def generate_project(
@@ -27,17 +48,17 @@ def generate_project(
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Prose (README) is not part of the troposphere migration and stays Jinja.
     jinja_env = Environment(
         loader=FileSystemLoader(str(TEMPLATES_DIR)),
         keep_trailing_newline=True,
         trim_blocks=True,
         lstrip_blocks=True,
     )
-
-    ctx = _build_context(config)
-
-    # Top-level project docs + source config
-    _render(jinja_env, "README.md.j2", output_dir / "README.md", ctx)
+    readme = jinja_env.get_template("README.md.j2")
+    (output_dir / "README.md").write_text(
+        readme.render(project_name=config.project_name)
+    )
 
     from ..config.loader import dump_config
 
@@ -59,20 +80,17 @@ def generate_project(
     services_dir.mkdir(parents=True, exist_ok=True)
     custom_dir.mkdir(parents=True, exist_ok=True)
 
-    _render(jinja_env, "root.yaml.j2", generated_dir / "root.yaml", ctx)
-
-    for svc_ctx in ctx["services_ctx"]:
-        _render(
-            jinja_env,
-            "nested/service.yaml.j2",
-            services_dir / f"{svc_ctx['name']}.yaml",
-            {**ctx, **svc_ctx},
-        )
+    # Build → serialize → write. Output paths are the frozen public contract.
+    templates = build_project_templates(config)
+    for relative_path, template in templates.items():
+        output_path = output_dir / relative_path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(template.to_yaml())
 
     # Do not overwrite user-owned custom overrides template once created.
     custom_overrides = custom_dir / "overrides.yaml"
     if not custom_overrides.exists():
-        _render(jinja_env, "custom/overrides.yaml.j2", custom_overrides, ctx)
+        custom_overrides.write_text(_render_overrides_placeholder(config))
 
     # Copy user data scripts for EC2 services
     for svc in config.services:
@@ -89,20 +107,3 @@ def generate_project(
                     continue
 
     return output_dir
-
-
-def _build_context(config: ProjectConfig) -> dict:
-    """Adapt the typed context to the mapping expected by the Jinja pipeline."""
-    return asdict(derive_render_context(config))
-
-
-def _render(
-    env: Environment,
-    template_name: str,
-    output_path: Path,
-    ctx: dict,
-) -> None:
-    """Render a single template to a file."""
-    template = env.get_template(template_name)
-    content = template.render(**ctx)
-    output_path.write_text(content)

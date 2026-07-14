@@ -1,8 +1,5 @@
 from pathlib import Path
 
-from cfn_flip import load_yaml
-from jinja2 import Environment, FileSystemLoader
-
 from darth_infra.config.models import (
     AlbConfig,
     AlbMode,
@@ -21,8 +18,20 @@ from darth_infra.config.models import (
     ServiceConfig,
 )
 from darth_infra.scaffold.builders import build_project_templates
-from darth_infra.scaffold.generator import TEMPLATES_DIR, _build_context
 
+from builders_expected import (
+    DEDICATED_ALB_NOCERT,
+    DEDICATED_ALB_ROOT,
+    MINIMAL_SERVICE,
+    RDS_ROOT_RESOURCES,
+    S3_ROOT_BUCKET_MEDIAFILES,
+    S3_ROOT_SERVICEWEB,
+    S3_SERVICE,
+    SERVICE_DISCOVERY_ROOT_NAMESPACE,
+    SERVICE_DISCOVERY_ROOT_SERVICEWEB,
+    SERVICE_DISCOVERY_SERVICE,
+    SHARED_ALB_SERVICE,
+)
 from builders_harness import assert_template_passes_cfn_lint, template_to_dict
 
 
@@ -242,31 +251,6 @@ def _ec2_config() -> ProjectConfig:
     )
 
 
-def _jinja_root_to_dict(config: ProjectConfig) -> dict[str, object]:
-    context = _build_context(config)
-    environment = Environment(
-        loader=FileSystemLoader(str(TEMPLATES_DIR)),
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
-    rendered = environment.get_template("root.yaml.j2").render(**context)
-    return dict(load_yaml(rendered))
-
-
-def _jinja_service_to_dict(config: ProjectConfig) -> dict[str, object]:
-    context = _build_context(config)
-    service_context = context["services_ctx"][0]
-    environment = Environment(
-        loader=FileSystemLoader(str(TEMPLATES_DIR)),
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
-    rendered = environment.get_template("nested/service.yaml.j2").render(
-        **{**context, **service_context}
-    )
-    return dict(load_yaml(rendered))
-
-
 def test_builders_create_minimal_root_stack_core() -> None:
     templates = build_project_templates(_config())
 
@@ -444,7 +428,7 @@ def test_builders_create_shared_alb_fargate_service_stack_core() -> None:
         ]
     )
 
-    assert service == _jinja_service_to_dict(config)
+    assert service == SHARED_ALB_SERVICE
 
 
 def test_builders_create_minimal_service_stack_core() -> None:
@@ -456,7 +440,7 @@ def test_builders_create_minimal_service_stack_core() -> None:
         ]
     )
 
-    assert service == _jinja_service_to_dict(config)
+    assert service == MINIMAL_SERVICE
 
 
 def test_builders_add_ses_send_email_task_policy() -> None:
@@ -469,7 +453,6 @@ def test_builders_add_ses_send_email_task_policy() -> None:
         ]
     )
 
-    assert service == _jinja_service_to_dict(config)
     policies = service["Resources"]["TaskRole"]["Properties"]["Policies"]
     assert {
         "PolicyName": "SesSendEmail",
@@ -566,7 +549,6 @@ def test_builders_add_dedicated_alb_certificate_and_dns_resources() -> None:
     root = template_to_dict(
         build_project_templates(config)["templates/generated/root.yaml"]
     )
-    jinja_root = _jinja_root_to_dict(config)
 
     for logical_id in (
         "DedicatedAlb",
@@ -574,18 +556,13 @@ def test_builders_add_dedicated_alb_certificate_and_dns_resources() -> None:
         "DedicatedAlbHttpListener",
         "DedicatedAlbHttpsListener",
         "DnsRecord",
+        "ServiceWeb",
     ):
-        expected = jinja_root["Resources"][logical_id]
-        if logical_id in {
-            "DedicatedAlbHttpListener",
-            "DedicatedAlbHttpsListener",
-        }:
-            expected["Properties"].pop("Tags")
-        assert root["Resources"][logical_id] == expected
-    assert root["Resources"]["ServiceWeb"] == jinja_root["Resources"][
-        "ServiceWeb"
-    ]
-    assert root["Outputs"]["AlbListenerArn"] == jinja_root["Outputs"][
+        assert (
+            root["Resources"][logical_id]
+            == DEDICATED_ALB_ROOT["Resources"][logical_id]
+        )
+    assert root["Outputs"]["AlbListenerArn"] == DEDICATED_ALB_ROOT["Outputs"][
         "AlbListenerArn"
     ]
 
@@ -595,15 +572,15 @@ def test_builders_add_dedicated_alb_without_certificate_listener_variant() -> No
     root = template_to_dict(
         build_project_templates(config)["templates/generated/root.yaml"]
     )
-    jinja_root = _jinja_root_to_dict(config)
 
     assert root["Parameters"]["CertificateArn"]["Default"] == ""
-    assert root["Conditions"]["UseDedicatedAlbNoCert"] == jinja_root[
+    assert root["Conditions"]["UseDedicatedAlbNoCert"] == DEDICATED_ALB_NOCERT[
         "Conditions"
     ]["UseDedicatedAlbNoCert"]
-    expected = jinja_root["Resources"]["DedicatedAlbHttpListener"]
-    expected["Properties"].pop("Tags")
-    assert root["Resources"]["DedicatedAlbHttpListener"] == expected
+    assert (
+        root["Resources"]["DedicatedAlbHttpListener"]
+        == DEDICATED_ALB_NOCERT["DedicatedAlbHttpListener"]
+    )
 
 
 def test_builders_add_rds_and_secret_root_resources() -> None:
@@ -611,7 +588,6 @@ def test_builders_add_rds_and_secret_root_resources() -> None:
     root = template_to_dict(
         build_project_templates(config)["templates/generated/root.yaml"]
     )
-    jinja_root = _jinja_root_to_dict(config)
 
     for logical_id in (
         "SecretAPPSECRET",
@@ -623,7 +599,7 @@ def test_builders_add_rds_and_secret_root_resources() -> None:
         "ServiceWeb",
         "RdsIngressFromWeb",
     ):
-        assert root["Resources"][logical_id] == jinja_root["Resources"][logical_id]
+        assert root["Resources"][logical_id] == RDS_ROOT_RESOURCES[logical_id]
 
 
 def test_builders_wire_all_secret_sources_and_rds_environment_keys() -> None:
@@ -634,7 +610,6 @@ def test_builders_wire_all_secret_sources_and_rds_environment_keys() -> None:
         ]
     )
 
-    assert service == _jinja_service_to_dict(config)
     container = service["Resources"]["TaskDefinition"]["Properties"][
         "ContainerDefinitions"
     ][0]
@@ -695,15 +670,10 @@ def test_builders_add_service_discovery_namespace_and_service_registry() -> None
     service = template_to_dict(
         templates["templates/generated/services/web.yaml"]
     )
-    jinja_root = _jinja_root_to_dict(config)
 
-    assert root["Resources"]["ServiceNamespace"] == jinja_root["Resources"][
-        "ServiceNamespace"
-    ]
-    assert root["Resources"]["ServiceWeb"] == jinja_root["Resources"][
-        "ServiceWeb"
-    ]
-    assert service == _jinja_service_to_dict(config)
+    assert root["Resources"]["ServiceNamespace"] == SERVICE_DISCOVERY_ROOT_NAMESPACE
+    assert root["Resources"]["ServiceWeb"] == SERVICE_DISCOVERY_ROOT_SERVICEWEB
+    assert service == SERVICE_DISCOVERY_SERVICE
 
 
 def test_builders_add_managed_and_existing_s3_bucket_connections() -> None:
@@ -713,16 +683,11 @@ def test_builders_add_managed_and_existing_s3_bucket_connections() -> None:
     service = template_to_dict(
         templates["templates/generated/services/web.yaml"]
     )
-    jinja_root = _jinja_root_to_dict(config)
 
-    assert root["Resources"]["Bucketmediafiles"] == jinja_root["Resources"][
-        "Bucketmediafiles"
-    ]
+    assert root["Resources"]["Bucketmediafiles"] == S3_ROOT_BUCKET_MEDIAFILES
     assert "Bucketsharedassets" not in root["Resources"]
-    assert root["Resources"]["ServiceWeb"] == jinja_root["Resources"][
-        "ServiceWeb"
-    ]
-    assert service == _jinja_service_to_dict(config)
+    assert root["Resources"]["ServiceWeb"] == S3_ROOT_SERVICEWEB
+    assert service == S3_SERVICE
 
 
 def test_builders_add_ec2_launch_type_resources_and_capacity_wiring() -> None:
@@ -732,10 +697,7 @@ def test_builders_add_ec2_launch_type_resources_and_capacity_wiring() -> None:
             "templates/generated/services/worker.yaml"
         ]
     )
-    expected = _jinja_service_to_dict(config)
-    expected["Resources"]["Ec2InstanceProfile"]["Properties"].pop("Tags")
 
-    assert service == expected
     resources = service["Resources"]
     assert {
         "Ec2InstanceRole",
@@ -828,6 +790,60 @@ def test_builders_add_feature_conditional_parameters_and_conditions() -> None:
     assert root["Parameters"]["EnvSecretArnEXISTINGKEY"] == {"Type": "String"}
     assert "EnvSecretArnGENERATEDKEY" not in root["Parameters"]
     assert "EnvSecretArnDATABASEPASSWORD" not in root["Parameters"]
+
+
+def test_builders_default_service_discovery_namespace_to_legacy_local() -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", enable_service_discovery=True)],
+    )
+
+    root = template_to_dict(
+        build_project_templates(config)["templates/generated/root.yaml"]
+    )
+
+    assert root["Resources"]["ServiceNamespace"]["Properties"]["Name"] == {
+        "Fn::Sub": "local"
+    }
+
+
+def test_builders_propagate_cleanup_tags_to_ec2_capacity_resources() -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[
+            ServiceConfig(
+                name="worker",
+                launch_type=LaunchType.EC2,
+                ec2_instance_type="t3.medium",
+            )
+        ],
+        tags={"ephemeral-cleanup-id": "demo-pr-123"},
+    )
+
+    templates = build_project_templates(config)
+    service = template_to_dict(
+        templates["templates/generated/services/worker.yaml"]
+    )
+
+    assert service["Parameters"]["ExtraTagEphemeralCleanupId"] == {
+        "Type": "String",
+        "Default": "",
+    }
+    assert service["Conditions"]["HasExtraTagEphemeralCleanupId"] == {
+        "Fn::Not": [{"Fn::Equals": [{"Ref": "ExtraTagEphemeralCleanupId"}, ""]}]
+    }
+    asg_tags = service["Resources"]["AutoScalingGroup"]["Properties"]["Tags"]
+    assert {
+        "Fn::If": [
+            "HasExtraTagEphemeralCleanupId",
+            {
+                "Key": "ephemeral-cleanup-id",
+                "Value": {"Ref": "ExtraTagEphemeralCleanupId"},
+                "PropagateAtLaunch": True,
+            },
+            {"Ref": "AWS::NoValue"},
+        ]
+    } in asg_tags
 
 
 def test_builder_root_template_passes_cfn_lint(tmp_path: Path) -> None:

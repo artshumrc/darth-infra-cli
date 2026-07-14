@@ -27,7 +27,7 @@ from darth_infra.config.models import (
     ServiceDiscoveryConfig,
     ServiceConfig,
 )
-from darth_infra.scaffold.generator import generate_project
+from darth_infra.scaffold.builders import build_project_templates
 from darth_infra.tui.screens.review import build_config_from_state
 from darth_infra.tui.wizard_export import project_config_to_wizard_state
 
@@ -348,20 +348,29 @@ def test_preview_service_discovery_names_are_isolated(tmp_path: Path) -> None:
     )
 
     preview_config = resolve_environment_config(config, "pr-123", "prod")
-    output_dir = generate_project(preview_config, tmp_path / "out")
+    templates = build_project_templates(preview_config)
+    django_service = templates[
+        "templates/generated/services/django.yaml"
+    ].to_dict()
+    sveltekit_service = templates[
+        "templates/generated/services/sveltekit.yaml"
+    ].to_dict()
+    root = templates["templates/generated/root.yaml"].to_dict()
 
-    django_service = (
-        output_dir / "templates" / "generated" / "services" / "django.yaml"
-    ).read_text()
-    sveltekit_service = (
-        output_dir / "templates" / "generated" / "services" / "sveltekit.yaml"
-    ).read_text()
-    root = (output_dir / "templates" / "generated" / "root.yaml").read_text()
-
-    assert "Name: django" in django_service
-    assert "Name: django-pr-123" not in django_service
-    assert "Name: !Sub '${ProjectName}-${EnvironmentName}.local'" in root
-    assert "Value: 'http://django.demo-pr-123.local:8000'" in sveltekit_service
+    assert (
+        django_service["Resources"]["CloudMapService"]["Properties"]["Name"]
+        == "django"
+    )
+    assert root["Resources"]["ServiceNamespace"]["Properties"]["Name"] == {
+        "Fn::Sub": "${ProjectName}-${EnvironmentName}.local"
+    }
+    sveltekit_environment = sveltekit_service["Resources"]["TaskDefinition"][
+        "Properties"
+    ]["ContainerDefinitions"][0]["Environment"]
+    assert {
+        "Name": "DJANGO_INTERNAL_URL",
+        "Value": "http://django.demo-pr-123.local:8000",
+    } in sveltekit_environment
 
 
 def test_preview_s3_overlay_renders_fallback_parameters_and_permissions(
@@ -394,23 +403,35 @@ def test_preview_s3_overlay_renders_fallback_parameters_and_permissions(
     )
 
     preview_config = resolve_environment_config(config, "pr-123", "prod")
-    output_dir = generate_project(preview_config, tmp_path / "out")
-    root = (output_dir / "templates" / "generated" / "root.yaml").read_text()
-    service = (
-        output_dir / "templates" / "generated" / "services" / "web.yaml"
-    ).read_text()
+    templates = build_project_templates(preview_config)
+    root = templates["templates/generated/root.yaml"].to_dict()
+    service = templates["templates/generated/services/web.yaml"].to_dict()
 
-    assert "        FallbackBucketNameMedia: 'prod-media'" in root
-    assert "        FallbackBucketArnMedia: !Sub 'arn:aws:s3:::prod-media'" in root
-    assert "AWS_STORAGE_FALLBACK_BUCKET_NAME" in service
-    assert "Value: !Ref FallbackBucketNameMedia" in service
-    fallback_statement = service.split("- !Ref FallbackBucketArnMedia", 1)[0].rsplit(
-        "- Effect: Allow", 1
-    )[1]
-    assert "s3:GetObject" in fallback_statement
-    assert "s3:ListBucket" in fallback_statement
-    assert "s3:PutObject" not in fallback_statement
-    assert "s3:DeleteObject" not in fallback_statement
+    service_parameters = root["Resources"]["ServiceWeb"]["Properties"][
+        "Parameters"
+    ]
+    assert service_parameters["FallbackBucketNameMedia"] == "prod-media"
+    assert service_parameters["FallbackBucketArnMedia"] == {
+        "Fn::Sub": "arn:aws:s3:::prod-media"
+    }
+    environment = service["Resources"]["TaskDefinition"]["Properties"][
+        "ContainerDefinitions"
+    ][0]["Environment"]
+    assert {
+        "Name": "AWS_STORAGE_FALLBACK_BUCKET_NAME",
+        "Value": {"Ref": "FallbackBucketNameMedia"},
+    } in environment
+    s3_policy = next(
+        policy
+        for policy in service["Resources"]["TaskRole"]["Properties"]["Policies"]
+        if policy["PolicyName"] == "S3Access"
+    )
+    fallback_statement = next(
+        statement
+        for statement in s3_policy["PolicyDocument"]["Statement"]
+        if {"Ref": "FallbackBucketArnMedia"} in statement["Resource"]
+    )
+    assert fallback_statement["Action"] == ["s3:GetObject", "s3:ListBucket"]
 
 
 def test_preview_s3_overlay_derives_fallback_bucket_from_base_environment(
@@ -441,16 +462,25 @@ def test_preview_s3_overlay_derives_fallback_bucket_from_base_environment(
     )
 
     preview_config = resolve_environment_config(config, "pr-123", "prod")
-    output_dir = generate_project(preview_config, tmp_path / "out")
-    root = (output_dir / "templates" / "generated" / "root.yaml").read_text()
-    service = (
-        output_dir / "templates" / "generated" / "services" / "web.yaml"
-    ).read_text()
+    templates = build_project_templates(preview_config)
+    root = templates["templates/generated/root.yaml"].to_dict()
+    service = templates["templates/generated/services/web.yaml"].to_dict()
 
     assert preview_config.s3_buckets[0].preview_fallback_bucket_name == "demo-prod-media"
-    assert "        FallbackBucketNameMedia: 'demo-prod-media'" in root
-    assert "        FallbackBucketArnMedia: !Sub 'arn:aws:s3:::demo-prod-media'" in root
-    assert "AWS_STORAGE_FALLBACK_BUCKET_NAME" in service
+    service_parameters = root["Resources"]["ServiceWeb"]["Properties"][
+        "Parameters"
+    ]
+    assert service_parameters["FallbackBucketNameMedia"] == "demo-prod-media"
+    assert service_parameters["FallbackBucketArnMedia"] == {
+        "Fn::Sub": "arn:aws:s3:::demo-prod-media"
+    }
+    environment = service["Resources"]["TaskDefinition"]["Properties"][
+        "ContainerDefinitions"
+    ][0]["Environment"]
+    assert any(
+        entry["Name"] == "AWS_STORAGE_FALLBACK_BUCKET_NAME"
+        for entry in environment
+    )
 
 
 def test_existing_preview_reuses_original_rds_snapshot(monkeypatch) -> None:

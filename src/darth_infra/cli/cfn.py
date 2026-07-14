@@ -243,146 +243,6 @@ def _validate_resolved_lookup_data(
             raise RuntimeError("Preview DNS requires a resolved Route53 hosted zone id")
 
 
-def validate_rendered_deploy_templates(
-    project_dir: Path,
-    config: ProjectConfig,
-    env_name: str,
-    lookups: ResolvedLookupData,
-) -> None:
-    root_template = project_dir / "templates" / "generated" / "root.yaml"
-    if not root_template.is_file():
-        raise FileNotFoundError(f"Missing template file: {root_template}")
-
-    root_body = root_template.read_text()
-    service_dir = project_dir / "templates" / "generated" / "services"
-    secrets_by_name = {sec.name: sec for sec in config.secrets}
-    rds_key_by_env = {
-        "DATABASE_HOST": "host",
-        "DATABASE_PORT": "port",
-        "DATABASE_DB": "dbname",
-        "DATABASE_USER": "username",
-        "DATABASE_PASSWORD": "password",
-        "POSTGRES_HOST": "host",
-        "POSTGRES_PORT": "port",
-        "POSTGRES_DB": "dbname",
-        "POSTGRES_USER": "username",
-        "POSTGRES_PASSWORD": "password",
-    }
-
-    for service in config.services:
-        service_template = service_dir / f"{service.name}.yaml"
-        if not service_template.is_file():
-            raise FileNotFoundError(
-                f"Missing service template file: {service_template}"
-            )
-        service_body = service_template.read_text()
-
-        if service.enable_ses_send_email:
-            for required_marker in (
-                "PolicyName: SesSendEmail",
-                "- ses:SendEmail",
-                "- ses:SendRawEmail",
-                "- ses:GetSendQuota",
-            ):
-                if required_marker not in service_body:
-                    raise RuntimeError(
-                        f"Preflight validation failed for service '{service.name}': "
-                        "SES task-role policy is missing required permissions"
-                    )
-
-        expected_secret_names = list(service.secrets)
-        if config.rds and service.name in config.rds.expose_to:
-            for secret_name in (
-                "POSTGRES_DB",
-                "POSTGRES_USER",
-                "POSTGRES_PASSWORD",
-                "POSTGRES_HOST",
-                "POSTGRES_PORT",
-            ):
-                if secret_name not in expected_secret_names:
-                    expected_secret_names.append(secret_name)
-
-        expected_sources = set()
-        for secret_name in expected_secret_names:
-            secret_cfg = secrets_by_name.get(secret_name)
-            source = getattr(getattr(secret_cfg, "source", None), "value", None)
-            if source is None:
-                if (
-                    config.rds
-                    and service.name in config.rds.expose_to
-                    and secret_name in rds_key_by_env
-                ):
-                    source = "rds"
-                else:
-                    source = "generate"
-
-            if source == "rds":
-                expected_sources.add("RdsSecretArn")
-                json_key = rds_key_by_env.get(
-                    secret_name,
-                    str(secret_cfg.existing_secret_name).strip() if secret_cfg else "",
-                )
-                expected_value = f"ValueFrom: !Sub '${{RdsSecretArn}}:{json_key}::'"
-                if expected_value not in service_body:
-                    raise RuntimeError(
-                        f"Preflight validation failed for service '{service.name}': "
-                        f"secret '{secret_name}' is missing the expected RDS ValueFrom mapping"
-                    )
-                if f"- Name: {secret_name}" not in service_body:
-                    raise RuntimeError(
-                        f"Preflight validation failed for service '{service.name}': "
-                        f"secret '{secret_name}' is missing from the ECS task definition"
-                    )
-                continue
-
-            param_name = f"SecretArn{_secret_logical_suffix(secret_name)}"
-            if f"- Name: {secret_name}" not in service_body:
-                raise RuntimeError(
-                    f"Preflight validation failed for service '{service.name}': "
-                    f"secret '{secret_name}' is missing from the ECS task definition"
-                )
-            if f"ValueFrom: !Ref {param_name}" not in service_body:
-                raise RuntimeError(
-                    f"Preflight validation failed for service '{service.name}': "
-                    f"secret '{secret_name}' is missing the expected task ValueFrom reference"
-                )
-            if f"- !Ref {param_name}" not in service_body:
-                raise RuntimeError(
-                    f"Preflight validation failed for service '{service.name}': "
-                    f"secret '{secret_name}' is missing from the task execution role policy"
-                )
-
-            if source == "generate":
-                expected_root_value = (
-                    f"{param_name}: !Ref Secret{_secret_logical_suffix(secret_name)}"
-                )
-            else:
-                expected_arn = lookups.external_secret_arns.get(secret_name, "").strip()
-                if not expected_arn:
-                    raise RuntimeError(
-                        f"Preflight validation failed: external secret '{secret_name}' did not resolve to an ARN"
-                    )
-                expected_root_value = f"{param_name}: !Ref EnvSecretArn{_secret_logical_suffix(secret_name)}"
-
-            if expected_root_value not in root_body:
-                raise RuntimeError(
-                    f"Preflight validation failed for service '{service.name}': "
-                    f"secret '{secret_name}' is missing from the root stack nested-service parameters"
-                )
-
-        for source_name in sorted(expected_sources):
-            if f"- !Ref {source_name}" not in service_body:
-                raise RuntimeError(
-                    f"Preflight validation failed for service '{service.name}': "
-                    f"required secret source '{source_name}' is missing from the task execution role policy"
-                )
-
-    if config.rds and "RdsSecretArn: !Ref RdsCredentialsSecret" not in root_body:
-        raise RuntimeError(
-            "Preflight validation failed: root stack is missing the nested RDS secret ARN wiring"
-        )
-
-
 _RDS_SECRET_KEY_BY_ENV = {
     "DATABASE_HOST": "host",
     "DATABASE_PORT": "port",
@@ -467,12 +327,10 @@ def validate_built_deploy_templates(
 ) -> None:
     """Structurally validate built templates before any AWS call.
 
-    Parallel to :func:`validate_rendered_deploy_templates`, but inspects the
-    troposphere ``Template`` objects produced by ``build_project_templates``
-    (via ``Template.to_dict()``) instead of substring-matching rendered YAML.
-    Every guarantee the text markers provided is preserved as a structural
-    assertion. Raises before returning when a required template element is
-    missing, naming the service and the missing element.
+    Inspects the troposphere ``Template`` objects produced by
+    ``build_project_templates`` (via ``Template.to_dict()``) rather than
+    substring-matching rendered YAML. Raises before returning when a required
+    template element is missing, naming the service and the missing element.
     """
     root_template = templates.get(_ROOT_TEMPLATE_KEY)
     if root_template is None:
