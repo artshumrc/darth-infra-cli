@@ -48,15 +48,15 @@ definitions consuming secret ARNs and RDS-derived environment variables
 
 ## Acceptance criteria
 
-- [ ] An RDS-enabled fixture builds root + service templates structurally
+- [x] An RDS-enabled fixture builds root + service templates structurally
       matching Jinja output: DB instance (both snapshot and no-snapshot
       shapes), SG, subnet group, master secret + attachment.
-- [ ] A fixture with each secret source (`generate`, `rds`, external)
+- [x] A fixture with each secret source (`generate`, `rds`, external)
       produces the correct task-definition `Secrets` entries and parameter
       declarations.
-- [ ] RDS env-var key mapping (DATABASE_*/POSTGRES_* → host/port/dbname/
+- [x] RDS env-var key mapping (DATABASE_*/POSTGRES_* → host/port/dbname/
       username/password) is asserted structurally for an exposed service.
-- [ ] cfn-lint passes over rendered fixture output; full suite green.
+- [x] cfn-lint passes over rendered fixture output; full suite green.
 
 Commands:
 
@@ -81,3 +81,27 @@ the new dedicated-ALB resources, and root-template lint rejects the legacy
 listener `Tags` with `E3002`. The full run otherwise passes 85 of 87 tests.
 Ticket 05 must be rerun, committed, and marked completed after the ticket 04
 listener-tag decision is resolved.
+
+## Resolution (2026-07-14)
+
+The listener-tag blocker was resolved by ticket 04 (commit f286653, "require
+valid cloudflormation"). That same commit already carried the full RDS +
+Secrets Manager builder implementation and its structural tests, so no new
+builder code was needed on re-verification — the ticket-05 data layer is
+present in `src/darth_infra/scaffold/builders/__init__.py` (master secret
+`RdsCredentialsSecret` + `HasRdsSnapshot` snapshot/fresh `If` branches,
+`RdsSecurityGroup`, `RdsSubnetGroup`, `Database` with `IsProd`
+DeletionPolicy/UpdateReplacePolicy, `RdsSecretAttachment`, generated app
+secrets, per-service `RdsIngressFrom*`, and task-definition `Secrets`/
+`Environment` wiring for `generate`/`rds`/external sources) and in
+`tests/test_builders.py`.
+
+Verified green on the clean tree at commit f286653:
+
+- `uv run pytest` → 93 passed.
+- `uv run pytest tests/ -k "rds or secret"` → 17 passed.
+- cfn-lint (`--non-zero-exit-code error`) passes over the rendered RDS-enabled
+  root and service fixtures (exit 0; only W-level warnings), plus the existing
+  in-suite cfn-lint tests.
+
+All acceptance criteria are met; ticket marked Completed.
