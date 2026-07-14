@@ -84,3 +84,22 @@ CloudFormation's launch-template-safe literal escaping (`\${!literal}`).
 Exact structural parity is explicitly waived for those invalid legacy shapes;
 all logical IDs and supported properties remain unchanged. Partial
 implementation and tests are left uncommitted in the worktree.
+
+## Completion note (2026-07-14)
+
+The EC2 launch-type builder path and its tests were already committed in
+`f286653` ("require valid cloudflormation"). Verified the current tree against
+every acceptance criterion; no new builder/test code was needed.
+
+- `_ec2_config` fixture carries an inline `${literal}` user-data script; the
+  EC2 service template builds `Ec2InstanceRole`, `Ec2InstanceProfile` (no
+  `Tags`, per the decision), `LaunchTemplate` (with EBS mappings + ASG tag
+  specs), `AutoScalingGroup`, and wires `EcsService` capacity with
+  `LaunchType: EC2`.
+- User-data escaping is `\${!literal}` (CloudFormation launch-template-safe),
+  applied upstream in `context._resolve_user_data_script_content`
+  (`content.replace("${", r"\${!")`) — reflects the recorded decision, not the
+  legacy `$${literal}`.
+- Fargate fixture leaks no EC2 resources (`LaunchType: FARGATE`).
+- `cfn-lint 1.53.0` passes (exit 0, warnings only) over both rendered EC2 and
+  Fargate service templates; full suite green (93 passed).
