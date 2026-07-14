@@ -148,18 +148,20 @@ old-Jinja vs new-troposphere, plus the deployed stack) found:
    parameter that `_build_parameters` supplies as `49991` (resolves to the same
    leaf value — no infra change, only nested-stack churn).
 
-3. **Gate-semantics limitation (needs a decision).** Even with a perfect
-   no-op, the gate as implemented fails: `aws cloudformation package`
+3. **Gate-semantics limitation (RESOLVED, commit `c2eaab3`).** Even with a
+   perfect no-op, the original gate failed: `aws cloudformation package`
    content-hashes each nested template, so troposphere's (necessarily
    different) YAML bytes produce new `TemplateURL`s and every
    `AWS::CloudFormation::Stack` resource shows as `Modify` at the root level.
-   The strict "empty changeset" signal is therefore unreachable for this
-   nested-stack architecture on the cutover. To verify the *effective* no-op
-   (no leaf-resource changes) the gate must create the changeset with
-   `IncludeNestedStacks=True` and classify: ignore `AWS::CloudFormation::Stack`
-   wrapper changes whose only diff is `TemplateURL`/`Parameters`, and FAIL only
-   on real leaf Add/Remove/Modify. Until that lands, verify manually by
-   inspecting the nested changeset once per stack.
+   The strict "empty changeset" signal is unreachable for this nested-stack
+   architecture on the cutover. Fixed by making the gate create the changeset
+   with `IncludeNestedStacks=True` and grade changes recursively
+   (`_classify_noop_changes`): `AWS::CloudFormation::Stack` wrappers are treated
+   as benign churn (their real contents are inspected by recursing), a `Modify`
+   with any `Static` evaluation or any `Add`/`Remove` of a non-wrapper resource
+   FAILS, and a `Modify` with only `Dynamic` (attribute-driven) evaluations is
+   reported as an uncertain ripple but does not fail. Still needs one real-stack
+   run to validate against live CloudFormation behavior.
 
 ## Blocked by
 
