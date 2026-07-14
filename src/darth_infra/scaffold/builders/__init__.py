@@ -269,6 +269,15 @@ def _build_service_template(
             template.add_parameter(
                 Parameter(s3_access.fallback_arn_param_name, Type="String")
             )
+    for s3_access in service.s3_vars:
+        if s3_access.cf_param_name:
+            template.add_parameter(
+                Parameter(s3_access.cf_param_name, Type="String")
+            )
+    for cloudfront_access in service.cloudfront_vars:
+        template.add_parameter(
+            Parameter(cloudfront_access.param_name, Type="String")
+        )
 
     tags = _service_tags(context, service)
     log_group = template.add_resource(
@@ -631,6 +640,20 @@ def _build_service_template(
                     Value=Ref(s3_access.fallback_param_name),
                 )
             )
+        if s3_access.cloudfront_env_key and s3_access.cf_param_name:
+            environment.append(
+                ecs.Environment(
+                    Name=s3_access.cloudfront_env_key,
+                    Value=Ref(s3_access.cf_param_name),
+                )
+            )
+    for cloudfront_access in service.cloudfront_vars:
+        environment.append(
+            ecs.Environment(
+                Name=cloudfront_access.env_key,
+                Value=Ref(cloudfront_access.param_name),
+            )
+        )
     container = ecs.ContainerDefinition(
         Name=service.name,
         Image=(

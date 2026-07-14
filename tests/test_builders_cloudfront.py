@@ -231,6 +231,30 @@ def test_full_featured_cloudfront_service_parameters() -> None:
     }
 
 
+def test_full_featured_cloudfront_service_declares_params_and_env() -> None:
+    """The service template must declare the CloudFront-URL parameters the root
+    stack passes it and inject the matching env vars. Without this the nested
+    stack receives undeclared parameters (deploy fails) and drops the CDN env
+    vars. This guards the service side that the root-side parameter test misses.
+    """
+    config = _full_featured_config()
+    service = template_to_dict(
+        build_project_templates(config)["templates/generated/services/web.yaml"]
+    )
+
+    # Parameters the root passes (s3 cloudfront_env_key + ALB cloudfront) must
+    # be declared on the child, or CloudFormation rejects the nested stack.
+    assert service["Parameters"]["CloudFrontUrlMediaFiles"] == {"Type": "String"}
+    assert service["Parameters"]["CloudFrontUrlCDNURL"] == {"Type": "String"}
+
+    environment = service["Resources"]["TaskDefinition"]["Properties"][
+        "ContainerDefinitions"
+    ][0]["Environment"]
+    env_by_name = {entry["Name"]: entry["Value"] for entry in environment}
+    assert env_by_name["MEDIA_CDN"] == {"Ref": "CloudFrontUrlMediaFiles"}
+    assert env_by_name["CDN_URL"] == {"Ref": "CloudFrontUrlCDNURL"}
+
+
 def test_no_cloudfront_resources_when_disabled() -> None:
     config = ProjectConfig(
         project_name="demo",
