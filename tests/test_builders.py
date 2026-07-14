@@ -1,5 +1,8 @@
 from pathlib import Path
 
+from cfn_flip import load_yaml
+from jinja2 import Environment, FileSystemLoader
+
 from darth_infra.config.models import (
     AlbConfig,
     AlbPathRule,
@@ -11,6 +14,7 @@ from darth_infra.config.models import (
     ServiceConfig,
 )
 from darth_infra.scaffold.builders import build_project_templates
+from darth_infra.scaffold.generator import TEMPLATES_DIR, _build_context
 
 from builders_harness import assert_template_passes_cfn_lint, template_to_dict
 
@@ -56,10 +60,47 @@ def _config() -> ProjectConfig:
     )
 
 
+def _shared_alb_config() -> ProjectConfig:
+    return ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        alb=AlbConfig(
+            domain="app.example.com",
+            default_target_service="web",
+            default_listener_priority=100,
+            path_rules=[
+                AlbPathRule(
+                    name="api-v2",
+                    path_pattern="/api/v2/*",
+                    target_service="web",
+                    priority=110,
+                )
+            ],
+        ),
+    )
+
+
+def _jinja_service_to_dict(config: ProjectConfig) -> dict[str, object]:
+    context = _build_context(config)
+    service_context = context["services_ctx"][0]
+    environment = Environment(
+        loader=FileSystemLoader(str(TEMPLATES_DIR)),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    rendered = environment.get_template("nested/service.yaml.j2").render(
+        **{**context, **service_context}
+    )
+    return dict(load_yaml(rendered))
+
+
 def test_builders_create_minimal_root_stack_core() -> None:
     templates = build_project_templates(_config())
 
-    assert set(templates) == {"templates/generated/root.yaml"}
+    assert set(templates) == {
+        "templates/generated/root.yaml",
+        "templates/generated/services/web.yaml",
+    }
     root = template_to_dict(templates["templates/generated/root.yaml"])
 
     assert root["AWSTemplateFormatVersion"] == "2010-09-09"
@@ -160,6 +201,8 @@ def test_builders_create_minimal_root_stack_core() -> None:
                 "ClusterName": {"Ref": "EcsCluster"},
                 "ClusterArn": {"Fn::GetAtt": ["EcsCluster", "Arn"]},
                 "ClusterDomain": {"Ref": "ClusterDomain"},
+                "AlbListenerArn": {"Ref": "SharedAlbListenerArn"},
+                "AlbSecurityGroupId": {"Ref": "SharedAlbSecurityGroupId"},
                 **{
                     parameter_name: {"Ref": parameter_name}
                     for _, parameter_name, _ in _BASE_TAG_PARAMETERS
@@ -179,6 +222,61 @@ def test_builders_create_minimal_root_stack_core() -> None:
         "ClusterName": {"Value": {"Ref": "EcsCluster"}},
         "StackEnvironment": {"Value": {"Ref": "EnvironmentName"}},
     }
+
+
+def test_builders_create_shared_alb_fargate_service_stack_core() -> None:
+    config = _shared_alb_config()
+
+    service = template_to_dict(
+        build_project_templates(config)[
+            "templates/generated/services/web.yaml"
+        ]
+    )
+
+    assert service == _jinja_service_to_dict(config)
+
+
+def test_builders_create_minimal_service_stack_core() -> None:
+    config = _config()
+
+    service = template_to_dict(
+        build_project_templates(config)[
+            "templates/generated/services/web.yaml"
+        ]
+    )
+
+    assert service == _jinja_service_to_dict(config)
+
+
+def test_builders_add_ses_send_email_task_policy() -> None:
+    config = _shared_alb_config()
+    config.services[0].enable_ses_send_email = True
+
+    service = template_to_dict(
+        build_project_templates(config)[
+            "templates/generated/services/web.yaml"
+        ]
+    )
+
+    assert service == _jinja_service_to_dict(config)
+    policies = service["Resources"]["TaskRole"]["Properties"]["Policies"]
+    assert {
+        "PolicyName": "SesSendEmail",
+        "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "ses:SendEmail",
+                        "ses:SendRawEmail",
+                        "ses:GetSendQuota",
+                    ],
+                    "Resource": "*",
+                }
+            ],
+        },
+    } in policies
 
 
 def test_builders_add_configured_tag_plumbing() -> None:
@@ -321,3 +419,11 @@ def test_builder_root_template_passes_cfn_lint(tmp_path: Path) -> None:
     root = build_project_templates(_config())["templates/generated/root.yaml"]
 
     assert_template_passes_cfn_lint(root, tmp_path / "root.yaml")
+
+
+def test_builder_service_template_passes_cfn_lint(tmp_path: Path) -> None:
+    service = build_project_templates(_shared_alb_config())[
+        "templates/generated/services/web.yaml"
+    ]
+
+    assert_template_passes_cfn_lint(service, tmp_path / "web.yaml")
