@@ -300,12 +300,12 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "Explicit public subnet IDs for a dedicated ALB; discovered when empty.",
         example="subnet-0ccc, subnet-0ddd",
     ),
+    # -- Services ----------------------------------------------------------
     FieldEntry(
-        "service_discovery.namespace_template", _S.NETWORK, _P.ADVANCED, _C.TEXT,
+        "service_discovery.namespace_template", _S.SERVICES, _P.ADVANCED, _C.TEXT,
         "Cloud Map private DNS namespace template for inter-service discovery.",
         example="{project}-{env}.local",
     ),
-    # -- Services ----------------------------------------------------------
     FieldEntry(
         "services[].name", _S.SERVICES, _P.COMMON, _C.TEXT,
         "Logical service name.",

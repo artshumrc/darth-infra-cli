@@ -291,8 +291,75 @@ class ConfigEditorApp(App[None]):
     #confirm-buttons Button {
         margin: 0 1 0 0;
     }
+    #impact-dialog {
+        width: 70;
+        max-width: 90%;
+        height: auto;
+        border: round $error;
+        background: $surface;
+        padding: 1 2;
+    }
+    #impact-list {
+        height: auto;
+        max-height: 10;
+        margin: 1 0;
+        overflow-y: auto;
+    }
+    .impact-item {
+        height: auto;
+        color: $warning;
+    }
+    #impact-buttons {
+        height: auto;
+        margin-top: 1;
+    }
+    #impact-buttons Button {
+        margin: 0 1 0 0;
+    }
     .detail-form {
         height: auto;
+    }
+    .field-textarea {
+        height: 6;
+        border: round $panel;
+    }
+    .nested-collection {
+        height: auto;
+        border: round $panel;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
+    .nested-title {
+        text-style: bold;
+        color: $accent;
+    }
+    .nested-toolbar {
+        height: auto;
+    }
+    .nested-toolbar Button {
+        margin: 0 1 0 0;
+    }
+    .nested-body {
+        height: auto;
+    }
+    .nested-list {
+        width: 28;
+        min-width: 16;
+        height: auto;
+        max-height: 8;
+        border-right: solid $panel;
+    }
+    .nested-detail {
+        width: 1fr;
+        height: auto;
+        padding: 0 1;
+    }
+    .nested-form {
+        height: auto;
+    }
+    .nested-status {
+        height: auto;
+        color: $text-muted;
     }
     """
 

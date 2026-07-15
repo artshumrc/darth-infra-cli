@@ -11,7 +11,7 @@ Overall status: `In Progress`
 
 Current ticket: None
 
-Last updated: 2026-07-14 (ticket 05 completed)
+Last updated: 2026-07-14 (ticket 07 completed)
 
 ## Ledger
 
@@ -23,7 +23,7 @@ Last updated: 2026-07-14 (ticket 05 completed)
 | 04 | `04-editor-shell-project.md` | Completed | 01, 02 |
 | 05 | `05-network-aws-discovery.md` | Completed | 04 |
 | 06 | `06-core-services-editor.md` | Completed | 04 |
-| 07 | `07-advanced-services-references.md` | Not Started | 05, 06 |
+| 07 | `07-advanced-services-references.md` | Completed | 05, 06 |
 | 08 | `08-alb-routing.md` | Not Started | 05, 07 |
 | 09 | `09-cloudfront-routing.md` | Not Started | 05, 07, 08 |
 | 10 | `10-database-editor.md` | Not Started | 04, 07 |

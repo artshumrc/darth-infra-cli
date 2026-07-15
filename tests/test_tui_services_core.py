@@ -16,7 +16,7 @@ from textual.widgets import Button, Checkbox, Input, ListView, Select, Static
 from darth_infra.config.document import ProjectDocument
 from darth_infra.config.loader import load_config
 from darth_infra.tui.editor import ConfigEditorApp
-from darth_infra.tui.editor.collection import ConfirmScreen
+from darth_infra.tui.editor.collection import ConfirmScreen, ImpactConfirmScreen
 from darth_infra.tui.editor.navigation import nav_button_id
 from darth_infra.tui.field_registry import Section
 
@@ -337,24 +337,57 @@ def test_duplicate_copies_fields_but_no_incoming_references(tmp_path: Path) -> N
     _run(scenario())
 
 
-def test_referenced_service_delete_is_blocked(tmp_path: Path) -> None:
-    path = _write(tmp_path, REFERENCED)
+CASCADE = """\
+[project]
+name = "demo"
+environments = ["prod"]
+
+[[services]]
+name = "web"
+port = 8000
+
+[[services]]
+name = "kibana"
+port = 5601
+
+[alb]
+domain = "demo.example.com"
+default_target_service = "web"
+
+[[alb.path_rules]]
+name = "kibana-rule"
+path_pattern = "/kibana/*"
+target_service = "kibana"
+"""
+
+
+def test_referenced_service_delete_cascades(tmp_path: Path) -> None:
+    path = _write(tmp_path, CASCADE)
 
     async def scenario() -> None:
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
             await _goto_services(app, pilot)
-            notices = _capture_notices(app)
+            await _select_row(app, pilot, 1)  # "kibana", referenced by a path rule
 
             await pilot.click("#md-delete")
             await pilot.pause()
-            # No confirmation dialog opened; an actionable message explains why.
-            assert not isinstance(app.screen, ConfirmScreen)
-            assert any("Cannot delete" in n and "ALB" in n for n in notices)
-            # The service and its reference are intact — no dangling reference.
+            # The impact list is shown (not the plain confirm dialog).
+            assert isinstance(app.screen, ImpactConfirmScreen)
+            await pilot.click("#impact-confirm")
+            await pilot.pause()
+            await pilot.pause()
+
+            # The service and its referencing path rule are gone together, and
+            # the draft still saves with no dangling reference.
+            section = app._section_widget
+            assert section.item_count() == 1
+            await pilot.press("ctrl+s")
+            await pilot.pause()
             config = load_config(path)
             assert [s.name for s in config.services] == ["web"]
+            assert config.alb.path_rules == []
             assert config.alb.default_target_service == "web"
 
     _run(scenario())

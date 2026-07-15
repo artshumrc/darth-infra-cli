@@ -35,6 +35,7 @@ from textual.widgets import (
     Select,
     SelectionList,
     Static,
+    TextArea,
 )
 
 from .aws_discovery import (
@@ -320,6 +321,45 @@ class IntegerField(EditableField):
             return
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        event.stop()
+        self._notify_changed()
+
+
+class TextAreaField(EditableField):
+    """A multi-line text control bound to a nullable string field.
+
+    Used for inline scripts such as EC2 user-data content, where newlines are
+    meaningful. An empty control removes the key (restoring omission); otherwise
+    the full multi-line text is persisted verbatim.
+    """
+
+    def _compose_control(self):
+        value = self.document.value(self.field_path)
+        yield TextArea(
+            "" if value is None else str(value),
+            id=f"input-{self.slug}",
+            classes="field-textarea",
+        )
+
+    def _textarea(self) -> TextArea:
+        return self.query_one(f"#input-{self.slug}", TextArea)
+
+    def current_value(self) -> str:
+        return self._textarea().text
+
+    def _current_key(self) -> Any:
+        return self.current_value()
+
+    def commit(self) -> None:
+        if not self.is_dirty():
+            return
+        text = self.current_value()
+        if text == "":
+            self.document.reset(self.field_path)
+        else:
+            self.document.set(self.field_path, text)
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
         event.stop()
         self._notify_changed()
 
@@ -1086,10 +1126,85 @@ class AwsSubnetListField(AwsBackedField):
         self._notify_changed()
 
 
+class OptionalSelectField(AwsBackedField):
+    """An Automatic/Override dropdown for an omittable, deploy-derived setting.
+
+    Automatic omits the field entirely (preserving any downstream inference, for
+    example architecture detection from the instance type); Override persists an
+    explicit choice from a fixed option set. Returning an existing Override to
+    Automatic asks for confirmation before removing the persisted value. There is
+    no AWS discovery: the value comes from a fixed enumeration.
+    """
+
+    def __init__(self, *, options: list[tuple[str, str]], **kwargs: Any) -> None:
+        kwargs.setdefault("optional", True)
+        super().__init__(**kwargs)
+        self._options = options
+
+    def _compose_control(self):
+        yield from self._compose_mode_toggle()
+        with Vertical(id=f"control-{self.slug}", classes="aws-control"):
+            value = self.document.value(self.field_path)
+            current = None if value is None else str(value)
+            yield Select(
+                self._options,
+                value=current if current is not None else Select.BLANK,
+                allow_blank=True,
+                id=f"input-{self.slug}",
+                classes="field-select",
+            )
+
+    def _select_control(self) -> Select:
+        return self.query_one(f"#input-{self.slug}", Select)
+
+    def _raw_control_value(self) -> str:
+        try:
+            value = self._select_control().value
+        except Exception:
+            return ""
+        return "" if value is Select.BLANK else str(value)
+
+    def current_value(self) -> str | None:
+        if self.optional and self._automatic:
+            return None
+        raw = self._raw_control_value()
+        return raw or None
+
+    def _current_key(self) -> Any:
+        if self.optional and self._automatic:
+            return ("auto",)
+        return ("value", self._raw_control_value())
+
+    def commit(self) -> None:
+        if not self.is_dirty():
+            return
+        if self.optional and self._automatic:
+            self.document.reset(self.field_path)
+            return
+        value = self.current_value()
+        if value is None:
+            self.document.reset(self.field_path)
+        else:
+            self.document.set(self.field_path, value)
+
+    def _focus_control(self) -> None:
+        try:
+            self._select_control().focus()
+        except Exception:
+            pass
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != f"input-{self.slug}":
+            return
+        event.stop()
+        self._notify_changed()
+
+
 __all__ = [
     "dom_slug",
     "EditableField",
     "TextField",
+    "TextAreaField",
     "IntegerField",
     "BooleanField",
     "SelectField",
@@ -1098,4 +1213,5 @@ __all__ = [
     "ReadOnlyField",
     "AwsReferenceField",
     "AwsSubnetListField",
+    "OptionalSelectField",
 ]
