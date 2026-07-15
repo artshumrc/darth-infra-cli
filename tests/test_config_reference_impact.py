@@ -17,6 +17,8 @@ from darth_infra.config.reference_impact import (
     ReferenceKind,
     delete_service_with_references,
     external_service_references,
+    rds_removal_references,
+    remove_rds_with_references,
     service_references,
 )
 
@@ -170,3 +172,101 @@ def test_deleted_service_document_still_saves(tmp_path: Path) -> None:
     reloaded = load_config(path)
     assert [s.name for s in reloaded.services] == ["other"]
     assert "web" not in reloaded.rds.expose_to
+
+
+# A project whose RDS database is wired into every removal category at once:
+# exposed services, a persisted RDS-backed secret with a service binding, and a
+# per-environment RDS instance-type override.
+RDS_REFS = """\
+[project]
+name = "demo"
+environments = ["prod", "staging"]
+
+[[services]]
+name = "web"
+port = 8000
+secrets = ["DATABASE_HOST", "DJANGO_SECRET_KEY"]
+
+[[secrets]]
+name = "DATABASE_HOST"
+source = "rds"
+existing_secret_name = "host"
+
+[[secrets]]
+name = "DJANGO_SECRET_KEY"
+source = "generate"
+
+[rds]
+database_name = "appdb"
+expose_to = ["web"]
+engine_version = "15"
+backup_retention_days = 7
+
+[environments.staging]
+instance_type_override = "db.r6g.large"
+"""
+
+
+def test_rds_removal_references_lists_every_category(tmp_path: Path) -> None:
+    doc = ProjectDocument.load(_write(tmp_path, RDS_REFS))
+    kinds = {ref.kind for ref in rds_removal_references(doc.config)}
+    assert ReferenceKind.RDS_EXPOSED_SERVICE in kinds
+    assert ReferenceKind.RDS_SECRET_DECLARATION in kinds
+    assert ReferenceKind.RDS_SECRET_BINDING in kinds
+    assert ReferenceKind.RDS_ENV_INSTANCE_OVERRIDE in kinds
+
+
+def test_rds_removal_references_empty_without_database(tmp_path: Path) -> None:
+    doc = ProjectDocument.load(
+        _write(
+            tmp_path,
+            "[project]\nname = \"demo\"\nenvironments = [\"prod\"]\n",
+        )
+    )
+    assert rds_removal_references(doc.config) == []
+
+
+def test_remove_rds_cleans_up_atomically(tmp_path: Path) -> None:
+    path = _write(tmp_path, RDS_REFS)
+    doc = ProjectDocument.load(path)
+    with doc.transaction():
+        remove_rds_with_references(doc)
+
+    config = doc.config  # must still parse: nothing dangling remains
+    assert config.rds is None
+    # The RDS-backed secret declaration and its service binding are gone; the
+    # unrelated generated secret survives.
+    assert [s.name for s in config.secrets] == ["DJANGO_SECRET_KEY"]
+    assert config.services[0].secrets == ["DJANGO_SECRET_KEY"]
+    # The environment RDS instance-type override is cleared.
+    assert config.environment_overrides["staging"].instance_type_override is None
+
+
+def test_remove_rds_transaction_reverts(tmp_path: Path) -> None:
+    path = _write(tmp_path, RDS_REFS)
+    doc = ProjectDocument.load(path)
+    with doc.transaction() as txn:
+        remove_rds_with_references(doc)
+        assert doc.config.rds is None
+    txn.revert()
+
+    config = doc.config
+    assert config.rds is not None and config.rds.database_name == "appdb"
+    assert "web" in config.rds.expose_to
+    assert "DATABASE_HOST" in [s.name for s in config.secrets]
+    assert "DATABASE_HOST" in config.services[0].secrets
+    assert (
+        config.environment_overrides["staging"].instance_type_override
+        == "db.r6g.large"
+    )
+
+
+def test_removed_rds_document_still_saves(tmp_path: Path) -> None:
+    path = _write(tmp_path, RDS_REFS)
+    doc = ProjectDocument.load(path)
+    with doc.transaction():
+        remove_rds_with_references(doc)
+    doc.save()
+    reloaded = load_config(path)
+    assert reloaded.rds is None
+    assert [s.name for s in reloaded.secrets] == ["DJANGO_SECRET_KEY"]

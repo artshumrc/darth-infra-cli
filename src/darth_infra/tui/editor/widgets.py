@@ -592,6 +592,78 @@ class KeyValueMapField(EditableField):
         self._value_input().value = ""
 
 
+class MultiSelectField(EditableField):
+    """A checklist multi-selector bound to an array-of-strings field.
+
+    The set of choices is supplied by the owning section (for example the current
+    service names for a database's ``expose_to`` list) rather than the schema,
+    because the valid values are other configured resources. Selecting entries
+    persists the chosen list in the order the options were given; selecting none
+    removes the key, restoring omission. An empty option set renders an empty
+    message so a blank control is never mistaken for a broken one.
+    """
+
+    def __init__(
+        self,
+        *,
+        options: list[str],
+        empty_message: str = "No options available.",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._options = list(options)
+        self._empty_message = empty_message
+
+    def _compose_control(self):
+        value = self.document.value(self.field_path)
+        current = {str(item) for item in value} if value else set()
+        yield Static(
+            self._empty_message,
+            id=f"empty-{self.slug}",
+            classes="field-help",
+        )
+        yield SelectionList[str](
+            *[(opt, opt, opt in current) for opt in self._options],
+            id=f"input-{self.slug}",
+            classes="aws-multiselect",
+        )
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        has_options = bool(self._options)
+        self.query_one(f"#empty-{self.slug}", Static).display = not has_options
+        self.query_one(f"#input-{self.slug}", SelectionList).display = has_options
+
+    def _selection(self) -> SelectionList:
+        return self.query_one(f"#input-{self.slug}", SelectionList)
+
+    def current_value(self) -> list[str]:
+        selected = {str(v) for v in self._selection().selected}
+        # Preserve the stable option order rather than selection order.
+        return [opt for opt in self._options if opt in selected]
+
+    def _current_key(self) -> Any:
+        return tuple(self.current_value())
+
+    def commit(self) -> None:
+        if not self.is_dirty():
+            return
+        values = self.current_value()
+        if values:
+            self.document.set(self.field_path, values)
+        else:
+            self.document.reset(self.field_path)
+
+    def on_selection_list_selected_changed(
+        self, event: SelectionList.SelectedChanged
+    ) -> None:
+        if event.selection_list.id != f"input-{self.slug}":
+            return
+        event.stop()
+        self.touched = True
+        self._notify_changed()
+
+
 class ReadOnlyField(Vertical):
     """Display-only CLI-maintained metadata.
 
@@ -1210,6 +1282,7 @@ __all__ = [
     "SelectField",
     "StringListField",
     "KeyValueMapField",
+    "MultiSelectField",
     "ReadOnlyField",
     "AwsReferenceField",
     "AwsSubnetListField",

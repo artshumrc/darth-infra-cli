@@ -35,6 +35,7 @@ from .navigation import (
     nav_button_id,
 )
 from .aws_discovery import AwsDiscovery, OfflineAwsDiscovery
+from .database import DatabaseSection
 from .network import NetworkSection
 from .sections import PlaceholderSection, ProjectSection
 from .services import ServicesSection
@@ -432,6 +433,8 @@ class ConfigEditorApp(App[None]):
             widget = NetworkSection(self._document, self._discovery)
         elif section is Section.SERVICES:
             widget = ServicesSection(self._document)
+        elif section is Section.DATABASE:
+            widget = DatabaseSection(self._document)
         else:
             widget = PlaceholderSection(section)
         self._section_widget = widget
@@ -460,6 +463,13 @@ class ConfigEditorApp(App[None]):
 
     def on_network_section_save_continue_requested(
         self, event: NetworkSection.SaveContinueRequested
+    ) -> None:
+        event.stop()
+        if self._handle_save():
+            self._suggest_next_section()
+
+    def on_database_section_save_continue_requested(
+        self, event: DatabaseSection.SaveContinueRequested
     ) -> None:
         event.stop()
         if self._handle_save():

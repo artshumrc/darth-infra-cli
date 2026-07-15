@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from .models import ProjectConfig
+from .models import ProjectConfig, SecretSource
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import ProjectDocument
@@ -44,6 +44,8 @@ __all__ = [
     "service_references",
     "external_service_references",
     "delete_service_with_references",
+    "rds_removal_references",
+    "remove_rds_with_references",
 ]
 
 
@@ -58,6 +60,11 @@ class ReferenceKind(str, Enum):
     ENV_EC2_OVERRIDE = "env_ec2_override"
     SERVICE_SECRET = "service_secret"
     SERVICE_S3_ACCESS = "service_s3_access"
+    # RDS-removal categories: what removing the singleton database affects.
+    RDS_EXPOSED_SERVICE = "rds_exposed_service"
+    RDS_SECRET_DECLARATION = "rds_secret_declaration"
+    RDS_SECRET_BINDING = "rds_secret_binding"
+    RDS_ENV_INSTANCE_OVERRIDE = "rds_env_instance_override"
 
 
 @dataclass(frozen=True)
@@ -257,3 +264,117 @@ def delete_service_with_references(document: "ProjectDocument", name: str) -> No
     svc_index = _service_index(config, name)
     if svc_index is not None:
         document.remove_record("services", svc_index)
+
+
+def _rds_secret_names(config: ProjectConfig) -> set[str]:
+    """Names of persisted secrets whose source is the RDS database."""
+    return {
+        secret.name
+        for secret in config.secrets
+        if secret.source == SecretSource.RDS
+    }
+
+
+def rds_removal_references(config: ProjectConfig) -> list[ConfigReference]:
+    """Return every configuration item removing the RDS database would affect.
+
+    Removing the singleton database drops the ``[rds]`` table and everything that
+    only made sense while it existed: the derived connection environment
+    variables each exposed service received, any persisted RDS-backed secret
+    declarations and the service bindings to them (managed by existing RDS secret
+    behavior), and per-environment RDS instance-type overrides. Order is stable
+    and grouped by kind. Returns an empty list when no database is configured.
+    """
+    refs: list[ConfigReference] = []
+    rds = getattr(config, "rds", None)
+    if rds is None:
+        return refs
+
+    for index, svc_name in enumerate(rds.expose_to or []):
+        refs.append(
+            ConfigReference(
+                ReferenceKind.RDS_EXPOSED_SERVICE,
+                f"database connection env vars for service '{svc_name}'",
+                f"rds.expose_to[{index}]",
+                owned_by_service=False,
+            )
+        )
+
+    rds_secret_names = _rds_secret_names(config)
+    for index, secret in enumerate(config.secrets):
+        if secret.name in rds_secret_names:
+            refs.append(
+                ConfigReference(
+                    ReferenceKind.RDS_SECRET_DECLARATION,
+                    f"RDS-backed secret declaration '{secret.name}'",
+                    f"secrets[{index}]",
+                    owned_by_service=False,
+                )
+            )
+
+    for svc_index, service in enumerate(config.services):
+        for index, secret_name in enumerate(service.secrets or []):
+            if secret_name in rds_secret_names:
+                refs.append(
+                    ConfigReference(
+                        ReferenceKind.RDS_SECRET_BINDING,
+                        f"secret binding '{secret_name}' on service '{service.name}'",
+                        f"services[{svc_index}].secrets[{index}]",
+                        owned_by_service=False,
+                    )
+                )
+
+    for env, override in config.environment_overrides.items():
+        if override.instance_type_override is not None:
+            refs.append(
+                ConfigReference(
+                    ReferenceKind.RDS_ENV_INSTANCE_OVERRIDE,
+                    f"environment '{env}' RDS instance-type override",
+                    f"environments.{env}.instance_type_override",
+                    owned_by_service=False,
+                )
+            )
+
+    return refs
+
+
+def remove_rds_with_references(document: "ProjectDocument") -> None:
+    """Remove the RDS database and every reference that depended on it.
+
+    Performs one batch of document edits: service bindings to RDS-backed secrets
+    are dropped, per-environment RDS instance-type overrides are removed, the
+    RDS-backed secret declarations are removed, and finally the ``[rds]`` table
+    itself is removed. Non-RDS secrets, services, and environment settings are
+    left intact. Callers should wrap this in :meth:`ProjectDocument.transaction`
+    so the whole removal is atomic and reversible until it is saved.
+    """
+    config = document.config
+    rds_secret_names = _rds_secret_names(config)
+
+    # Service bindings to RDS-backed secrets (arrays of scalar names).
+    if rds_secret_names:
+        for svc_index, service in enumerate(config.services):
+            remaining = [
+                name for name in service.secrets if name not in rds_secret_names
+            ]
+            if len(remaining) != len(service.secrets):
+                if remaining:
+                    document.set(f"services[{svc_index}].secrets", remaining)
+                else:
+                    document.reset(f"services[{svc_index}].secrets")
+
+    # Per-environment RDS instance-type overrides.
+    config = document.config
+    for env, override in config.environment_overrides.items():
+        if override.instance_type_override is not None:
+            document.reset(f"environments.{env}.instance_type_override")
+
+    # RDS-backed secret declarations, removed by descending index so earlier
+    # removals do not shift the indices of not-yet-removed records.
+    config = document.config
+    for index in reversed(range(len(config.secrets))):
+        if config.secrets[index].name in rds_secret_names:
+            document.remove_record("secrets", index)
+
+    # Finally the [rds] table itself.
+    document.reset("rds")
