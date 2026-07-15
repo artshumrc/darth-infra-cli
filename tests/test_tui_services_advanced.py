@@ -18,6 +18,7 @@ from textual.widgets import Button, Checkbox, Input, ListView, Select, TextArea
 from darth_infra.config.document import ProjectDocument
 from darth_infra.config.loader import load_config
 from darth_infra.tui.editor import ConfigEditorApp
+from darth_infra.tui.editor.review import RiskConfirmScreen
 from darth_infra.tui.editor.collection import ImpactConfirmScreen
 from darth_infra.tui.editor.navigation import nav_button_id
 from darth_infra.tui.field_registry import Section
@@ -118,6 +119,18 @@ def _write(tmp_path: Path, text: str) -> Path:
     return path
 
 
+async def _ctrl_s(app, pilot) -> None:
+    """Press Ctrl+S and confirm the risk dialog when a deployment-sensitive
+    change raises one. The save/risk flow is unified across sections in
+    ticket 15, so any save touching managed identity confirms before writing."""
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+    if isinstance(app.screen, RiskConfirmScreen):
+        await pilot.click("#risk-confirm")
+        await pilot.pause()
+    await pilot.pause()
+
+
 def _run(coro) -> None:
     asyncio.run(coro)
 
@@ -144,8 +157,7 @@ def test_architecture_override_and_return_to_automatic(tmp_path: Path) -> None:
             assert control.display is True
             app.query_one("#input-services-0-architecture", Select).value = "arm64"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert load_config(path).services[0].architecture.value == "arm64"
 
             # Returning to Automatic asks for confirmation, then omits the field.
@@ -153,8 +165,7 @@ def test_architecture_override_and_return_to_automatic(tmp_path: Path) -> None:
             await pilot.pause()
             await pilot.click("#confirm-yes")
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             # Omitted: EC2 inference re-detects x86_64 from t3.medium.
             doc = ProjectDocument.load(path)
             assert doc.is_explicit("services[0].architecture") is False
@@ -177,8 +188,7 @@ def test_user_data_path_and_content_round_trip(tmp_path: Path) -> None:
                 "#input-services-0-user-data-script-content", TextArea
             ).text = "#!/bin/bash\necho hi"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
             svc = load_config(path).services[0]
             assert svc.user_data_script == "scripts/boot.sh"
@@ -202,8 +212,7 @@ def test_enable_service_discovery_and_global_namespace(tmp_path: Path) -> None:
                 "#input-service-discovery-namespace-template", Input
             ).value = "{project}-{env}.local"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
             config = load_config(path)
             assert config.services[0].enable_service_discovery is True
@@ -233,8 +242,7 @@ def test_ulimit_add_edit_duplicate_delete(tmp_path: Path) -> None:
                 "#input-services-0-ulimits-0-hard-limit", Input
             ).value = "2048"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
             ulimits = load_config(path).services[0].ulimits
             assert len(ulimits) == 1
@@ -287,8 +295,7 @@ def test_ebs_editor_is_ec2_only_and_round_trips(tmp_path: Path) -> None:
                 "#input-services-0-ebs-volumes-0-mount-path", Input
             ).value = "/data"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
             vols = load_config(path).services[0].ebs_volumes
             assert len(vols) == 1
@@ -313,8 +320,7 @@ def test_no_op_save_preserves_advanced_values(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             await _goto_services(app, pilot)
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -348,8 +354,7 @@ def test_duplicate_copies_nested_but_not_incoming_references(tmp_path: Path) -> 
             await pilot.pause()
             app.query_one("#input-services-1-name", Input).value = "web2"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
             config = load_config(path)
             assert [s.name for s in config.services] == ["web", "web2"]

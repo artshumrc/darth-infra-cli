@@ -20,6 +20,7 @@ from textual.widgets import Button, Collapsible, Input, SelectionList, Static
 from darth_infra.config.document import ProjectDocument
 from darth_infra.config.loader import load_config
 from darth_infra.tui.editor import ConfigEditorApp
+from darth_infra.tui.editor.review import RiskConfirmScreen
 from darth_infra.tui.editor.collection import ConfirmScreen, ImpactConfirmScreen
 from darth_infra.tui.editor.navigation import nav_button_id
 from darth_infra.tui.field_registry import Section
@@ -96,6 +97,18 @@ def _write(tmp_path: Path, text: str) -> Path:
     return path
 
 
+async def _ctrl_s(app, pilot) -> None:
+    """Press Ctrl+S and confirm the risk dialog when a deployment-sensitive
+    change raises one. The save/risk flow is unified across sections in
+    ticket 15, so any save touching managed identity confirms before writing."""
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+    if isinstance(app.screen, RiskConfirmScreen):
+        await pilot.click("#risk-confirm")
+        await pilot.pause()
+    await pilot.pause()
+
+
 def _run(coro) -> None:
     asyncio.run(coro)
 
@@ -140,8 +153,7 @@ def test_enable_shows_fields_and_edits_every_base_field(tmp_path: Path) -> None:
             assert app.query_one("#field-rds-database-name").display is True
 
             # An empty name is invalid, so a save is refused and writes nothing.
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert app.query_one("#error-rds-database-name", Static).display is True
             assert load_config(path).rds is None
 
@@ -154,8 +166,7 @@ def test_enable_shows_fields_and_edits_every_base_field(tmp_path: Path) -> None:
             app.query_one("#input-rds-expose-to", SelectionList).select("web")
             await pilot.pause()
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -182,8 +193,7 @@ def test_instance_type_normalization_is_model_behavior(tmp_path: Path) -> None:
             # A raw class without the required db. prefix normalizes in the model.
             app.query_one("#input-rds-instance-type", Input).value = "t4g.micro"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -217,8 +227,7 @@ def test_noop_save_preserves_engine_version_and_retention(tmp_path: Path) -> Non
         async with app.run_test(size=(120, 40)) as pilot:
             await _goto_database(app, pilot)
             # Save without touching anything.
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -244,8 +253,7 @@ def test_exposure_updates_without_duplicate_bindings(tmp_path: Path) -> None:
             # "web" was already exposed; add "worker" as well.
             app.query_one("#input-rds-expose-to", SelectionList).select("worker")
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -320,8 +328,7 @@ def test_remove_applies_cleanup_atomically_after_confirm(tmp_path: Path) -> None
             await pilot.pause()
             # The section returns to its disabled state.
             assert app.query_one("#rds-enable").display is True
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -352,8 +359,7 @@ def test_remove_without_references_uses_plain_confirm(tmp_path: Path) -> None:
             assert not isinstance(app.screen, ImpactConfirmScreen)
             await pilot.click("#confirm-yes")
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 

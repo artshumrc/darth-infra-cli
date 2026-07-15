@@ -16,6 +16,7 @@ from textual.widgets import Button, Checkbox, Input, ListView, Select, Static
 from darth_infra.config.document import ProjectDocument
 from darth_infra.config.loader import load_config
 from darth_infra.tui.editor import ConfigEditorApp
+from darth_infra.tui.editor.review import RiskConfirmScreen
 from darth_infra.tui.editor.collection import ConfirmScreen, ImpactConfirmScreen
 from darth_infra.tui.editor.navigation import nav_button_id
 from darth_infra.tui.field_registry import Section
@@ -75,6 +76,18 @@ def _write(tmp_path: Path, text: str) -> Path:
     return path
 
 
+async def _ctrl_s(app, pilot) -> None:
+    """Press Ctrl+S and confirm the risk dialog when a deployment-sensitive
+    change raises one. The save/risk flow is unified across sections in
+    ticket 15, so any save touching managed identity confirms before writing."""
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+    if isinstance(app.screen, RiskConfirmScreen):
+        await pilot.click("#risk-confirm")
+        await pilot.pause()
+    await pilot.pause()
+
+
 def _run(coro) -> None:
     asyncio.run(coro)
 
@@ -125,8 +138,7 @@ def test_add_service_creates_draft_requiring_unique_name(tmp_path: Path) -> None
             assert app.query_one("#input-services-1-name", Input).value == ""
 
             # It is invalid until named, so Ctrl+S refuses to save.
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert app.query_one("#error-services-1-name", Static).display is True
             # Nothing was written: the file still holds a single service.
             assert len(load_config(path).services) == 1
@@ -134,8 +146,7 @@ def test_add_service_creates_draft_requiring_unique_name(tmp_path: Path) -> None
             # Naming it uniquely makes the save succeed.
             app.query_one("#input-services-1-name", Input).value = "worker"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert [s.name for s in load_config(path).services] == ["web", "worker"]
 
     _run(scenario())
@@ -179,8 +190,7 @@ def test_select_switches_detail_and_keeps_edits(tmp_path: Path) -> None:
             await _select_row(app, pilot, 0)
             # The earlier edit was committed to the draft, not lost.
             assert app.query_one("#input-services-0-cpu", Input).value == "1024"
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert load_config(path).services[0].cpu == 1024
 
     _run(scenario())
@@ -222,8 +232,7 @@ def test_every_common_field_saves_and_reloads(tmp_path: Path) -> None:
             ).value = True
             await pilot.pause()
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
             svc = load_config(path).services[0]
             assert svc.name == "api"
@@ -265,8 +274,7 @@ def test_launch_type_ec2_saves_instance_type(tmp_path: Path) -> None:
                 "#input-services-0-ec2-instance-type", Input
             ).value = "t3.medium"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
             svc = load_config(path).services[0]
             assert svc.launch_type.value == "ec2"
@@ -287,8 +295,7 @@ def test_desired_count_and_ecs_exec_round_trip(tmp_path: Path) -> None:
             # enable_exec (false) must survive rather than revert to defaults.
             app.query_one("#input-services-0-name", Input).value = "renamed"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
             svc = load_config(path).services[0]
             assert svc.name == "renamed"
@@ -316,15 +323,13 @@ def test_duplicate_copies_fields_but_no_incoming_references(tmp_path: Path) -> N
             assert app.query_one("#input-services-1-name", Input).value == ""
             assert app.query_one("#input-services-1-cpu", Input).value == "512"
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             # Still one service on disk: the invalid duplicate blocked the save.
             assert len(load_config(path).services) == 1
 
             app.query_one("#input-services-1-name", Input).value = "web2"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
             config = load_config(path)
             assert [s.name for s in config.services] == ["web", "web2"]
@@ -383,8 +388,7 @@ def test_referenced_service_delete_cascades(tmp_path: Path) -> None:
             # the draft still saves with no dangling reference.
             section = app._section_widget
             assert section.item_count() == 1
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             config = load_config(path)
             assert [s.name for s in config.services] == ["web"]
             assert config.alb.path_rules == []
@@ -412,8 +416,7 @@ def test_unreferenced_service_delete_after_confirmation(tmp_path: Path) -> None:
 
             section = app._section_widget
             assert section.item_count() == 1
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert [s.name for s in load_config(path).services] == ["web"]
 
     _run(scenario())
@@ -437,8 +440,7 @@ def test_environment_variables_are_visible_and_persist(tmp_path: Path) -> None:
             rows = [_rendered(s) for s in list_view.query(Static)]
             assert any("LOG_LEVEL = info" in row for row in rows)
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert load_config(path).services[0].environment_variables == {
                 "LOG_LEVEL": "info"
             }

@@ -84,3 +84,32 @@ Success means all tests pass and `git diff --check` emits no output.
 - Ticket 03: `03-document-diff-merge-reversion.md`
 - Ticket 04: `04-editor-shell-project.md`
 - Ticket 14: `14-review-topology-risk.md`
+
+## Implementation notes
+
+- Save is unified across every section in `ConfigEditorApp` (`_initiate_save`):
+  field errors surface adjacent to their controls, the complete model is
+  validated, external disk changes are reconciled by three-way merge, and one
+  risk confirmation covers all deployment-sensitive changes before the write.
+  The plain no-dialog case still writes synchronously.
+- Behavior change consequence: a deployment-sensitive edit (managed RDS, managed
+  bucket, ALB mode, environment identity, service identity, network identity)
+  now requires the one risk confirmation before write **from any section**, not
+  only from Review. ~25 pre-existing section tests (tickets 05–13) that saved
+  such fields directly were updated to confirm through the dialog via a small
+  per-file `_ctrl_s` helper.
+- Conflict resolution extends the ticket-03 document module additively: an
+  optional `resolutions` argument on `three_way_merge` / `merge_with_disk` folds
+  a per-field disk/draft choice into an adoptable merge. No existing ticket-03
+  decision or signature was changed.
+- First-time creation is implemented in the app (`mode="create"`): Ctrl+S from a
+  non-Review section routes to Review, and only Review's confirmed save scaffolds
+  via the existing `generate_project`. CLI wiring of a create entry point remains
+  ticket 16.
+- Scope boundary observed (not fixed here): section widgets read the effective
+  `config` while (re)rendering, so re-mounting a *model-invalid* draft can raise.
+  The unified save therefore navigates to the first responsible control only
+  when it is in a different section and never re-renders the current one (the
+  common realistic case, where the adjacent field errors already show). Making
+  every section render an arbitrary invalid draft is owned by the individual
+  section tickets (05–13), not this one.

@@ -569,7 +569,9 @@ class ProjectDocument:
 
     # -- three-way merge ---------------------------------------------------
 
-    def merge_with_disk(self) -> MergeResult:
+    def merge_with_disk(
+        self, resolutions: dict[str, str] | None = None
+    ) -> MergeResult:
         """Merge the baseline, the current disk document, and the draft.
 
         Compares all three at semantic field paths. Disjoint changes merge
@@ -577,9 +579,17 @@ class ProjectDocument:
         comments. Fields changed incompatibly on both sides are returned as
         conflicts. This never mutates the draft; call :meth:`adopt_merge` to
         take a clean result.
+
+        ``resolutions`` maps a conflicting field path (as reported by a previous
+        merge's :class:`MergeConflict`) to ``"disk"`` or ``"draft"``, choosing
+        which side wins that field. Supplying resolutions for every reported
+        conflict produces a clean, adoptable result; the draft is still never
+        mutated.
         """
         disk_text = self._path.read_text()
-        return three_way_merge(self._baseline_text, disk_text, self.to_toml())
+        return three_way_merge(
+            self._baseline_text, disk_text, self.to_toml(), resolutions=resolutions
+        )
 
     def adopt_merge(self, result: MergeResult) -> None:
         """Adopt a clean, validated merge as the current draft and baseline.
@@ -870,7 +880,10 @@ def diff_documents(baseline_text: str, draft_text: str) -> list[SemanticChange]:
 
 
 def three_way_merge(
-    baseline_text: str, disk_text: str, draft_text: str
+    baseline_text: str,
+    disk_text: str,
+    draft_text: str,
+    resolutions: dict[str, str] | None = None,
 ) -> MergeResult:
     """Reconcile a common ``baseline`` with independent ``disk`` and ``draft`` edits.
 
@@ -882,7 +895,13 @@ def three_way_merge(
     disk document so the external edits' formatting is preserved, with the
     draft's changes spliced in to preserve theirs. The merged document is
     revalidated before it is offered for saving.
+
+    ``resolutions`` maps a conflicting field path to ``"disk"`` or ``"draft"``.
+    A resolved conflict is folded into the merge — ``"draft"`` applies the
+    draft's value onto the disk-based document, ``"disk"`` keeps the disk value —
+    instead of being reported. Conflicts left unresolved are still reported.
     """
+    resolutions = resolutions or {}
     disk_doc = tomlkit.parse(disk_text)
     draft_doc = tomlkit.parse(draft_text)
     base = _flatten(tomlkit.parse(baseline_text).unwrap())
@@ -903,7 +922,13 @@ def three_way_merge(
         elif _eq(r, b):
             continue
         else:
-            conflicts.append(MergeConflict(path, b, d, r))
+            choice = resolutions.get(path)
+            if choice == "draft":
+                draft_wins[path] = r
+            elif choice == "disk":
+                continue
+            else:
+                conflicts.append(MergeConflict(path, b, d, r))
 
     if conflicts:
         conflicts.sort(key=lambda c: c.path)

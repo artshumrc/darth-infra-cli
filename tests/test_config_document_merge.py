@@ -445,3 +445,26 @@ def test_three_way_merge_is_pure_and_text_based() -> None:
     assert result.ok
     assert 'aws_region = "eu-west-1"' in result.merged_text
     assert "cpu = 512" in result.merged_text
+
+
+def test_resolutions_fold_a_conflict_into_a_clean_merge(config_path: Path) -> None:
+    # A true same-field conflict, resolved per the caller's per-path choice.
+    disk = BASE.replace("cpu = 256", "cpu = 999")
+
+    for choice, expected in (("draft", 512), ("disk", 999)):
+        config_path.write_text(BASE)
+        doc = ProjectDocument.load(config_path)
+        doc.set("services[0].cpu", 512)
+        config_path.write_text(disk)
+
+        conflicted = doc.merge_with_disk()
+        assert conflicted.conflicts and conflicted.merged_text is None
+
+        resolved = doc.merge_with_disk(
+            resolutions={"services[name=web].cpu": choice}
+        )
+        assert resolved.ok, resolved.conflicts
+        # Resolution never mutates the draft until it is adopted.
+        assert doc.value("services[0].cpu") == 512
+        doc.adopt_merge(resolved)
+        assert doc.value("services[0].cpu") == expected

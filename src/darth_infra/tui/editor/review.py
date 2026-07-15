@@ -93,6 +93,65 @@ class ReviewProblem:
     path: str | None = None
 
 
+def safe_topology(document: Any) -> Topology:
+    """Derive the draft's declared-relationship topology, or an empty one."""
+    try:
+        return derive_topology(document)
+    except Exception:  # pragma: no cover - defensive
+        return Topology()
+
+
+def attribute_error(error: str) -> "ReviewProblem":
+    """Attribute a model error to the section/control most likely responsible."""
+    lowered = error.lower()
+    table = (
+        ("environments", Section.ENVIRONMENTS, "project.environments"),
+        ("prod", Section.ENVIRONMENTS, "project.environments"),
+        ("rds", Section.DATABASE, None),
+        ("database", Section.DATABASE, None),
+        ("secret", Section.SECRETS, None),
+        ("bucket", Section.STORAGE, None),
+        ("s3", Section.STORAGE, None),
+        ("cloudfront", Section.ROUTING, None),
+        ("alb", Section.ROUTING, None),
+        ("listener", Section.ROUTING, None),
+        ("service", Section.SERVICES, None),
+        ("region", Section.PROJECT, "project.aws_region"),
+        ("vpc", Section.NETWORK, "project.vpc_name"),
+        ("subnet", Section.NETWORK, "project.private_subnet_ids"),
+    )
+    for keyword, section, path in table:
+        if keyword in lowered:
+            return ReviewProblem(error, section=section.value, path=path)
+    return ReviewProblem(error, section=None, path=None)
+
+
+def complete_validation_problems(document: Any) -> list["ReviewProblem"]:
+    """Complete-model validation problems for a draft, each pointing at a control.
+
+    Dangling references (which also fail model validation) are reported with the
+    precise owning control derived from the topology; any remaining model error
+    is reported as a section-level problem attributed by keyword. Shared by the
+    Review section and the shell's unified save so every save path validates the
+    complete configuration and navigates to the first responsible control.
+    """
+    problems: list[ReviewProblem] = []
+    topology = safe_topology(document)
+    for edge in topology.dangling_edges:
+        problems.append(
+            ReviewProblem(
+                f"{edge.source} → {edge.target}: '{edge.target}' is not a "
+                "declared resource.",
+                section=edge.owner_section,
+                path=edge.owner_path,
+            )
+        )
+    result = document.validate()
+    if not result.ok and result.error and not problems:
+        problems.append(attribute_error(result.error))
+    return problems
+
+
 def _section_for_semantic_path(path: str) -> Section:
     """Map a semantic diff path to the canonical editor section that owns it."""
     if path.startswith("project.environments"):
@@ -257,21 +316,7 @@ class ReviewSection(VerticalScroll):
         the precise owning control from the topology; any remaining model error
         is reported as a section-level problem attributed by keyword.
         """
-        problems: list[ReviewProblem] = []
-        topology = self._safe_topology()
-        for edge in topology.dangling_edges:
-            problems.append(
-                ReviewProblem(
-                    f"{edge.source} → {edge.target}: '{edge.target}' is not a "
-                    "declared resource.",
-                    section=edge.owner_section,
-                    path=edge.owner_path,
-                )
-            )
-        result = self.document.validate()
-        if not result.ok and result.error and not problems:
-            problems.append(self._attribute_error(result.error))
-        return problems
+        return complete_validation_problems(self.document)
 
     # -- rendering ---------------------------------------------------------
 
@@ -463,34 +508,7 @@ class ReviewSection(VerticalScroll):
     # -- helpers -----------------------------------------------------------
 
     def _safe_topology(self) -> Topology:
-        try:
-            return derive_topology(self.document)
-        except Exception:  # pragma: no cover - defensive
-            return Topology()
-
-    @staticmethod
-    def _attribute_error(error: str) -> ReviewProblem:
-        lowered = error.lower()
-        table = (
-            ("environments", Section.ENVIRONMENTS, "project.environments"),
-            ("prod", Section.ENVIRONMENTS, "project.environments"),
-            ("rds", Section.DATABASE, None),
-            ("database", Section.DATABASE, None),
-            ("secret", Section.SECRETS, None),
-            ("bucket", Section.STORAGE, None),
-            ("s3", Section.STORAGE, None),
-            ("cloudfront", Section.ROUTING, None),
-            ("alb", Section.ROUTING, None),
-            ("listener", Section.ROUTING, None),
-            ("service", Section.SERVICES, None),
-            ("region", Section.PROJECT, "project.aws_region"),
-            ("vpc", Section.NETWORK, "project.vpc_name"),
-            ("subnet", Section.NETWORK, "project.private_subnet_ids"),
-        )
-        for keyword, section, path in table:
-            if keyword in lowered:
-                return ReviewProblem(error, section=section.value, path=path)
-        return ReviewProblem(error, section=None, path=None)
+        return safe_topology(self.document)
 
     # -- events ------------------------------------------------------------
 
@@ -506,4 +524,11 @@ class ReviewSection(VerticalScroll):
             self.post_message(self.NavigateToControlRequested(section, path))
 
 
-__all__ = ["ReviewSection", "RiskConfirmScreen", "ReviewProblem"]
+__all__ = [
+    "ReviewSection",
+    "RiskConfirmScreen",
+    "ReviewProblem",
+    "complete_validation_problems",
+    "attribute_error",
+    "safe_topology",
+]

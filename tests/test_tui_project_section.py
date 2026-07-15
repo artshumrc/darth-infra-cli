@@ -17,6 +17,7 @@ from darth_infra.config.document import ProjectDocument
 from darth_infra.config.loader import load_config
 from darth_infra.tui.editor import ConfigEditorApp
 from darth_infra.tui.editor.app import FieldHelpScreen
+from darth_infra.tui.editor.review import RiskConfirmScreen
 
 HAND_FORMATTED = """\
 #:schema ./darth-infra.schema.json
@@ -104,6 +105,13 @@ def test_edit_region_and_environments_through_visible_controls(
             app.query_one("#input-project-environments", Input).value = "prod, dev"
             await pilot.pause()
             await pilot.press("ctrl+s")
+            await pilot.pause()
+
+            # Region and environment identity are deployment-sensitive, so the
+            # unified save asks for one confirmation before writing (ticket 15).
+            assert isinstance(app.screen, RiskConfirmScreen)
+            await pilot.click("#risk-confirm")
+            await pilot.pause()
             await pilot.pause()
 
             reloaded = load_config(path)

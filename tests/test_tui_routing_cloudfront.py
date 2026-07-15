@@ -26,6 +26,7 @@ from textual.widgets import Button, Checkbox, Collapsible, Input, Select, Static
 from darth_infra.config.document import ProjectDocument
 from darth_infra.config.loader import load_config
 from darth_infra.tui.editor import ConfigEditorApp
+from darth_infra.tui.editor.review import RiskConfirmScreen
 from darth_infra.tui.editor.aws_discovery import (
     DiscoveryKind,
     DiscoveryResult,
@@ -113,6 +114,18 @@ def _write(tmp_path: Path, text: str) -> Path:
     path = tmp_path / "darth-infra.toml"
     path.write_text(text)
     return path
+
+
+async def _ctrl_s(app, pilot) -> None:
+    """Press Ctrl+S and confirm the risk dialog when a deployment-sensitive
+    change raises one. The save/risk flow is unified across sections in
+    ticket 15, so any save touching managed identity confirms before writing."""
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+    if isinstance(app.screen, RiskConfirmScreen):
+        await pilot.click("#risk-confirm")
+        await pilot.pause()
+    await pilot.pause()
 
 
 def _run(coro) -> None:
@@ -217,8 +230,7 @@ def test_existing_cloudfront_survives_noop_save_unchanged(tmp_path: Path) -> Non
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 40)) as pilot:
             await _goto_routing(app, pilot)
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -261,8 +273,7 @@ def test_enable_and_edit_scalar_fields_round_trip(tmp_path: Path) -> None:
             await pilot.pause()
 
             await _add_valid_behavior(app, pilot)
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -300,8 +311,7 @@ def test_certificate_manual_entry_offline(tmp_path: Path) -> None:
             await pilot.pause()
 
             await _add_valid_behavior(app, pilot)
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -388,8 +398,7 @@ def test_connection_add_edit_duplicate_delete(tmp_path: Path) -> None:
             ).value = "CDN_ALT_URL"
             await pilot.pause()
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -421,8 +430,7 @@ def test_connection_service_cascade_on_service_delete(tmp_path: Path) -> None:
             await pilot.click("#impact-confirm")
             await pilot.pause()
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -476,8 +484,7 @@ def test_cached_behavior_round_trips_every_field(tmp_path: Path) -> None:
             ).value = True
             await pilot.pause()
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -550,8 +557,7 @@ def test_switching_mode_away_from_allowlist_confirms_removal(tmp_path: Path) -> 
                 is False
             )
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -615,8 +621,7 @@ def test_invalid_ttl_order_prevents_save(tmp_path: Path) -> None:
             app.query_one(f"#input-{_cf('default-ttl-seconds')}", Input).value = "10"
             await pilot.pause()
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             # The behavior row is marked invalid and nothing is written.
             assert app.query_one("#section-error", Static).display is True
             assert load_config(path).cloudfront.enabled is False
@@ -650,8 +655,7 @@ def test_duplicate_behavior_name_prevents_save(tmp_path: Path) -> None:
             ).value = "/b/*"
             await pilot.pause()
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert load_config(path).cloudfront.enabled is False
 
     _run(scenario())
@@ -674,8 +678,7 @@ def test_custom_domain_without_certificate_prevents_save(tmp_path: Path) -> None
             await pilot.pause()
             await _add_valid_behavior(app, pilot)
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert app.query_one("#error-cloudfront-custom-domain", Static).display is True
             assert load_config(path).cloudfront.enabled is False
 
@@ -703,8 +706,7 @@ port = 8000
             app.query_one("#input-cloudfront-enabled", Checkbox).value = True
             await pilot.pause()
             await _add_valid_behavior(app, pilot)
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert app.query_one("#error-alb-domain", Static).display is True
             assert load_config(path).cloudfront.enabled is False
 

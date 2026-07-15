@@ -23,6 +23,7 @@ from textual.widgets import Button, Checkbox, Input, ListView, Select, Static
 from darth_infra.config.document import ProjectDocument
 from darth_infra.config.loader import load_config
 from darth_infra.tui.editor import ConfigEditorApp
+from darth_infra.tui.editor.review import RiskConfirmScreen
 from darth_infra.tui.editor.collection import ConfirmScreen, ImpactConfirmScreen
 from darth_infra.tui.editor.navigation import nav_button_id
 from darth_infra.tui.field_registry import Section
@@ -118,6 +119,18 @@ def _write(tmp_path: Path, text: str) -> Path:
     return path
 
 
+async def _ctrl_s(app, pilot) -> None:
+    """Press Ctrl+S and confirm the risk dialog when a deployment-sensitive
+    change raises one. The save/risk flow is unified across sections in
+    ticket 15, so any save touching managed identity confirms before writing."""
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+    if isinstance(app.screen, RiskConfirmScreen):
+        await pilot.click("#risk-confirm")
+        await pilot.pause()
+    await pilot.pause()
+
+
 def _run(coro) -> None:
     asyncio.run(coro)
 
@@ -158,15 +171,13 @@ def test_add_search_edit_and_save_bucket(tmp_path: Path) -> None:
             await pilot.pause()
             assert section.item_count() == 1
             # A new unnamed bucket is invalid: Ctrl+S refuses and writes nothing.
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert app.query_one("#error-s3-buckets-0-name", Static).display is True
             assert load_config(path).s3_buckets == []
 
             app.query_one("#input-s3-buckets-0-name", Input).value = "media"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -218,14 +229,12 @@ def test_duplicate_copies_fields_but_requires_unique_name(tmp_path: Path) -> Non
             )
 
             # Invalid (unnamed) duplicate blocks the save.
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
             assert len(load_config(path).s3_buckets) == 1
 
             app.query_one("#input-s3-buckets-1-name", Input).value = "media2"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -276,8 +285,7 @@ def test_every_bucket_and_connection_field_saves_and_reloads(tmp_path: Path) -> 
             ).value = True
             await pilot.pause()
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -333,8 +341,7 @@ def test_noop_save_preserves_mode_specific_values(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 40)) as pilot:
             await _goto_storage(app, pilot)
             # Save without touching anything.
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -400,8 +407,7 @@ def test_mode_change_confirm_clears_incompatible_value(tmp_path: Path) -> None:
                 app.query_one("#field-s3-buckets-0-existing-bucket-name").display
                 is False
             )
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -434,8 +440,7 @@ def test_bucket_delete_lists_impact_and_cleans_up_atomically(tmp_path: Path) -> 
             await pilot.pause()
             section = app._section_widget
             assert section.item_count() == 0
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -489,8 +494,7 @@ def test_service_delete_impact_includes_bucket_connection(tmp_path: Path) -> Non
             await pilot.click("#impact-confirm")
             await pilot.pause()
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -524,8 +528,7 @@ def test_public_read_shows_warning_and_still_saves(tmp_path: Path) -> None:
             assert "Deployment-sensitive" in _rendered(warning)
 
             # It is not blocked: the configuration still saves.
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 

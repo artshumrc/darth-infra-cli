@@ -19,6 +19,7 @@ from textual.widgets import Button, Collapsible, Input, Select, Static
 from darth_infra.config.document import ProjectDocument
 from darth_infra.config.loader import load_config
 from darth_infra.tui.editor import ConfigEditorApp
+from darth_infra.tui.editor.review import RiskConfirmScreen
 from darth_infra.tui.editor.aws_discovery import (
     DiscoveryKind,
     DiscoveryResult,
@@ -77,6 +78,18 @@ def _write(tmp_path: Path, text: str) -> Path:
     return path
 
 
+async def _ctrl_s(app, pilot) -> None:
+    """Press Ctrl+S and confirm the risk dialog when a deployment-sensitive
+    change raises one. The save/risk flow is unified across sections in
+    ticket 15, so any save touching managed identity confirms before writing."""
+    await pilot.press("ctrl+s")
+    await pilot.pause()
+    if isinstance(app.screen, RiskConfirmScreen):
+        await pilot.click("#risk-confirm")
+        await pilot.pause()
+    await pilot.pause()
+
+
 def _run(coro) -> None:
     asyncio.run(coro)
 
@@ -107,8 +120,7 @@ def test_shared_project_round_trips_without_mode_conversion(tmp_path: Path) -> N
             await _goto_network(app, pilot)
             app.query_one("#input-project-vpc-name", Input).value = "renamed-vpc"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -130,8 +142,7 @@ def test_dedicated_project_round_trips_without_field_loss(tmp_path: Path) -> Non
             # it or drop the dedicated settings.
             app.query_one("#input-project-vpc-name", Input).value = "prod-vpc-2"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -178,8 +189,7 @@ def test_offline_adapter_still_saves(tmp_path: Path) -> None:
             await _goto_network(app, pilot)
             app.query_one("#input-project-vpc-name", Input).value = "offline-vpc"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -260,8 +270,7 @@ def test_discovery_failure_state_and_save_still_works(tmp_path: Path) -> None:
             # A failed lookup does not block a locally valid save.
             app.query_one("#input-project-vpc-name", Input).value = "typed-vpc"
             await pilot.pause()
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -414,8 +423,7 @@ def test_return_to_automatic_requires_confirmation_and_removes_key(
             await pilot.pause()
             assert app._document.is_explicit("project.vpc_id") is False
 
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
@@ -479,8 +487,7 @@ def test_failed_verification_is_visible_and_does_not_block_save(
             assert "failed" in _rendered(status).lower()
 
             # A failed check does not block a locally valid save.
-            await pilot.press("ctrl+s")
-            await pilot.pause()
+            await _ctrl_s(app, pilot)
 
     _run(scenario())
 
