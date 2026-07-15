@@ -87,9 +87,9 @@ def test_navigation_is_non_linear_and_marks_unavailable_sections(
             await pilot.pause()
             # Jump straight to a late destination without visiting the ones
             # before it: navigation is not a linear wizard.
-            await pilot.click(f"#{nav_button_id(Section.SECRETS)}")
+            await pilot.click(f"#{nav_button_id(Section.REVIEW)}")
             await pilot.pause()
-            assert app.current_section is Section.SECRETS
+            assert app.current_section is Section.REVIEW
             message = app.query_one(".placeholder-message", Static)
             assert "not available yet" in str(message.render())
 
@@ -112,6 +112,8 @@ def test_project_and_services_are_implemented() -> None:
         Section.SERVICES,
         Section.ROUTING,
         Section.DATABASE,
+        Section.STORAGE,
+        Section.SECRETS,
     } <= IMPLEMENTED_SECTIONS
     # All nine destinations are represented.
     assert len(SECTION_ORDER) == 9

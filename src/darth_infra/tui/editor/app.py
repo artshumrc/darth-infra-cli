@@ -40,6 +40,7 @@ from .environments import EnvironmentsSection
 from .network import NetworkSection
 from .routing import RoutingSection
 from .sections import PlaceholderSection, ProjectSection
+from .secrets import SecretsSection
 from .services import ServicesSection
 from .storage import StorageSection
 from .theme import CONTROL_ROOM_THEME, THEME_NAME
@@ -464,6 +465,8 @@ class ConfigEditorApp(App[None]):
             widget = DatabaseSection(self._document)
         elif section is Section.STORAGE:
             widget = StorageSection(self._document)
+        elif section is Section.SECRETS:
+            widget = SecretsSection(self._document, self._discovery)
         elif section is Section.ENVIRONMENTS:
             widget = EnvironmentsSection(self._document)
         else:

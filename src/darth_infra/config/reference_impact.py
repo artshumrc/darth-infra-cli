@@ -48,6 +48,8 @@ __all__ = [
     "remove_rds_with_references",
     "bucket_removal_references",
     "remove_bucket_with_references",
+    "secret_removal_references",
+    "remove_secret_with_references",
 ]
 
 
@@ -70,6 +72,8 @@ class ReferenceKind(str, Enum):
     # Bucket-removal categories: what removing an S3 bucket affects.
     BUCKET_CONNECTION = "bucket_connection"
     BUCKET_S3_ACCESS_GRANT = "bucket_s3_access_grant"
+    # Secret-removal category: what removing a secret declaration affects.
+    SECRET_SERVICE_BINDING = "secret_service_binding"
 
 
 @dataclass(frozen=True)
@@ -460,3 +464,68 @@ def remove_bucket_with_references(document: "ProjectDocument", name: str) -> Non
     b_index = _bucket_index(config, name)
     if b_index is not None:
         document.remove_record("s3_buckets", b_index)
+
+
+def _secret_index(config: ProjectConfig, name: str) -> int | None:
+    for index, secret in enumerate(config.secrets):
+        if secret.name == name:
+            return index
+    return None
+
+
+def secret_removal_references(
+    config: ProjectConfig, name: str
+) -> list[ConfigReference]:
+    """Return every configuration item removing the secret ``name`` affects.
+
+    Removing a secret declaration drops its ``[[secrets]]`` table and every
+    external reference that named it: the ``secrets`` bindings on services that
+    injected it (external references that would otherwise dangle). The secret's
+    value is never read; only the declaration's name is used. Order is stable and
+    grouped by kind. Returns an empty list when no such secret is configured.
+    """
+    refs: list[ConfigReference] = []
+    if _secret_index(config, name) is None:
+        return refs
+
+    for svc_index, service in enumerate(config.services):
+        for b_index, secret_name in enumerate(service.secrets or []):
+            if secret_name == name:
+                refs.append(
+                    ConfigReference(
+                        ReferenceKind.SECRET_SERVICE_BINDING,
+                        f"secret binding on service '{service.name}'",
+                        f"services[{svc_index}].secrets[{b_index}]",
+                        owned_by_service=False,
+                    )
+                )
+
+    return refs
+
+
+def remove_secret_with_references(document: "ProjectDocument", name: str) -> None:
+    """Remove the secret declaration ``name`` and every binding that named it.
+
+    Performs one batch of document edits: the ``secrets`` binding is dropped from
+    every service that injected it (removing the key when a service's list becomes
+    empty), and finally the ``[[secrets]]`` record itself is removed. Other
+    secrets, services, and bindings are left intact. Callers should wrap this in
+    :meth:`ProjectDocument.transaction` so the whole removal is atomic and
+    reversible until it is saved. The secret's value is never read.
+    """
+    config = document.config
+
+    # Service secret bindings naming the secret (arrays of scalar secret names).
+    for svc_index, service in enumerate(config.services):
+        remaining = [s for s in (service.secrets or []) if s != name]
+        if len(remaining) != len(service.secrets or []):
+            if remaining:
+                document.set(f"services[{svc_index}].secrets", remaining)
+            else:
+                document.reset(f"services[{svc_index}].secrets")
+
+    # Finally the secret record itself.
+    config = document.config
+    s_index = _secret_index(config, name)
+    if s_index is not None:
+        document.remove_record("secrets", s_index)

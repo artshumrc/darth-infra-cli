@@ -65,6 +65,7 @@ class DiscoveryKind(str, Enum):
     LISTENER = "listener"
     SECURITY_GROUP = "security_group"
     CERTIFICATE = "certificate"
+    SECRET = "secret"
 
 
 @dataclass(frozen=True)
@@ -299,6 +300,8 @@ class BotoAwsDiscovery:
             return self._discover_security_groups(request)
         if kind == DiscoveryKind.CERTIFICATE:
             return self._discover_certificates()
+        if kind == DiscoveryKind.SECRET:
+            return self._discover_secrets()
         return DiscoveryResult()  # pragma: no cover - defensive
 
     def _discover_vpcs(self, kind: DiscoveryKind) -> DiscoveryResult:
@@ -464,6 +467,33 @@ class BotoAwsDiscovery:
                 records.append(
                     ResourceRecord(value=arn, label=f"{domain} ({arn})")
                 )
+        return DiscoveryResult.of(records)
+
+    def _discover_secrets(self) -> DiscoveryResult:
+        # Lists existing Secrets Manager secrets so an existing-secret reference
+        # can be *selected* by name/ARN. Only identifiers and metadata are read:
+        # ``list_secrets`` never returns and this never requests a secret value.
+        sm = self._client("secretsmanager")
+        records: list[ResourceRecord] = []
+        paginator = sm.get_paginator("list_secrets")
+        for page in paginator.paginate():
+            for secret in page.get("SecretList", []):
+                name = str(secret.get("Name", ""))
+                if not name:
+                    continue
+                arn = str(secret.get("ARN", ""))
+                description = secret.get("Description", "")
+                detail = arn or "no ARN"
+                if description:
+                    detail = f"{detail}, {description}"
+                records.append(
+                    ResourceRecord(
+                        value=name,
+                        label=f"{name} ({detail})",
+                        context={"arn": arn},
+                    )
+                )
+        records.sort(key=lambda r: r.label)
         return DiscoveryResult.of(records)
 
     # -- verification ------------------------------------------------------

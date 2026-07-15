@@ -253,6 +253,51 @@ def test_boto_turns_client_errors_into_typed_failures() -> None:
     assert "no creds" in result.failure.message
 
 
+class _FakeSecretsManager:
+    """A fake Secrets Manager client that refuses to expose secret values.
+
+    ``get_secret_value`` raises, so any test using it proves that discovery lists
+    identifiers/metadata only and never retrieves a value.
+    """
+
+    def get_paginator(self, name):
+        assert name == "list_secrets"
+        return _FakePaginator(
+            [
+                {
+                    "SecretList": [
+                        {
+                            "Name": "prod/api-key",
+                            "ARN": "arn:aws:secretsmanager:us-east-1:1:secret:prod/api-key",
+                            "Description": "API key",
+                        },
+                        {"Name": "prod/db", "ARN": "arn:secret:db"},
+                        {"ARN": "arn:secret:no-name"},  # skipped: no name
+                    ]
+                }
+            ]
+        )
+
+    def get_secret_value(self, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("discovery must never retrieve a secret value")
+
+
+def test_boto_lists_secrets_by_name_and_never_reads_values() -> None:
+    sm = _FakeSecretsManager()
+    boto = BotoAwsDiscovery(
+        "us-east-1", client_factory=lambda service: {"secretsmanager": sm}[service]
+    )
+
+    result = boto.discover(DiscoveryRequest(DiscoveryKind.SECRET))
+
+    assert result.ok
+    # Only named secrets become records; values are never present.
+    assert [r.value for r in result.records] == ["prod/api-key", "prod/db"]
+    assert result.records[0].context["arn"].endswith("prod/api-key")
+    # The record carries a name/ARN label only — no secret value anywhere.
+    assert all("value" not in r.context for r in result.records)
+
+
 def test_boto_verifies_vpc_and_load_balancer() -> None:
     ok = _boto().verify(DiscoveryRequest(DiscoveryKind.VPC_NAME), "prod")
     assert ok.status is VerificationStatus.VERIFIED
