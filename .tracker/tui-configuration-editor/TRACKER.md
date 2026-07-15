@@ -9,9 +9,9 @@ complete, document-preserving Guided editor for project configuration.
 
 Overall status: `In Progress`
 
-Current ticket: 09
+Current ticket: None
 
-Last updated: 2026-07-14 (ticket 09 in progress)
+Last updated: 2026-07-14 (ticket 09 completed)
 
 ## Ledger
 
@@ -25,7 +25,7 @@ Last updated: 2026-07-14 (ticket 09 in progress)
 | 06 | `06-core-services-editor.md` | Completed | 04 |
 | 07 | `07-advanced-services-references.md` | Completed | 05, 06 |
 | 08 | `08-alb-routing.md` | Completed | 05, 07 |
-| 09 | `09-cloudfront-routing.md` | In Progress | 05, 07, 08 |
+| 09 | `09-cloudfront-routing.md` | Completed | 05, 07, 08 |
 | 10 | `10-database-editor.md` | Completed | 04, 07 |
 | 11 | `11-storage-editor.md` | Completed | 04, 07 |
 | 12 | `12-secrets-editor.md` | Not Started | 05, 07 |

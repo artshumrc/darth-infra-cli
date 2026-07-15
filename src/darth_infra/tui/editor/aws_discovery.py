@@ -64,6 +64,7 @@ class DiscoveryKind(str, Enum):
     LOAD_BALANCER = "load_balancer"
     LISTENER = "listener"
     SECURITY_GROUP = "security_group"
+    CERTIFICATE = "certificate"
 
 
 @dataclass(frozen=True)
@@ -296,6 +297,8 @@ class BotoAwsDiscovery:
             return self._discover_listeners(request)
         if kind == DiscoveryKind.SECURITY_GROUP:
             return self._discover_security_groups(request)
+        if kind == DiscoveryKind.CERTIFICATE:
+            return self._discover_certificates()
         return DiscoveryResult()  # pragma: no cover - defensive
 
     def _discover_vpcs(self, kind: DiscoveryKind) -> DiscoveryResult:
@@ -440,6 +443,26 @@ class BotoAwsDiscovery:
                         value=str(sg),
                         label=f"{sg} (from {lb.get('LoadBalancerName', '?')})",
                     )
+                )
+        return DiscoveryResult.of(records)
+
+    def _discover_certificates(self) -> DiscoveryResult:
+        # CloudFront certificates must live in us-east-1. Discovery is a
+        # convenience only, so it lists issued ACM certificates and leaves the
+        # region contract to deploy-time; manual ARN entry always remains.
+        acm = self._client("acm")
+        records: list[ResourceRecord] = []
+        paginator = acm.get_paginator("list_certificates")
+        for page in paginator.paginate(
+            CertificateStatuses=["ISSUED"]
+        ):
+            for cert in page.get("CertificateSummaryList", []):
+                arn = str(cert.get("CertificateArn", ""))
+                if not arn:
+                    continue
+                domain = cert.get("DomainName", "?")
+                records.append(
+                    ResourceRecord(value=arn, label=f"{domain} ({arn})")
                 )
         return DiscoveryResult.of(records)
 

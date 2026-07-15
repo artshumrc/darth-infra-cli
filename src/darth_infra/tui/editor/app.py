@@ -369,6 +369,9 @@ class ConfigEditorApp(App[None]):
         height: auto;
         color: $text-muted;
     }
+    .cloudfront-panel {
+        height: auto;
+    }
     """
 
     # Required bindings only. Bare n / p / q are deliberately absent: printable
@@ -441,7 +444,7 @@ class ConfigEditorApp(App[None]):
         elif section is Section.SERVICES:
             widget = ServicesSection(self._document)
         elif section is Section.ROUTING:
-            widget = RoutingSection(self._document)
+            widget = RoutingSection(self._document, self._discovery)
         elif section is Section.DATABASE:
             widget = DatabaseSection(self._document)
         elif section is Section.STORAGE:

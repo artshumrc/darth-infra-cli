@@ -67,6 +67,10 @@ def dom_slug(field_path: str) -> str:
     return re.sub(r"[^0-9A-Za-z]+", "-", field_path).strip("-")
 
 
+# Sentinel distinguishing "no fallback supplied" from a real fallback of ``None``.
+_NO_FALLBACK = object()
+
+
 class EditableField(Vertical):
     """Base wrapper for one editable setting.
 
@@ -99,6 +103,7 @@ class EditableField(Vertical):
         constraints: str = "",
         example: str | None = None,
         required: bool = False,
+        fallback: Any = _NO_FALLBACK,
     ) -> None:
         self.slug = dom_slug(field_path)
         super().__init__(id=f"field-{self.slug}", classes="editable-field")
@@ -110,6 +115,11 @@ class EditableField(Vertical):
         self.constraints = constraints
         self.example = example
         self.required = required
+        # Effective default used to render this control when the draft cannot be
+        # modeled (a sibling record is mid-edit) and the key is absent, so a
+        # collection editor opened on a temporarily invalid draft still shows the
+        # same default the model would apply once the draft parses again.
+        self._fallback = fallback
         self.touched = False
         self.error: str | None = None
         # Sentinel until on_mount captures the loaded value; keeps every field
@@ -157,10 +167,14 @@ class EditableField(Vertical):
         try:
             return self.document.value(self.field_path)
         except Exception:
-            try:
-                return self.document.raw_value(self.field_path)
-            except Exception:
-                return None
+            pass
+        try:
+            raw = self.document.raw_value(self.field_path)
+        except Exception:
+            raw = None
+        if raw is None and self._fallback is not _NO_FALLBACK:
+            return self._fallback
+        return raw
 
     def _current_key(self) -> Any:
         """A comparable snapshot of the control's current value.
@@ -286,7 +300,7 @@ class IntegerField(EditableField):
     """A single-line control bound to an integer (or nullable integer) field."""
 
     def _compose_control(self):
-        value = self.document.value(self.field_path)
+        value = self._loaded_value()
         yield Input(
             value="" if value is None else str(value),
             id=f"input-{self.slug}",
@@ -383,7 +397,7 @@ class BooleanField(EditableField):
     """A checkbox bound to a boolean field."""
 
     def _compose_control(self):
-        value = bool(self.document.value(self.field_path))
+        value = bool(self._loaded_value())
         yield Checkbox(
             self.label,
             value=value,
@@ -418,7 +432,7 @@ class SelectField(EditableField):
         self._options = options
 
     def _compose_control(self):
-        value = self.document.value(self.field_path)
+        value = self._loaded_value()
         current = None if value is None else str(value)
         yield Select(
             self._options,
@@ -458,7 +472,7 @@ class StringListField(EditableField):
     """A comma-separated list of strings bound to an array field."""
 
     def _compose_control(self):
-        value = self.document.value(self.field_path)
+        value = self._loaded_value()
         text = ", ".join(str(item) for item in value) if value else ""
         yield Input(
             value=text,

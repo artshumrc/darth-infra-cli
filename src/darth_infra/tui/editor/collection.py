@@ -493,6 +493,7 @@ class NestedCollectionEditor(Vertical):
         record_invalid: Callable[[dict[str, Any], int, list[dict[str, Any]]], bool],
         new_record: Callable[[], dict[str, Any]],
         empty_message: str,
+        build_detail: Callable[[str, int], Any] | None = None,
     ) -> None:
         from .widgets import dom_slug
 
@@ -503,6 +504,11 @@ class NestedCollectionEditor(Vertical):
         self.noun = noun
         self._title = title
         self._build_fields = build_fields
+        # When supplied, a record's editor is this custom widget instead of a
+        # plain field list. It owns any per-record conditional presentation (for
+        # example CloudFront allowlists that appear only in allowlist mode) while
+        # the collection keeps the generic list/add/duplicate/delete mechanics.
+        self._build_detail = build_detail
         self._record_label = record_label
         self._record_invalid = record_invalid
         self._new_record = new_record
@@ -594,11 +600,14 @@ class NestedCollectionEditor(Vertical):
         if index is None or not (0 <= index < self._count()):
             self._update_status()
             return
-        detail = Vertical(
-            *self._build_fields(self._base_path(index)),
-            id=f"nestedform-{self._cslug}-{index}",
-            classes="nested-form",
-        )
+        if self._build_detail is not None:
+            detail = self._build_detail(self._base_path(index), index)
+        else:
+            detail = Vertical(
+                *self._build_fields(self._base_path(index)),
+                id=f"nestedform-{self._cslug}-{index}",
+                classes="nested-form",
+            )
         self._detail = detail
         await host.mount(detail)
         self._refresh_list()
