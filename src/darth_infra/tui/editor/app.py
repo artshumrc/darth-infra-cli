@@ -40,6 +40,7 @@ from .network import NetworkSection
 from .routing import RoutingSection
 from .sections import PlaceholderSection, ProjectSection
 from .services import ServicesSection
+from .storage import StorageSection
 from .theme import CONTROL_ROOM_THEME, THEME_NAME
 from .widgets import EditableField
 
@@ -213,6 +214,11 @@ class ConfigEditorApp(App[None]):
     .field-error {
         display: none;
         color: $error;
+        height: auto;
+    }
+    .field-warning {
+        display: none;
+        color: $warning;
         height: auto;
     }
     .readonly-value {
@@ -438,6 +444,8 @@ class ConfigEditorApp(App[None]):
             widget = RoutingSection(self._document)
         elif section is Section.DATABASE:
             widget = DatabaseSection(self._document)
+        elif section is Section.STORAGE:
+            widget = StorageSection(self._document)
         else:
             widget = PlaceholderSection(section)
         self._section_widget = widget

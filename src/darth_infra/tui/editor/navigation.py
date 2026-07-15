@@ -49,6 +49,7 @@ IMPLEMENTED_SECTIONS: frozenset[Section] = frozenset(
         Section.SERVICES,
         Section.ROUTING,
         Section.DATABASE,
+        Section.STORAGE,
     }
 )
 

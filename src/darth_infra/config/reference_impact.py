@@ -46,6 +46,8 @@ __all__ = [
     "delete_service_with_references",
     "rds_removal_references",
     "remove_rds_with_references",
+    "bucket_removal_references",
+    "remove_bucket_with_references",
 ]
 
 
@@ -65,6 +67,9 @@ class ReferenceKind(str, Enum):
     RDS_SECRET_DECLARATION = "rds_secret_declaration"
     RDS_SECRET_BINDING = "rds_secret_binding"
     RDS_ENV_INSTANCE_OVERRIDE = "rds_env_instance_override"
+    # Bucket-removal categories: what removing an S3 bucket affects.
+    BUCKET_CONNECTION = "bucket_connection"
+    BUCKET_S3_ACCESS_GRANT = "bucket_s3_access_grant"
 
 
 @dataclass(frozen=True)
@@ -378,3 +383,80 @@ def remove_rds_with_references(document: "ProjectDocument") -> None:
 
     # Finally the [rds] table itself.
     document.reset("rds")
+
+
+def _bucket_index(config: ProjectConfig, name: str) -> int | None:
+    for index, bucket in enumerate(config.s3_buckets):
+        if bucket.name == name:
+            return index
+    return None
+
+
+def bucket_removal_references(
+    config: ProjectConfig, name: str
+) -> list[ConfigReference]:
+    """Return every configuration item removing the S3 bucket ``name`` affects.
+
+    Removing a bucket drops its ``[[s3_buckets]]`` table and everything that only
+    made sense while it existed: the bucket's own service connections (removed
+    with the bucket record) and any ``s3_access`` grants on services that named
+    it (external references that would otherwise dangle). Order is stable and
+    grouped by kind. Returns an empty list when no such bucket is configured.
+    """
+    refs: list[ConfigReference] = []
+    b_index = _bucket_index(config, name)
+    if b_index is None:
+        return refs
+
+    bucket = config.s3_buckets[b_index]
+    for c_index, conn in enumerate(bucket.connections or []):
+        refs.append(
+            ConfigReference(
+                ReferenceKind.BUCKET_CONNECTION,
+                f"bucket connection '{conn.env_key}' for service '{conn.service}'",
+                f"s3_buckets[{b_index}].connections[{c_index}]",
+                owned_by_service=False,
+            )
+        )
+
+    for svc_index, service in enumerate(config.services):
+        for a_index, bucket_name in enumerate(service.s3_access or []):
+            if bucket_name == name:
+                refs.append(
+                    ConfigReference(
+                        ReferenceKind.BUCKET_S3_ACCESS_GRANT,
+                        f"S3 access grant on service '{service.name}'",
+                        f"services[{svc_index}].s3_access[{a_index}]",
+                        owned_by_service=False,
+                    )
+                )
+
+    return refs
+
+
+def remove_bucket_with_references(document: "ProjectDocument", name: str) -> None:
+    """Remove the S3 bucket ``name`` and every reference that depended on it.
+
+    Performs one batch of document edits: ``s3_access`` grants naming the bucket
+    are dropped from every service (removing the key when a service's list becomes
+    empty), and finally the ``[[s3_buckets]]`` record itself is removed (its own
+    service connections go with it). Other buckets, services, and grants are left
+    intact. Callers should wrap this in :meth:`ProjectDocument.transaction` so the
+    whole removal is atomic and reversible until it is saved.
+    """
+    config = document.config
+
+    # Service s3_access grants naming the bucket (arrays of scalar bucket names).
+    for svc_index, service in enumerate(config.services):
+        remaining = [b for b in (service.s3_access or []) if b != name]
+        if len(remaining) != len(service.s3_access or []):
+            if remaining:
+                document.set(f"services[{svc_index}].s3_access", remaining)
+            else:
+                document.reset(f"services[{svc_index}].s3_access")
+
+    # Finally the bucket record itself (its own connections go with it).
+    config = document.config
+    b_index = _bucket_index(config, name)
+    if b_index is not None:
+        document.remove_record("s3_buckets", b_index)
