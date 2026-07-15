@@ -11,6 +11,7 @@ from darth_infra.cli.cfn import (
     _resolve_rds_snapshot,
 )
 from darth_infra.cli.helpers import resolve_environment_config
+from darth_infra.config.document import ProjectDocument
 from darth_infra.config.loader import dump_config, load_config
 from darth_infra.config.models import (
     ActivePreviewEnvironment,
@@ -28,8 +29,6 @@ from darth_infra.config.models import (
     ServiceConfig,
 )
 from darth_infra.scaffold.builders import build_project_templates
-from darth_infra.tui.screens.review import build_config_from_state
-from darth_infra.tui.wizard_export import project_config_to_wizard_state
 
 
 def _config() -> ProjectConfig:
@@ -365,9 +364,19 @@ def test_listener_priority_resolution_rejects_configured_duplicates() -> None:
         )
 
 
-def test_tui_roundtrips_preview_config() -> None:
-    state = project_config_to_wizard_state(_config())
-    rebuilt = build_config_from_state(state)
+def test_preview_config_roundtrips_through_document(tmp_path: Path) -> None:
+    """Preview config survives a document-preserving load/save round-trip.
+
+    This replaces the old wizard-state round-trip: the Guided editor preserves
+    the TOML document rather than reconstructing config from mutable state, so
+    an unedited save must reproduce the same effective preview configuration.
+    """
+    path = tmp_path / "darth-infra.toml"
+    path.write_text(dump_config(_config()))
+
+    document = ProjectDocument.load(path)
+    document.save()
+    rebuilt = load_config(path)
 
     assert rebuilt.preview_environments.enabled is True
     assert rebuilt.preview_environments.domain_template == "pr-{number}.bta.darthcrimson.org"

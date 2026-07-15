@@ -7,11 +7,11 @@ complete, document-preserving Guided editor for project configuration.
 
 ## Current Status
 
-Overall status: `In Progress`
+Overall status: `Completed`
 
 Current ticket: None
 
-Last updated: 2026-07-15 (ticket 15 completed)
+Last updated: 2026-07-15 (ticket 16 completed — atomic cutover)
 
 ## Ledger
 
@@ -32,4 +32,4 @@ Last updated: 2026-07-15 (ticket 15 completed)
 | 13 | `13-environments-preview-editor.md` | Completed | 07, 10 |
 | 14 | `14-review-topology-risk.md` | Completed | 03, 08, 09, 10, 11, 12, 13 |
 | 15 | `15-session-safety-workflows.md` | Completed | 03, 04, 14 |
-| 16 | `16-atomic-cutover.md` | Not Started | 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15 |
+| 16 | `16-atomic-cutover.md` | Completed | 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15 |

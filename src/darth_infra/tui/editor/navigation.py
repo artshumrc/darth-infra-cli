@@ -5,10 +5,7 @@ Routing, Database, Storage, Secrets, Environments, and Review. Navigation is
 *non-linear* — any destination can be selected directly — so this module only
 defines the destinations and their display labels, not an ordering constraint.
 
-Only some destinations are functional in a given slice. Ticket 04 implements
-Project; the remainder are reachable but render an "unavailable" placeholder so
-the navigation interface is complete and will not need replacement as later
-slices fill in the other sections.
+All nine destinations are functional editors.
 """
 
 from __future__ import annotations
@@ -40,8 +37,9 @@ SECTION_LABELS: dict[Section, str] = {
     Section.REVIEW: "Review",
 }
 
-# Sections with a functional editor. Everything else renders a placeholder; the
-# set grows in later tickets without changing this interface.
+# Sections with a functional editor. At cutover this is every canonical
+# destination; the set is retained so navigation can still distinguish an
+# available editor from an unavailable one if that distinction ever returns.
 IMPLEMENTED_SECTIONS: frozenset[Section] = frozenset(
     {
         Section.PROJECT,

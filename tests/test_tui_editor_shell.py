@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from textual.widgets import Button, Collapsible, Input, Static
 
 from darth_infra.config.document import ProjectDocument
@@ -101,20 +102,10 @@ def test_navigation_is_non_linear(tmp_path: Path) -> None:
     _run(scenario())
 
 
-def test_project_and_services_are_implemented() -> None:
-    # Project (ticket 04), Network (ticket 05), Services (ticket 06), Routing
-    # (ticket 08), and Database (ticket 10) have functional editors; the rest
-    # remain reachable placeholders until their own slices.
-    assert {
-        Section.PROJECT,
-        Section.NETWORK,
-        Section.SERVICES,
-        Section.ROUTING,
-        Section.DATABASE,
-        Section.STORAGE,
-        Section.SECRETS,
-    } <= IMPLEMENTED_SECTIONS
-    # All nine destinations are represented.
+def test_all_nine_sections_are_implemented() -> None:
+    # At cutover every canonical destination is a functional editor; none is a
+    # placeholder.
+    assert set(SECTION_ORDER) == IMPLEMENTED_SECTIONS
     assert len(SECTION_ORDER) == 9
 
 
@@ -183,13 +174,25 @@ def test_responsive_minimum_size_message(tmp_path: Path) -> None:
     _run(scenario((79, 23), True))
 
 
-def test_legacy_cli_still_launches_legacy_app() -> None:
-    # The atomic cutover (ticket 16) has not happened: the legacy wizard app and
-    # its CLI wiring remain in place and importable.
-    from darth_infra.tui.app import DarthEcsInitApp
-    from darth_infra.cli import init_cmd as init_module
+def test_legacy_tui_is_fully_removed() -> None:
+    # The atomic cutover (ticket 16) is complete: the legacy wizard app, its
+    # mutable-state bridge, the old step rail, and the old screens are gone.
+    import importlib
 
-    assert DarthEcsInitApp is not None
-    source = Path(init_module.__file__).read_text()
-    assert "DarthEcsInitApp" in source
-    assert "ConfigEditorApp" not in source
+    for module in (
+        "darth_infra.tui.app",
+        "darth_infra.tui.wizard_export",
+        "darth_infra.tui.steps",
+        "darth_infra.tui.step_rail",
+        "darth_infra.tui.screens.review",
+        "darth_infra.tui.screens.alb",
+    ):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module)
+
+    # Both CLI commands now route through the single Guided editor architecture.
+    from darth_infra.cli import init_cmd as init_module
+    from darth_infra.cli import tui_cmd as tui_module
+
+    assert "ConfigEditorApp" in Path(init_module.__file__).read_text()
+    assert "ConfigEditorApp" in Path(tui_module.__file__).read_text()
