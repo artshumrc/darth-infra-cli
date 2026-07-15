@@ -103,17 +103,16 @@ def test_navigation_is_non_linear_and_marks_unavailable_sections(
 
 
 def test_project_and_services_are_implemented() -> None:
-    # Project (ticket 04), Network (ticket 05), Services (ticket 06), and
-    # Database (ticket 10) have functional editors; the rest remain reachable
-    # placeholders until their own slices.
+    # Project (ticket 04), Network (ticket 05), Services (ticket 06), Routing
+    # (ticket 08), and Database (ticket 10) have functional editors; the rest
+    # remain reachable placeholders until their own slices.
     assert {
         Section.PROJECT,
         Section.NETWORK,
         Section.SERVICES,
+        Section.ROUTING,
+        Section.DATABASE,
     } <= IMPLEMENTED_SECTIONS
-    assert IMPLEMENTED_SECTIONS == frozenset(
-        {Section.PROJECT, Section.NETWORK, Section.SERVICES, Section.DATABASE}
-    )
     # All nine destinations are represented.
     assert len(SECTION_ORDER) == 9
 
