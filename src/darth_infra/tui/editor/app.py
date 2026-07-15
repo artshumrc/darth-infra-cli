@@ -38,6 +38,7 @@ from .aws_discovery import AwsDiscovery, OfflineAwsDiscovery
 from .database import DatabaseSection
 from .environments import EnvironmentsSection
 from .network import NetworkSection
+from .review import ReviewSection, RiskConfirmScreen
 from .routing import RoutingSection
 from .sections import PlaceholderSection, ProjectSection
 from .secrets import SecretsSection
@@ -388,6 +389,54 @@ class ConfigEditorApp(App[None]):
     .cloudfront-panel {
         height: auto;
     }
+    #review-problems, #review-risks {
+        height: auto;
+        margin-bottom: 1;
+    }
+    .review-alert-error {
+        color: $error;
+        height: auto;
+    }
+    .review-alert-warning {
+        color: $warning;
+        height: auto;
+    }
+    .risk-item {
+        color: $warning;
+        height: auto;
+    }
+    .review-problem, .topology-dangling {
+        width: auto;
+        height: auto;
+        border: none;
+        color: $error;
+    }
+    #review-tabs {
+        height: 1fr;
+    }
+    #review-changes, #review-toml, #review-topology {
+        height: 100%;
+        width: 100%;
+    }
+    .review-change, .topology-node {
+        height: auto;
+    }
+    .review-toml {
+        height: auto;
+    }
+    .topology-edge {
+        height: auto;
+        color: $text-muted;
+    }
+    .topology-group {
+        height: auto;
+    }
+    #risk-body, #review-save {
+        height: auto;
+    }
+    #review-save {
+        margin-top: 1;
+    }
     """
 
     # Required bindings only. Bare n / p / q are deliberately absent: printable
@@ -469,6 +518,8 @@ class ConfigEditorApp(App[None]):
             widget = SecretsSection(self._document, self._discovery)
         elif section is Section.ENVIRONMENTS:
             widget = EnvironmentsSection(self._document)
+        elif section is Section.REVIEW:
+            widget = ReviewSection(self._document)
         else:
             widget = PlaceholderSection(section)
         self._section_widget = widget
@@ -529,6 +580,20 @@ class ConfigEditorApp(App[None]):
         if self._handle_save():
             self._suggest_next_section()
 
+    def on_review_section_save_requested(
+        self, event: ReviewSection.SaveRequested
+    ) -> None:
+        event.stop()
+        self.run_worker(self._review_save(), exclusive=True)
+
+    def on_review_section_navigate_to_control_requested(
+        self, event: ReviewSection.NavigateToControlRequested
+    ) -> None:
+        event.stop()
+        self.run_worker(
+            self._navigate_to_control(event.section, event.path), exclusive=True
+        )
+
     # -- responsive --------------------------------------------------------
 
     def on_resize(self, event: events.Resize) -> None:
@@ -542,6 +607,12 @@ class ConfigEditorApp(App[None]):
     # -- actions -----------------------------------------------------------
 
     def action_save(self) -> None:
+        # Review owns a risk-confirmed, complete-model save flow; every other
+        # section uses the direct field-validated save. Full save orchestration
+        # from any section is unified in ticket 15.
+        if isinstance(self._section_widget, ReviewSection):
+            self.run_worker(self._review_save(), exclusive=True)
+            return
         self._handle_save()
 
     def _handle_save(self) -> bool:
@@ -565,6 +636,15 @@ class ConfigEditorApp(App[None]):
             )
             return False
 
+        if not self._write_save():
+            return False
+
+        if hasattr(section, "after_save"):
+            section.after_save()
+        return True
+
+    def _write_save(self) -> bool:
+        """Write the draft to disk, reporting conflict/validation failures."""
         try:
             self._document.save()
         except DocumentConflictError:
@@ -577,13 +657,71 @@ class ConfigEditorApp(App[None]):
         except DocumentValidationError as exc:
             self.notify(f"Cannot save: {exc.error}", severity="error")
             return False
-
-        if hasattr(section, "after_save"):
-            section.after_save()
         self.notify(
             f"Saved {self._document.path.name}.", severity="information"
         )
         return True
+
+    async def _review_save(self) -> None:
+        """Complete-model, risk-confirmed save initiated from the Review section.
+
+        Validation problems are reported and navigate to the first responsible
+        control. Otherwise, a single confirmation covers every current
+        deployment-sensitive change before the document is written.
+        """
+        review = self._section_widget
+        if not isinstance(review, ReviewSection):
+            return
+
+        problems = review.validation_problems()
+        if problems:
+            self.notify(
+                f"Fix {len(problems)} validation problem(s) before saving.",
+                severity="error",
+            )
+            first = problems[0]
+            if first.section is not None:
+                await self._navigate_to_control(first.section, first.path)
+            return
+
+        risks = review.deployment_sensitive_changes()
+        if risks:
+            confirmed = await self.push_screen_wait(RiskConfirmScreen(risks))
+            if not confirmed:
+                self.notify("Save cancelled.", severity="warning")
+                return
+
+        if self._write_save():
+            review.refresh_views()
+
+    async def _navigate_to_control(
+        self, section_value: str, path: str | None
+    ) -> None:
+        """Open the owning section and, where practical, focus its control."""
+        try:
+            section = Section(section_value)
+        except ValueError:
+            return
+        await self._show_section(section)
+        if path:
+            self._focus_field(path)
+
+    def _focus_field(self, path: str) -> None:
+        from .widgets import dom_slug
+
+        slug = dom_slug(path)
+        try:
+            field = self.query_one(f"#field-{slug}")
+        except Exception:
+            return
+        inputs = field.query(Input)
+        if inputs:
+            inputs.first().focus()
+        else:
+            try:
+                field.focus()
+            except Exception:
+                pass
 
     def _suggest_next_section(self) -> None:
         index = SECTION_ORDER.index(self.current_section)

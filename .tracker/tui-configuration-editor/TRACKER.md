@@ -11,7 +11,7 @@ Overall status: `In Progress`
 
 Current ticket: None
 
-Last updated: 2026-07-14 (ticket 12 completed)
+Last updated: 2026-07-14 (ticket 14 completed)
 
 ## Ledger
 
@@ -30,6 +30,6 @@ Last updated: 2026-07-14 (ticket 12 completed)
 | 11 | `11-storage-editor.md` | Completed | 04, 07 |
 | 12 | `12-secrets-editor.md` | Completed | 05, 07 |
 | 13 | `13-environments-preview-editor.md` | Completed | 07, 10 |
-| 14 | `14-review-topology-risk.md` | Not Started | 03, 08, 09, 10, 11, 12, 13 |
+| 14 | `14-review-topology-risk.md` | Completed | 03, 08, 09, 10, 11, 12, 13 |
 | 15 | `15-session-safety-workflows.md` | Not Started | 03, 04, 14 |
 | 16 | `16-atomic-cutover.md` | Not Started | 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15 |

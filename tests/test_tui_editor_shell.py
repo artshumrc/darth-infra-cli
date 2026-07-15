@@ -76,22 +76,21 @@ def test_pilot_launches_shell_with_existing_document(tmp_path: Path) -> None:
     _run(scenario())
 
 
-def test_navigation_is_non_linear_and_marks_unavailable_sections(
-    tmp_path: Path,
-) -> None:
+def test_navigation_is_non_linear(tmp_path: Path) -> None:
     path = _write_config(tmp_path)
 
     async def scenario() -> None:
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            # Jump straight to a late destination without visiting the ones
-            # before it: navigation is not a linear wizard.
+            # Jump straight to the last destination without visiting the ones
+            # before it: navigation is not a linear wizard. Every section is now
+            # implemented, so Review shows its real content, not a placeholder.
             await pilot.click(f"#{nav_button_id(Section.REVIEW)}")
             await pilot.pause()
             assert app.current_section is Section.REVIEW
-            message = app.query_one(".placeholder-message", Static)
-            assert "not available yet" in str(message.render())
+            assert app.query_one("#review-tabs")
+            assert not app.query(".placeholder-message")
 
             # And back to Project directly.
             await pilot.click(f"#{nav_button_id(Section.PROJECT)}")

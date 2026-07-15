@@ -52,6 +52,7 @@ IMPLEMENTED_SECTIONS: frozenset[Section] = frozenset(
         Section.STORAGE,
         Section.SECRETS,
         Section.ENVIRONMENTS,
+        Section.REVIEW,
     }
 )
 
