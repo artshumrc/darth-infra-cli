@@ -51,6 +51,7 @@ from .collection import (
     NestedCollectionEditor,
 )
 from .widgets import (
+    SELECT_BLANK,
     BooleanField,
     EditableField,
     ServiceSelectField,
@@ -687,7 +688,7 @@ class _ModeSelectField(EditableField):
         current = None if value is None else str(value)
         yield Select(
             self._options,
-            value=current if current is not None else Select.BLANK,
+            value=current if current is not None else SELECT_BLANK,
             allow_blank=False,
             id=f"input-{self.slug}",
             classes="field-select",
@@ -699,10 +700,8 @@ class _ModeSelectField(EditableField):
         return self.query_one(f"#input-{self.slug}", Select)
 
     def current_value(self) -> str | None:
-        from textual.widgets import Select
-
         value = self._select().value
-        if value is Select.BLANK:
+        if value is SELECT_BLANK:
             return None
         return str(value)
 

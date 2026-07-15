@@ -59,6 +59,14 @@ from .theme import (
 )
 
 
+# Textual renamed the Select "no selection" sentinel from ``BLANK`` to ``NULL``
+# in the 8.x line (and ``Select.BLANK`` now resolves to the boolean ``False``,
+# which the widget rejects as an illegal value). Resolve the sentinel that the
+# installed Textual actually understands so the editor works across our
+# supported range (``textual>=1.0``).
+SELECT_BLANK = Select.NULL if hasattr(Select, "NULL") else Select.BLANK
+
+
 def dom_slug(field_path: str) -> str:
     """Return a stable DOM-id-safe slug for a concrete field path.
 
@@ -436,7 +444,7 @@ class SelectField(EditableField):
         current = None if value is None else str(value)
         yield Select(
             self._options,
-            value=current if current is not None else Select.BLANK,
+            value=current if current is not None else SELECT_BLANK,
             allow_blank=True,
             id=f"input-{self.slug}",
             classes="field-select",
@@ -447,7 +455,7 @@ class SelectField(EditableField):
 
     def current_value(self) -> str | None:
         value = self._select().value
-        if value is Select.BLANK:
+        if value is SELECT_BLANK:
             return None
         return str(value)
 
@@ -602,19 +610,19 @@ class KeyValueMapField(EditableField):
         if self._key_options is not None:
             select = self.query_one(f"#kvkey-{self.slug}", Select)
             value = select.value
-            return "" if value is Select.BLANK else str(value)
+            return "" if value is SELECT_BLANK else str(value)
         return self.query_one(f"#kvkey-{self.slug}", Input).value.strip()
 
     def _set_key(self, key: str) -> None:
         if self._key_options is not None:
             select = self.query_one(f"#kvkey-{self.slug}", Select)
-            select.value = key if key in self._key_options else Select.BLANK
+            select.value = key if key in self._key_options else SELECT_BLANK
         else:
             self.query_one(f"#kvkey-{self.slug}", Input).value = key
 
     def _clear_key(self) -> None:
         if self._key_options is not None:
-            self.query_one(f"#kvkey-{self.slug}", Select).value = Select.BLANK
+            self.query_one(f"#kvkey-{self.slug}", Select).value = SELECT_BLANK
         else:
             self.query_one(f"#kvkey-{self.slug}", Input).value = ""
 
@@ -1000,7 +1008,7 @@ class AwsBackedField(EditableField):
             return
         event.stop()
         value = event.value
-        if value is None or value is Select.BLANK:
+        if value is None or value is SELECT_BLANK:
             return
         self._on_record_selected(str(value))
 
@@ -1304,7 +1312,7 @@ class OptionalSelectField(AwsBackedField):
             current = None if value is None else str(value)
             yield Select(
                 self._options,
-                value=current if current is not None else Select.BLANK,
+                value=current if current is not None else SELECT_BLANK,
                 allow_blank=True,
                 id=f"input-{self.slug}",
                 classes="field-select",
@@ -1318,7 +1326,7 @@ class OptionalSelectField(AwsBackedField):
             value = self._select_control().value
         except Exception:
             return ""
-        return "" if value is Select.BLANK else str(value)
+        return "" if value is SELECT_BLANK else str(value)
 
     def current_value(self) -> str | None:
         if self.optional and self._automatic:
@@ -1474,7 +1482,7 @@ class ServiceSelectField(EditableField):
         current = None if value in (None, "") else str(value)
         yield Select(
             [(name, name) for name in self._option_names()],
-            value=current if current is not None else Select.BLANK,
+            value=current if current is not None else SELECT_BLANK,
             allow_blank=True,
             id=f"input-{self.slug}",
             classes="field-select",
@@ -1485,7 +1493,7 @@ class ServiceSelectField(EditableField):
 
     def current_value(self) -> str | None:
         value = self._select().value
-        if value is Select.BLANK:
+        if value is SELECT_BLANK:
             return None
         return str(value)
 
