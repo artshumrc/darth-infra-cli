@@ -256,6 +256,12 @@ class ProjectSection(VerticalScroll):
             banner.update("")
             banner.display = False
 
+    def after_save(self) -> None:
+        """Refresh badges after a successful save so explicit state is current."""
+        for field in self._editable_fields():
+            field.mark_committed()
+            field.refresh_badge()
+
     def validate_all(self) -> list[EditableField]:
         """Validate for a save attempt.
 

@@ -34,7 +34,10 @@ from .navigation import (
     SECTION_ORDER,
     nav_button_id,
 )
+from .aws_discovery import AwsDiscovery, OfflineAwsDiscovery
+from .network import NetworkSection
 from .sections import PlaceholderSection, ProjectSection
+from .services import ServicesSection
 from .theme import CONTROL_ROOM_THEME, THEME_NAME
 from .widgets import EditableField
 
@@ -153,6 +156,51 @@ class ConfigEditorApp(App[None]):
     .badge-default, .badge-readonly {
         color: $text-muted;
     }
+    .badge-automatic {
+        color: $accent;
+    }
+    .aws-control {
+        height: auto;
+    }
+    .mode-row, .aws-actions {
+        height: auto;
+    }
+    .aws-select {
+        width: 100%;
+    }
+    .aws-multiselect {
+        height: auto;
+        max-height: 6;
+        border: round $panel;
+    }
+    .aws-status {
+        height: auto;
+        color: $text-muted;
+    }
+    .aws-status.status-loading {
+        color: $accent;
+    }
+    .aws-status.status-results {
+        color: $success;
+    }
+    .aws-status.status-empty {
+        color: $warning;
+    }
+    .aws-status.status-failure {
+        color: $error;
+    }
+    .verify-status {
+        width: auto;
+    }
+    .verify-status.verify-verified {
+        color: $success;
+    }
+    .verify-status.verify-failed {
+        color: $error;
+    }
+    .verify-status.verify-none {
+        color: $text-muted;
+    }
     .field-input {
         margin: 0;
     }
@@ -190,6 +238,62 @@ class ConfigEditorApp(App[None]):
         background: $surface;
         padding: 1 2;
     }
+    #md-toolbar {
+        height: auto;
+        width: 100%;
+    }
+    .md-search {
+        width: 1fr;
+        margin: 0 1 0 0;
+    }
+    #md-toolbar Button {
+        margin: 0 0 0 1;
+    }
+    #md-legend {
+        height: auto;
+        margin-bottom: 1;
+    }
+    #md-body {
+        height: 1fr;
+        width: 100%;
+    }
+    .md-list {
+        width: 32;
+        min-width: 20;
+        height: 100%;
+        border-right: solid $panel;
+    }
+    .md-detail {
+        width: 1fr;
+        height: 100%;
+        padding: 0 1;
+        overflow-y: auto;
+    }
+    .md-status {
+        height: auto;
+        color: $text-muted;
+    }
+    .md-empty {
+        color: $text-muted;
+    }
+    #confirm-dialog {
+        width: 60;
+        max-width: 90%;
+        height: auto;
+        border: round $error;
+        background: $surface;
+        padding: 1 2;
+    }
+    #confirm-buttons {
+        height: auto;
+        margin-top: 1;
+    }
+    #confirm-buttons Button {
+        margin: 0 1 0 0;
+    }
+    .detail-form {
+        height: auto;
+    }
     """
 
     # Required bindings only. Bare n / p / q are deliberately absent: printable
@@ -201,10 +305,20 @@ class ConfigEditorApp(App[None]):
         Binding("escape", "close_overlay", "Back", show=True),
     ]
 
-    def __init__(self, *, document: ProjectDocument, mode: str = "existing") -> None:
+    def __init__(
+        self,
+        *,
+        document: ProjectDocument,
+        mode: str = "existing",
+        discovery: AwsDiscovery | None = None,
+    ) -> None:
         super().__init__()
         self._document = document
         self._mode = mode
+        # AWS discovery/verification is injected. It defaults to an offline
+        # adapter so the editor is fully usable — and saveable — without any AWS
+        # credentials; production and tests supply a real or fake adapter.
+        self._discovery: AwsDiscovery = discovery or OfflineAwsDiscovery()
         self.current_section: Section = Section.PROJECT
         self._section_widget: Any = None
 
@@ -245,8 +359,12 @@ class ConfigEditorApp(App[None]):
         self.current_section = section
         host = self.query_one("#content-host", Container)
         await host.remove_children()
-        if section in IMPLEMENTED_SECTIONS:
+        if section is Section.PROJECT:
             widget: Any = ProjectSection(self._document)
+        elif section is Section.NETWORK:
+            widget = NetworkSection(self._document, self._discovery)
+        elif section is Section.SERVICES:
+            widget = ServicesSection(self._document)
         else:
             widget = PlaceholderSection(section)
         self._section_widget = widget
@@ -273,6 +391,13 @@ class ConfigEditorApp(App[None]):
         if self._handle_save():
             self._suggest_next_section()
 
+    def on_network_section_save_continue_requested(
+        self, event: NetworkSection.SaveContinueRequested
+    ) -> None:
+        event.stop()
+        if self._handle_save():
+            self._suggest_next_section()
+
     # -- responsive --------------------------------------------------------
 
     def on_resize(self, event: events.Resize) -> None:
@@ -291,7 +416,7 @@ class ConfigEditorApp(App[None]):
     def _handle_save(self) -> bool:
         """Validate the current section and save; return True on a written save."""
         section = self._section_widget
-        if not isinstance(section, ProjectSection):
+        if not hasattr(section, "validate_all"):
             self.notify(
                 "This section is not editable yet.", severity="warning"
             )
@@ -322,8 +447,8 @@ class ConfigEditorApp(App[None]):
             self.notify(f"Cannot save: {exc.error}", severity="error")
             return False
 
-        for field in section._editable_fields():
-            field.refresh_badge()
+        if hasattr(section, "after_save"):
+            section.after_save()
         self.notify(
             f"Saved {self._document.path.name}.", severity="information"
         )

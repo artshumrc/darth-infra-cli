@@ -40,9 +40,11 @@ SECTION_LABELS: dict[Section, str] = {
     Section.REVIEW: "Review",
 }
 
-# Sections with a functional editor in this slice. Everything else renders a
-# placeholder; the set grows in later tickets without changing this interface.
-IMPLEMENTED_SECTIONS: frozenset[Section] = frozenset({Section.PROJECT})
+# Sections with a functional editor. Everything else renders a placeholder; the
+# set grows in later tickets without changing this interface.
+IMPLEMENTED_SECTIONS: frozenset[Section] = frozenset(
+    {Section.PROJECT, Section.NETWORK, Section.SERVICES}
+)
 
 
 def nav_button_id(section: Section) -> str:

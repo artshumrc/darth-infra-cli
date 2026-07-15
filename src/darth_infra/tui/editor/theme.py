@@ -43,8 +43,14 @@ CONTROL_ROOM_THEME = Theme(
 BADGE_EXPLICIT = "◆ SET"          # ◆  an explicitly persisted value
 BADGE_DEFAULT = "◇ DEFAULT"       # ◇  an omitted field showing its default
 BADGE_READ_ONLY = "⊘ READ-ONLY"   # ⊘  CLI-maintained, not editable
+BADGE_AUTOMATIC = "◈ AUTO"        # ◈  omitted; resolved automatically at deploy
 ERROR_SYMBOL = "✗"                # ✗  precedes adjacent error text
 VALID_SYMBOL = "✓"                # ✓  a validated value
+
+# Verification status accompaniments (Not checked / Verified / Check failed).
+VERIFY_NOT_CHECKED = "○ Not checked"
+VERIFY_VERIFIED = "✓ Verified"
+VERIFY_FAILED = "✗ Check failed"
 
 __all__ = [
     "THEME_NAME",
@@ -52,6 +58,10 @@ __all__ = [
     "BADGE_EXPLICIT",
     "BADGE_DEFAULT",
     "BADGE_READ_ONLY",
+    "BADGE_AUTOMATIC",
     "ERROR_SYMBOL",
     "VALID_SYMBOL",
+    "VERIFY_NOT_CHECKED",
+    "VERIFY_VERIFIED",
+    "VERIFY_FAILED",
 ]

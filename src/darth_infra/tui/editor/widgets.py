@@ -18,19 +18,43 @@ focusable control and therefore cannot receive edit focus.
 
 from __future__ import annotations
 
+import asyncio
 import re
-from typing import Any
+from typing import Any, Callable
 
 from textual import events
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
-from textual.widgets import Button, Input, Label, ListItem, ListView, Static
+from textual.widgets import (
+    Button,
+    Checkbox,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    Select,
+    SelectionList,
+    Static,
+)
 
+from .aws_discovery import (
+    AwsDiscovery,
+    DiscoveryKind,
+    DiscoveryRequest,
+    DiscoveryResult,
+    ResourceRecord,
+    VerificationStatus,
+)
+from .collection import ConfirmScreen
 from .theme import (
+    BADGE_AUTOMATIC,
     BADGE_DEFAULT,
     BADGE_EXPLICIT,
     BADGE_READ_ONLY,
     ERROR_SYMBOL,
+    VERIFY_FAILED,
+    VERIFY_NOT_CHECKED,
+    VERIFY_VERIFIED,
 )
 
 
@@ -87,6 +111,9 @@ class EditableField(Vertical):
         self.required = required
         self.touched = False
         self.error: str | None = None
+        # Sentinel until on_mount captures the loaded value; keeps every field
+        # reporting "dirty" before it has a comparable baseline.
+        self._loaded_key: Any = object()
 
     # -- composition -------------------------------------------------------
 
@@ -105,6 +132,12 @@ class EditableField(Vertical):
         raise NotImplementedError
         yield  # keep this a generator
 
+    def on_mount(self) -> None:
+        # Capture the loaded value so presence-preserving commits can tell an
+        # untouched field (leave the document exactly as loaded) apart from an
+        # edited one (write the new value).
+        self._loaded_key = self._current_key()
+
     # -- values (subclass responsibility) ----------------------------------
 
     def current_value(self) -> Any:  # pragma: no cover - overridden
@@ -112,6 +145,31 @@ class EditableField(Vertical):
 
     def commit(self) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
+
+    def _current_key(self) -> Any:
+        """A comparable snapshot of the control's current value.
+
+        Used to decide whether the field is dirty. Overridden by controls with a
+        concrete value; the default has nothing to compare.
+        """
+        return None
+
+    def is_dirty(self) -> bool:
+        """Whether the control's value differs from the value it loaded with."""
+        return self._current_key() != self._loaded_key
+
+    def mark_committed(self) -> None:
+        """Adopt the current value as the new loaded baseline after a save."""
+        self._loaded_key = self._current_key()
+
+    def validation_error(self) -> str | None:
+        """A local, format-level error message, or ``None`` when well-formed.
+
+        This covers only the control's own parsing (for example "not a whole
+        number"); cross-field and model semantics remain the owning section's
+        responsibility.
+        """
+        return None
 
     # -- help / badges -----------------------------------------------------
 
@@ -191,7 +249,12 @@ class TextField(EditableField):
     def current_value(self) -> str:
         return self._input().value.strip()
 
+    def _current_key(self) -> Any:
+        return self.current_value()
+
     def commit(self) -> None:
+        if not self.is_dirty():
+            return
         text = self.current_value()
         if text == "":
             self.document.reset(self.field_path)
@@ -199,6 +262,139 @@ class TextField(EditableField):
             self.document.set(self.field_path, text)
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        event.stop()
+        self._notify_changed()
+
+
+class IntegerField(EditableField):
+    """A single-line control bound to an integer (or nullable integer) field."""
+
+    def _compose_control(self):
+        value = self.document.value(self.field_path)
+        yield Input(
+            value="" if value is None else str(value),
+            id=f"input-{self.slug}",
+            classes="field-input",
+        )
+
+    def _input(self) -> Input:
+        return self.query_one(f"#input-{self.slug}", Input)
+
+    def _raw(self) -> str:
+        return self._input().value.strip()
+
+    def current_value(self) -> int | None:
+        raw = self._raw()
+        if raw == "":
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def _current_key(self) -> Any:
+        return self._raw()
+
+    def validation_error(self) -> str | None:
+        raw = self._raw()
+        if raw == "":
+            return None
+        try:
+            int(raw)
+        except ValueError:
+            return f"{self.label} must be a whole number"
+        return None
+
+    def commit(self) -> None:
+        if not self.is_dirty():
+            return
+        raw = self._raw()
+        if raw == "":
+            self.document.reset(self.field_path)
+            return
+        try:
+            self.document.set(self.field_path, int(raw))
+        except ValueError:
+            # Malformed input is surfaced by validation_error; do not corrupt
+            # the draft with a non-integer value.
+            return
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        event.stop()
+        self._notify_changed()
+
+
+class BooleanField(EditableField):
+    """A checkbox bound to a boolean field."""
+
+    def _compose_control(self):
+        value = bool(self.document.value(self.field_path))
+        yield Checkbox(
+            self.label,
+            value=value,
+            id=f"input-{self.slug}",
+            classes="field-checkbox",
+        )
+
+    def _checkbox(self) -> Checkbox:
+        return self.query_one(f"#input-{self.slug}", Checkbox)
+
+    def current_value(self) -> bool:
+        return bool(self._checkbox().value)
+
+    def _current_key(self) -> Any:
+        return self.current_value()
+
+    def commit(self) -> None:
+        if not self.is_dirty():
+            return
+        self.document.set(self.field_path, self.current_value())
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        event.stop()
+        self._notify_changed()
+
+
+class SelectField(EditableField):
+    """A dropdown bound to a scalar field with a fixed set of options."""
+
+    def __init__(self, *, options: list[tuple[str, str]], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._options = options
+
+    def _compose_control(self):
+        value = self.document.value(self.field_path)
+        current = None if value is None else str(value)
+        yield Select(
+            self._options,
+            value=current if current is not None else Select.BLANK,
+            allow_blank=True,
+            id=f"input-{self.slug}",
+            classes="field-select",
+        )
+
+    def _select(self) -> Select:
+        return self.query_one(f"#input-{self.slug}", Select)
+
+    def current_value(self) -> str | None:
+        value = self._select().value
+        if value is Select.BLANK:
+            return None
+        return str(value)
+
+    def _current_key(self) -> Any:
+        return self.current_value()
+
+    def commit(self) -> None:
+        if not self.is_dirty():
+            return
+        value = self.current_value()
+        if value is None:
+            self.document.reset(self.field_path)
+        else:
+            self.document.set(self.field_path, value)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
         event.stop()
         self._notify_changed()
 
@@ -222,10 +418,15 @@ class StringListField(EditableField):
         raw = self._input().value
         return [part.strip() for part in raw.split(",") if part.strip()]
 
+    def _current_key(self) -> Any:
+        return tuple(self.current_value())
+
     def commit(self) -> None:
-        # Always persist the parsed list (including an empty list) so model
-        # validation can flag a missing required entry rather than silently
-        # falling back to the omitted default.
+        if not self.is_dirty():
+            return
+        # Persist the parsed list (including an empty list) so model validation
+        # can flag a missing required entry rather than silently falling back to
+        # the omitted default.
         self.document.set(self.field_path, self.current_value())
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -263,6 +464,7 @@ class KeyValueMapField(EditableField):
             )
 
     def on_mount(self) -> None:
+        super().on_mount()
         self._refresh_rows()
 
     def _current_map(self) -> dict[str, str]:
@@ -387,11 +589,513 @@ class ReadOnlyField(Vertical):
         yield Static(self.help, id=f"help-{self.slug}", classes="field-help")
 
 
+class AwsBackedField(EditableField):
+    """Shared behaviour for fields backed by optional AWS discovery.
+
+    Adds three orthogonal capabilities on top of :class:`EditableField`, each
+    independently switchable per field:
+
+    * **Automatic/Override** (``optional``): an omittable, deploy-derived value
+      shows an ``AUTO`` badge and hides its control until the user opts into an
+      explicit Override. Returning an existing value to Automatic asks for
+      confirmation and removes the persisted key.
+    * **Discovery** (``discovery_kind``): a "Select from AWS" action lists
+      candidate resources through the injected adapter, distinguishing loading,
+      results, empty, and failure — and never silently replacing the value.
+    * **Verification** (``verifiable``): a user-triggered check that reports
+      ``Not checked`` / ``Verified`` / ``Check failed`` and never blocks a save.
+
+    Concrete value handling (scalar versus list) is left to subclasses.
+    """
+
+    class RecordSelected(Message):
+        """Posted when the user picks a discovered record.
+
+        Lets the owning section capture parent context (a chosen VPC's id, a
+        chosen ALB's ARN) so dependent discovery stays scoped.
+        """
+
+        def __init__(self, field: "AwsBackedField", record: ResourceRecord) -> None:
+            self.field = field
+            self.record = record
+            super().__init__()
+
+    def __init__(
+        self,
+        *,
+        discovery: AwsDiscovery | None = None,
+        discovery_kind: DiscoveryKind | None = None,
+        verifiable: bool = False,
+        optional: bool = False,
+        context_provider: Callable[[DiscoveryKind | None], dict[str, Any]]
+        | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._discovery = discovery
+        self._discovery_kind = discovery_kind
+        self._verifiable = verifiable
+        self.optional = optional
+        self._context_provider = context_provider
+        self._automatic = optional and not self._is_explicit_safe()
+        self._records_by_value: dict[str, ResourceRecord] = {}
+
+    # -- helpers -----------------------------------------------------------
+
+    def _is_explicit_safe(self) -> bool:
+        try:
+            return bool(self.document.is_explicit(self.field_path))
+        except Exception:
+            return False
+
+    def _mode_button_label(self) -> str:
+        return "Override…" if self._automatic else "Reset to Automatic"
+
+    def _has_value_to_remove(self) -> bool:
+        return self._is_explicit_safe() or bool(self._raw_control_value())
+
+    def _raw_control_value(self) -> str:  # pragma: no cover - overridden
+        return ""
+
+    # -- automatic/override toggle -----------------------------------------
+
+    def _apply_mode_visibility(self) -> None:
+        if not self.optional:
+            return
+        try:
+            control = self.query_one(f"#control-{self.slug}")
+        except Exception:
+            return
+        control.display = not self._automatic
+
+    def _toggle_mode(self) -> None:
+        if self._automatic:
+            self._set_automatic(False)
+            self._focus_control()
+            return
+        if self._has_value_to_remove():
+            self.app.push_screen(
+                ConfirmScreen(
+                    "Return to Automatic?",
+                    f"Return “{self.label}” to Automatic? "
+                    "This removes the persisted value.",
+                    confirm_label="Return to Automatic",
+                ),
+                self._on_confirm_automatic,
+            )
+        else:
+            self._set_automatic(True)
+
+    def _on_confirm_automatic(self, confirmed: bool | None) -> None:
+        if confirmed:
+            self._set_automatic(True)
+
+    def _set_automatic(self, automatic: bool) -> None:
+        self._automatic = automatic
+        if automatic:
+            # Removing the persisted key is the whole point of Automatic.
+            self.document.reset(self.field_path)
+        self._apply_mode_visibility()
+        try:
+            self.query_one(f"#mode-{self.slug}", Button).label = (
+                self._mode_button_label()
+            )
+        except Exception:
+            pass
+        self.refresh_badge()
+        self._notify_changed()
+
+    def _focus_control(self) -> None:  # pragma: no cover - overridden
+        return
+
+    # -- badges ------------------------------------------------------------
+
+    def _badge_text(self) -> str:
+        if self.optional and self._automatic:
+            return BADGE_AUTOMATIC
+        return super()._badge_text()
+
+    def refresh_badge(self) -> None:
+        super().refresh_badge()
+        try:
+            badge = self.query_one(f"#badge-{self.slug}", Static)
+        except Exception:
+            return
+        badge.set_class(self.optional and self._automatic, "badge-automatic")
+
+    # -- discovery ---------------------------------------------------------
+
+    def _build_request(self) -> DiscoveryRequest:
+        ctx: dict[str, Any] = {}
+        if self._context_provider is not None:
+            ctx = self._context_provider(self._discovery_kind) or {}
+        return DiscoveryRequest(
+            kind=self._discovery_kind or DiscoveryKind.VPC_NAME,
+            vpc_id=ctx.get("vpc_id"),
+            vpc_name=ctx.get("vpc_name"),
+            load_balancer_arn=ctx.get("load_balancer_arn"),
+            load_balancer_name=ctx.get("load_balancer_name"),
+        )
+
+    def _start_discovery(self) -> None:
+        if self._discovery is None or self._discovery_kind is None:
+            return
+        self._set_discovery_status("Loading discovered resources…", "loading")
+        self.run_worker(
+            self._discovery_worker(self._build_request()),
+            exclusive=True,
+            group=f"disc-{self.slug}",
+        )
+
+    async def _discovery_worker(self, request: DiscoveryRequest) -> None:
+        result = await asyncio.to_thread(self._discovery.discover, request)
+        self._apply_discovery(result)
+
+    def _apply_discovery(self, result: DiscoveryResult) -> None:
+        self._records_by_value = {}
+        try:
+            select = self.query_one(f"#select-{self.slug}", Select)
+        except Exception:
+            return
+        if not result.ok:
+            select.set_options([])
+            message = result.failure.message if result.failure else "Lookup failed."
+            self._set_discovery_status(f"Lookup failed: {message}", "failure")
+            return
+        if result.empty:
+            select.set_options([])
+            self._set_discovery_status("No matching AWS resources found.", "empty")
+            return
+        options: list[tuple[str, str]] = []
+        for record in result.records:
+            self._records_by_value[record.value] = record
+            options.append((record.label, record.value))
+        select.set_options(options)
+        self._set_discovery_status(
+            f"{len(options)} found — choose one to fill the field.", "results"
+        )
+
+    def _set_discovery_status(self, text: str, kind: str) -> None:
+        try:
+            status = self.query_one(f"#discstatus-{self.slug}", Static)
+        except Exception:
+            return
+        status.update(text)
+        for cls in ("status-loading", "status-failure", "status-empty", "status-results"):
+            status.remove_class(cls)
+        status.add_class(f"status-{kind}")
+        status.display = True
+
+    def _on_record_selected(self, value: str) -> None:
+        record = self._records_by_value.get(value)
+        if record is None:
+            return
+        self._adopt_record(record)
+        self.touched = True
+        self.post_message(self.RecordSelected(self, record))
+        self._reset_verify_status()
+        self._notify_changed()
+
+    def _adopt_record(self, record: ResourceRecord) -> None:  # pragma: no cover - overridden
+        return
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != f"select-{self.slug}":
+            return
+        event.stop()
+        value = event.value
+        if value is None or value is Select.BLANK:
+            return
+        self._on_record_selected(str(value))
+
+    # -- verification ------------------------------------------------------
+
+    def _verify_target(self) -> str:  # pragma: no cover - overridden
+        return ""
+
+    def _start_verify(self) -> None:
+        if self._discovery is None:
+            return
+        target = self._verify_target()
+        self._set_verify_status(VerificationStatus.NOT_CHECKED, "Verifying…")
+        self.run_worker(
+            self._verify_worker(self._build_request(), target),
+            exclusive=True,
+            group=f"verify-{self.slug}",
+        )
+
+    async def _verify_worker(self, request: DiscoveryRequest, target: str) -> None:
+        outcome = await asyncio.to_thread(self._discovery.verify, request, target)
+        self._set_verify_status(outcome.status, outcome.message)
+
+    def _set_verify_status(self, status: VerificationStatus, message: str) -> None:
+        if not self._verifiable:
+            return
+        try:
+            widget = self.query_one(f"#verifystatus-{self.slug}", Static)
+        except Exception:
+            return
+        if status is VerificationStatus.VERIFIED:
+            text, cls = VERIFY_VERIFIED, "verify-verified"
+        elif status is VerificationStatus.FAILED:
+            text, cls = VERIFY_FAILED, "verify-failed"
+        else:
+            text, cls = (message or VERIFY_NOT_CHECKED), "verify-none"
+        if message and status is not VerificationStatus.NOT_CHECKED:
+            text = f"{text} — {message}"
+        widget.update(text)
+        for c in ("verify-verified", "verify-failed", "verify-none"):
+            widget.remove_class(c)
+        widget.add_class(cls)
+
+    def _reset_verify_status(self) -> None:
+        if self._verifiable:
+            self._set_verify_status(VerificationStatus.NOT_CHECKED, VERIFY_NOT_CHECKED)
+
+    # -- shared composition fragments --------------------------------------
+
+    def _compose_mode_toggle(self):
+        if self.optional:
+            with Horizontal(classes="mode-row"):
+                yield Button(
+                    self._mode_button_label(),
+                    id=f"mode-{self.slug}",
+                    classes="mode-toggle",
+                    compact=True,
+                )
+
+    def _compose_discovery_actions(self):
+        if self._discovery_kind is not None:
+            with Horizontal(classes="aws-actions"):
+                yield Button(
+                    "Select from AWS", id=f"discover-{self.slug}", compact=True
+                )
+            yield Select(
+                [],
+                id=f"select-{self.slug}",
+                prompt="Discovered resources",
+                allow_blank=True,
+                classes="aws-select",
+            )
+            yield Static("", id=f"discstatus-{self.slug}", classes="aws-status")
+
+    def _compose_verify_action(self):
+        if self._verifiable:
+            with Horizontal(classes="aws-actions"):
+                yield Button("Verify", id=f"verify-{self.slug}", compact=True)
+                yield Static(
+                    VERIFY_NOT_CHECKED,
+                    id=f"verifystatus-{self.slug}",
+                    classes="verify-status verify-none",
+                )
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self._apply_mode_visibility()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if button_id == f"mode-{self.slug}":
+            event.stop()
+            self._toggle_mode()
+        elif button_id == f"discover-{self.slug}":
+            event.stop()
+            self._start_discovery()
+        elif button_id == f"verify-{self.slug}":
+            event.stop()
+            self._start_verify()
+
+
+class AwsReferenceField(AwsBackedField):
+    """A scalar reference (id/ARN/name) with manual entry and AWS selection.
+
+    Used for VPC name/id, shared ALB name, shared listener ARN, shared ALB
+    security-group id, and the dedicated certificate ARN. Manual entry always
+    works; discovery only *offers* values through a picker and never overwrites
+    what is typed.
+    """
+
+    def _compose_control(self):
+        yield from self._compose_mode_toggle()
+        with Vertical(id=f"control-{self.slug}", classes="aws-control"):
+            value = self.document.value(self.field_path)
+            yield Input(
+                value="" if value is None else str(value),
+                id=f"input-{self.slug}",
+                classes="field-input",
+            )
+            yield from self._compose_discovery_actions()
+            yield from self._compose_verify_action()
+
+    def _input(self) -> Input:
+        return self.query_one(f"#input-{self.slug}", Input)
+
+    def _raw_control_value(self) -> str:
+        try:
+            return self._input().value.strip()
+        except Exception:
+            return ""
+
+    def current_value(self) -> str:
+        if self.optional and self._automatic:
+            return ""
+        return self._raw_control_value()
+
+    def _current_key(self) -> Any:
+        if self.optional and self._automatic:
+            return ("auto",)
+        return ("value", self._raw_control_value())
+
+    def commit(self) -> None:
+        if not self.is_dirty():
+            return
+        if self.optional and self._automatic:
+            self.document.reset(self.field_path)
+            return
+        text = self.current_value()
+        if text == "":
+            self.document.reset(self.field_path)
+        else:
+            self.document.set(self.field_path, text)
+
+    def _adopt_record(self, record: ResourceRecord) -> None:
+        self._input().value = record.value
+
+    def _verify_target(self) -> str:
+        return self.current_value()
+
+    def _focus_control(self) -> None:
+        try:
+            self._input().focus()
+        except Exception:
+            pass
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != f"input-{self.slug}":
+            return
+        event.stop()
+        self._reset_verify_status()
+        self._notify_changed()
+
+
+class AwsSubnetListField(AwsBackedField):
+    """An Automatic/Override list of subnet ids with manual entry and AWS multi-select.
+
+    Automatic omits the field so subnets are discovered at deploy time; Override
+    persists an explicit list. Discovery offers a multi-select of candidate
+    subnets scoped to the chosen VPC; the comma-separated manual entry always
+    remains editable.
+    """
+
+    def _compose_control(self):
+        yield from self._compose_mode_toggle()
+        with Vertical(id=f"control-{self.slug}", classes="aws-control"):
+            value = self.document.value(self.field_path)
+            text = ", ".join(str(item) for item in value) if value else ""
+            yield Input(
+                value=text,
+                id=f"input-{self.slug}",
+                classes="field-input",
+            )
+            if self._discovery_kind is not None:
+                with Horizontal(classes="aws-actions"):
+                    yield Button(
+                        "Discover subnets", id=f"discover-{self.slug}", compact=True
+                    )
+                yield SelectionList[str](
+                    id=f"multiselect-{self.slug}", classes="aws-multiselect"
+                )
+                yield Static("", id=f"discstatus-{self.slug}", classes="aws-status")
+
+    def _input(self) -> Input:
+        return self.query_one(f"#input-{self.slug}", Input)
+
+    def _raw_control_value(self) -> str:
+        try:
+            return self._input().value.strip()
+        except Exception:
+            return ""
+
+    def current_value(self) -> list[str]:
+        if self.optional and self._automatic:
+            return []
+        raw = self._raw_control_value()
+        return [part.strip() for part in raw.split(",") if part.strip()]
+
+    def _current_key(self) -> Any:
+        if self.optional and self._automatic:
+            return ("auto",)
+        return ("value", tuple(self.current_value()))
+
+    def commit(self) -> None:
+        if not self.is_dirty():
+            return
+        if self.optional and self._automatic:
+            self.document.reset(self.field_path)
+            return
+        values = self.current_value()
+        if not values:
+            self.document.reset(self.field_path)
+        else:
+            self.document.set(self.field_path, values)
+
+    def _focus_control(self) -> None:
+        try:
+            self._input().focus()
+        except Exception:
+            pass
+
+    # Discovery populates a multi-select rather than a single-value Select.
+    def _apply_discovery(self, result: DiscoveryResult) -> None:
+        try:
+            selection = self.query_one(f"#multiselect-{self.slug}", SelectionList)
+        except Exception:
+            return
+        selection.clear_options()
+        self._records_by_value = {}
+        if not result.ok:
+            message = result.failure.message if result.failure else "Lookup failed."
+            self._set_discovery_status(f"Lookup failed: {message}", "failure")
+            return
+        if result.empty:
+            self._set_discovery_status("No matching AWS resources found.", "empty")
+            return
+        current = set(self.current_value())
+        for record in result.records:
+            self._records_by_value[record.value] = record
+            selection.add_option((record.label, record.value, record.value in current))
+        self._set_discovery_status(
+            f"{len(result.records)} found — tick subnets to use them.", "results"
+        )
+
+    def on_selection_list_selected_changed(
+        self, event: SelectionList.SelectedChanged
+    ) -> None:
+        if event.selection_list.id != f"multiselect-{self.slug}":
+            return
+        event.stop()
+        selected = [str(v) for v in event.selection_list.selected]
+        self._input().value = ", ".join(selected)
+        self.touched = True
+        self._notify_changed()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != f"input-{self.slug}":
+            return
+        event.stop()
+        self._notify_changed()
+
+
 __all__ = [
     "dom_slug",
     "EditableField",
     "TextField",
+    "IntegerField",
+    "BooleanField",
+    "SelectField",
     "StringListField",
     "KeyValueMapField",
     "ReadOnlyField",
+    "AwsReferenceField",
+    "AwsSubnetListField",
 ]

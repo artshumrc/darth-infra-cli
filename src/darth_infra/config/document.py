@@ -395,6 +395,82 @@ class ProjectDocument:
             del container[last]
             self._invalidate()
 
+    # -- repeated collections ----------------------------------------------
+
+    def record_count(self, collection_path: str) -> int:
+        """Return the number of records in the array-of-tables at ``collection_path``.
+
+        Reports raw-document presence (not model semantics) so a draft that is
+        temporarily invalid still reports how many records the editor is holding.
+        Returns ``0`` when the collection is absent.
+        """
+        node = _resolve_node(self._doc, _parse_path(collection_path))
+        if node is _MISSING:
+            return 0
+        try:
+            return len(node)
+        except TypeError:
+            return 0
+
+    def raw_record(self, collection_path: str, index: int) -> dict[str, Any]:
+        """Return a plain-``dict`` copy of one record's explicitly-present keys.
+
+        The result contains only keys the document actually holds (omitted
+        defaults are absent), with nested tables/arrays unwrapped to plain
+        Python. It is a detached copy: mutating it does not affect the draft.
+        Returns an empty dict when the record does not exist.
+        """
+        node = _resolve_node(self._doc, _parse_path(collection_path))
+        if node is _MISSING or not _has_index(node, index):
+            return {}
+        return node[index].unwrap()
+
+    def add_record(
+        self, collection_path: str, values: dict[str, Any] | None = None
+    ) -> int:
+        """Append a new record to the array-of-tables at ``collection_path``.
+
+        Creates the array-of-tables when it does not exist yet. Only the keys in
+        ``values`` are written, so the new record starts minimal and every other
+        field remains omitted at its schema default. Returns the new record's
+        index.
+        """
+        segments = _parse_path(collection_path)
+        parent = self._resolve_container(segments[:-1], create=True)
+        key = segments[-1]
+        if not isinstance(key, str):
+            raise ValueError(
+                f"cannot add a record at array index {key!r}; "
+                "collection_path must end in a table key"
+            )
+        if key not in parent:
+            parent[key] = tomlkit.aot()
+        aot = parent[key]
+        table = tomlkit.table()
+        for name, value in (values or {}).items():
+            table[name] = value
+        aot.append(table)
+        self._invalidate()
+        return len(aot) - 1
+
+    def remove_record(self, collection_path: str, index: int) -> None:
+        """Remove the record at ``index`` from ``collection_path``.
+
+        A missing collection or out-of-range index is a no-op.
+        """
+        segments = _parse_path(collection_path)
+        parent = self._resolve_container(segments[:-1], create=False)
+        if parent is _MISSING:
+            return
+        key = segments[-1]
+        try:
+            aot = parent[key]
+        except (KeyError, TypeError):
+            return
+        if _has_index(aot, index):
+            del aot[index]
+            self._invalidate()
+
     # -- reversion ---------------------------------------------------------
 
     def revert_field(self, field_path: str) -> None:

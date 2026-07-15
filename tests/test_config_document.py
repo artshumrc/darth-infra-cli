@@ -235,3 +235,68 @@ def test_config_is_inspectable_but_raises_on_invalid_draft(config_path: Path) ->
     assert doc.is_explicit("project.environments") is True
     with pytest.raises(ValueError):
         _ = doc.config
+
+
+def test_add_record_appends_minimal_record_and_returns_index(
+    config_path: Path,
+) -> None:
+    doc = ProjectDocument.load(config_path)
+    assert doc.record_count("services") == 1
+
+    index = doc.add_record("services", {"name": "worker"})
+
+    assert index == 1
+    assert doc.record_count("services") == 2
+    assert doc.value("services[1].name") == "worker"
+    # Only the provided key is explicit; every other field stays omitted.
+    assert doc.is_explicit("services[1].name") is True
+    assert doc.is_explicit("services[1].cpu") is False
+    # The new record round-trips through the loader.
+    assert [s.name for s in load_config_via_save(doc, config_path)] == ["web", "worker"]
+
+
+def test_add_record_creates_absent_collection() -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "darth-infra.toml"
+        path.write_text(
+            '[project]\nname = "demo"\nenvironments = ["prod"]\n\n'
+            '[[services]]\nname = "web"\n'
+        )
+        doc = ProjectDocument.load(path)
+        assert doc.record_count("s3_buckets") == 0
+        index = doc.add_record("s3_buckets", {"name": "media"})
+        assert index == 0
+        assert doc.record_count("s3_buckets") == 1
+        assert doc.value("s3_buckets[0].name") == "media"
+
+
+def test_raw_record_returns_only_explicit_keys(config_path: Path) -> None:
+    doc = ProjectDocument.load(config_path)
+    raw = doc.raw_record("services", 0)
+    assert raw["name"] == "web"
+    assert raw["cpu"] == 256
+    # An omitted default is absent from the raw record.
+    assert "health_check_timeout_seconds" not in raw
+    # It is a detached copy.
+    raw["name"] = "mutated"
+    assert doc.value("services[0].name") == "web"
+
+
+def test_remove_record_deletes_and_reindexes(config_path: Path) -> None:
+    doc = ProjectDocument.load(config_path)
+    doc.add_record("services", {"name": "worker"})
+    assert doc.record_count("services") == 2
+    doc.remove_record("services", 0)
+    assert doc.record_count("services") == 1
+    assert doc.value("services[0].name") == "worker"
+    # Out-of-range and missing collections are no-ops.
+    doc.remove_record("services", 5)
+    doc.remove_record("s3_buckets", 0)
+    assert doc.record_count("services") == 1
+
+
+def load_config_via_save(doc: ProjectDocument, path: Path):
+    doc.save()
+    return load_config(path).services
