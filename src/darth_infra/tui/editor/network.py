@@ -22,7 +22,7 @@ from typing import Any
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.message import Message
-from textual.widgets import Button, Collapsible, Input, Static
+from textual.widgets import Button, Collapsible, Static
 
 from ..field_registry import registry_entry
 from .aws_discovery import AwsDiscovery, DiscoveryKind, OfflineAwsDiscovery

@@ -88,3 +88,27 @@ and `git diff --check` emits no output.
 ## Blocked by
 
 - Ticket 04: `04-editor-shell-project.md`
+
+## Implementation notes
+
+- New `AwsDiscovery` adapter lives in
+  `src/darth_infra/tui/editor/aws_discovery.py` (domain records + typed results;
+  `FakeAwsDiscovery`, `OfflineAwsDiscovery`, `BotoAwsDiscovery`). It is injected
+  into `ConfigEditorApp(discovery=...)`, defaulting to the offline adapter so
+  editing/saving never needs AWS credentials.
+- The Network section (`src/darth_infra/tui/editor/network.py`) renders the ALB
+  **identity** fields (`alb.mode`, `alb.shared_alb_name`,
+  `alb.shared_listener_arn`, `alb.shared_alb_security_group_id`,
+  `alb.certificate_arn`) per this ticket's explicit scope, even though their
+  field-registry `section` is `ROUTING`. Registry `section` is presentation
+  metadata and is not consulted for rendering; the registry-coverage contract
+  (one entry per path) still holds. **Ticket 08 (alb-routing)** should render
+  only the ALB *routing* fields (`alb.domain`, `alb.default_target_service`,
+  `alb.default_listener_priority`, `alb.path_rules[*]`) to avoid double-covering
+  the identity fields owned here.
+- `service_discovery.namespace_template` has registry `section = NETWORK` but is
+  **not** in this ticket's enumerated scope ("VPC lookup/override, subnets,
+  shared/dedicated ALB mode, shared ALB identity, listener/SG overrides,
+  dedicated certificate"), so it is intentionally not rendered by this slice. It
+  still needs a home in a later network/services slice before the ticket-16
+  completeness cutover.
