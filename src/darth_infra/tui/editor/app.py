@@ -36,6 +36,7 @@ from .navigation import (
 )
 from .aws_discovery import AwsDiscovery, OfflineAwsDiscovery
 from .database import DatabaseSection
+from .environments import EnvironmentsSection
 from .network import NetworkSection
 from .routing import RoutingSection
 from .sections import PlaceholderSection, ProjectSection
@@ -130,6 +131,10 @@ class ConfigEditorApp(App[None]):
     .section-title {
         text-style: bold;
         color: $accent;
+        margin-bottom: 1;
+    }
+    .section-subtitle {
+        text-style: bold;
         margin-bottom: 1;
     }
     .editable-field {
@@ -276,6 +281,16 @@ class ConfigEditorApp(App[None]):
         height: 100%;
         padding: 0 1;
         overflow-y: auto;
+    }
+    #env-list Button {
+        width: 100%;
+        border: none;
+        height: 1;
+        margin-bottom: 0;
+    }
+    .env-active {
+        color: $accent;
+        text-style: bold;
     }
     .md-status {
         height: auto;
@@ -449,6 +464,8 @@ class ConfigEditorApp(App[None]):
             widget = DatabaseSection(self._document)
         elif section is Section.STORAGE:
             widget = StorageSection(self._document)
+        elif section is Section.ENVIRONMENTS:
+            widget = EnvironmentsSection(self._document)
         else:
             widget = PlaceholderSection(section)
         self._section_widget = widget
@@ -497,6 +514,13 @@ class ConfigEditorApp(App[None]):
 
     def on_database_section_save_continue_requested(
         self, event: DatabaseSection.SaveContinueRequested
+    ) -> None:
+        event.stop()
+        if self._handle_save():
+            self._suggest_next_section()
+
+    def on_environments_section_save_continue_requested(
+        self, event: EnvironmentsSection.SaveContinueRequested
     ) -> None:
         event.stop()
         if self._handle_save():

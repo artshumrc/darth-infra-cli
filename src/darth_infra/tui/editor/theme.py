@@ -44,6 +44,8 @@ BADGE_EXPLICIT = "◆ SET"          # ◆  an explicitly persisted value
 BADGE_DEFAULT = "◇ DEFAULT"       # ◇  an omitted field showing its default
 BADGE_READ_ONLY = "⊘ READ-ONLY"   # ⊘  CLI-maintained, not editable
 BADGE_AUTOMATIC = "◈ AUTO"        # ◈  omitted; resolved automatically at deploy
+BADGE_INHERITED = "◇ INHERITED"   # ◇  no environment override; inherits the base value
+BADGE_OVERRIDE = "◆ OVERRIDE"     # ◆  an explicit per-environment override
 ERROR_SYMBOL = "✗"                # ✗  precedes adjacent error text
 VALID_SYMBOL = "✓"                # ✓  a validated value
 
@@ -59,6 +61,8 @@ __all__ = [
     "BADGE_DEFAULT",
     "BADGE_READ_ONLY",
     "BADGE_AUTOMATIC",
+    "BADGE_INHERITED",
+    "BADGE_OVERRIDE",
     "ERROR_SYMBOL",
     "VALID_SYMBOL",
     "VERIFY_NOT_CHECKED",

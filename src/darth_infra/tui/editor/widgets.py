@@ -510,19 +510,50 @@ class KeyValueMapField(EditableField):
     entries and their formatting survive. ``field_path`` is the map container
     (e.g. ``project.tags``); individual keys are addressed as
     ``project.tags.<key>``.
+
+    When ``key_options`` is supplied, the key is chosen from a fixed set of
+    values through a dropdown rather than typed freely. This is used for maps
+    whose keys must reference an existing resource (for example a per-environment
+    EC2 instance override keyed by service name), so the map cannot name a
+    resource that does not exist.
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        key_options: list[str] | None = None,
+        key_placeholder: str = "key",
+        value_placeholder: str = "value",
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._editing_key: str | None = None
         self._keys: list[str] = []
+        self._key_options = list(key_options) if key_options is not None else None
+        self._key_placeholder = key_placeholder
+        self._value_placeholder = value_placeholder
 
     def _compose_control(self):
         yield ListView(id=f"list-{self.slug}", classes="kv-list")
         with Horizontal(classes="kv-entry-row"):
-            yield Input(placeholder="key", id=f"kvkey-{self.slug}", classes="kv-key")
+            if self._key_options is not None:
+                yield Select(
+                    [(name, name) for name in self._key_options],
+                    prompt=self._key_placeholder,
+                    allow_blank=True,
+                    id=f"kvkey-{self.slug}",
+                    classes="kv-key",
+                )
+            else:
+                yield Input(
+                    placeholder=self._key_placeholder,
+                    id=f"kvkey-{self.slug}",
+                    classes="kv-key",
+                )
             yield Input(
-                placeholder="value", id=f"kvval-{self.slug}", classes="kv-value"
+                placeholder=self._value_placeholder,
+                id=f"kvval-{self.slug}",
+                classes="kv-value",
             )
         with Horizontal(classes="kv-button-row"):
             yield Button(
@@ -563,11 +594,29 @@ class KeyValueMapField(EditableField):
         for key in self._keys:
             list_view.append(ListItem(Static(f"{key} = {mapping[key]}")))
 
-    def _key_input(self) -> Input:
-        return self.query_one(f"#kvkey-{self.slug}", Input)
-
     def _value_input(self) -> Input:
         return self.query_one(f"#kvval-{self.slug}", Input)
+
+    def _get_key(self) -> str:
+        """Current key text, whether the key control is a Select or an Input."""
+        if self._key_options is not None:
+            select = self.query_one(f"#kvkey-{self.slug}", Select)
+            value = select.value
+            return "" if value is Select.BLANK else str(value)
+        return self.query_one(f"#kvkey-{self.slug}", Input).value.strip()
+
+    def _set_key(self, key: str) -> None:
+        if self._key_options is not None:
+            select = self.query_one(f"#kvkey-{self.slug}", Select)
+            select.value = key if key in self._key_options else Select.BLANK
+        else:
+            self.query_one(f"#kvkey-{self.slug}", Input).value = key
+
+    def _clear_key(self) -> None:
+        if self._key_options is not None:
+            self.query_one(f"#kvkey-{self.slug}", Select).value = Select.BLANK
+        else:
+            self.query_one(f"#kvkey-{self.slug}", Input).value = ""
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         event.stop()
@@ -576,13 +625,19 @@ class KeyValueMapField(EditableField):
             return
         key = self._keys[index]
         self._editing_key = key
-        self._key_input().value = key
+        self._set_key(key)
         self._value_input().value = self._current_map().get(key, "")
 
     def on_input_changed(self, event: Input.Changed) -> None:
         # The key/value inputs are internal to this control; do not let their
         # changes read as a scalar edit of the map field.
         event.stop()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        # The key selector is internal to this control; do not let its changes
+        # read as a scalar edit of the map field.
+        if event.select.id == f"kvkey-{self.slug}":
+            event.stop()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
@@ -593,7 +648,7 @@ class KeyValueMapField(EditableField):
             self._remove_row()
 
     def _add_row(self) -> None:
-        key = self._key_input().value.strip()
+        key = self._get_key()
         value = self._value_input().value.strip()
         if not key:
             self.app.notify("A key is required to add a map entry", severity="error")
@@ -607,7 +662,7 @@ class KeyValueMapField(EditableField):
         self._notify_changed()
 
     def _remove_row(self) -> None:
-        key = self._editing_key or self._key_input().value.strip()
+        key = self._editing_key or self._get_key()
         if not key:
             return
         self.document.reset(f"{self.field_path}.{key}")
@@ -617,7 +672,7 @@ class KeyValueMapField(EditableField):
 
     def _clear_entry(self) -> None:
         self._editing_key = None
-        self._key_input().value = ""
+        self._clear_key()
         self._value_input().value = ""
 
 
