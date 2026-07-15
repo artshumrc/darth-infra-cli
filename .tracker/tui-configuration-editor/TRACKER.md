@@ -9,9 +9,9 @@ complete, document-preserving Guided editor for project configuration.
 
 Overall status: `In Progress`
 
-Current ticket: None
+Current ticket: 03
 
-Last updated: 2026-07-14 (ticket 02 completed)
+Last updated: 2026-07-14 (ticket 03 in progress)
 
 ## Ledger
 
@@ -19,8 +19,8 @@ Last updated: 2026-07-14 (ticket 02 completed)
 | --- | --- | --- | --- |
 | 01 | `01-schema-field-registry.md` | Completed | None |
 | 02 | `02-document-preserving-session.md` | Completed | 01 |
-| 03 | `03-document-diff-merge-reversion.md` | Not Started | 02 |
-| 04 | `04-editor-shell-project.md` | Not Started | 01, 02 |
+| 03 | `03-document-diff-merge-reversion.md` | In Progress | 02 |
+| 04 | `04-editor-shell-project.md` | Completed | 01, 02 |
 | 05 | `05-network-aws-discovery.md` | Not Started | 04 |
 | 06 | `06-core-services-editor.md` | Not Started | 04 |
 | 07 | `07-advanced-services-references.md` | Not Started | 05, 06 |
