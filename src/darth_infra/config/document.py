@@ -350,6 +350,22 @@ class ProjectDocument:
                 return None
         return _unwrap_enum(obj)
 
+    def raw_value(self, field_path: str) -> Any:
+        """Return the raw persisted value at ``field_path`` without the model.
+
+        Unlike :meth:`value`, this never constructs :class:`ProjectConfig`, so it
+        works even when a *different* part of the draft is temporarily invalid
+        (for example a half-entered repeated record). It returns the explicitly
+        persisted value unwrapped to plain Python, or ``None`` when the key is
+        absent. It does not compute effective defaults.
+        """
+        node = _resolve_node(self._doc, _parse_path(field_path))
+        if node is _MISSING:
+            return None
+        unwrap = getattr(node, "unwrap", None)
+        value = unwrap() if callable(unwrap) else node
+        return _unwrap_enum(value)
+
     def is_explicit(self, field_path: str) -> bool:
         """Report whether ``field_path`` is explicitly present in the document.
 

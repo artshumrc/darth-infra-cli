@@ -147,6 +147,21 @@ class EditableField(Vertical):
     def commit(self) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
 
+    def _loaded_value(self) -> Any:
+        """The field's initial value, robust to an invalid draft elsewhere.
+
+        Prefers the model-computed effective value; when the draft cannot be
+        modeled (for example a sibling repeated record is still half-entered)
+        it falls back to the raw persisted value so the control can still render.
+        """
+        try:
+            return self.document.value(self.field_path)
+        except Exception:
+            try:
+                return self.document.raw_value(self.field_path)
+            except Exception:
+                return None
+
     def _current_key(self) -> Any:
         """A comparable snapshot of the control's current value.
 
@@ -237,7 +252,7 @@ class TextField(EditableField):
     """A single-line text control bound to a scalar string field."""
 
     def _compose_control(self):
-        value = self.document.value(self.field_path)
+        value = self._loaded_value()
         yield Input(
             value="" if value is None else str(value),
             id=f"input-{self.slug}",
@@ -1272,6 +1287,158 @@ class OptionalSelectField(AwsBackedField):
         self._notify_changed()
 
 
+class OptionalIntegerField(AwsBackedField):
+    """An Automatic/Override integer for an omittable, deploy-derived value.
+
+    Automatic omits the field so deployment allocates the value; Override
+    persists an explicit integer. Returning an existing Override to Automatic
+    asks for confirmation before removing the persisted value. Used for ALB
+    listener priorities, which remain *preferred* overrides while deploy-time
+    allocation stays authoritative and stack-owned values are preserved. There is
+    no AWS discovery: the value is a plain integer, never a looked-up resource.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("optional", True)
+        super().__init__(**kwargs)
+
+    def _compose_control(self):
+        yield from self._compose_mode_toggle()
+        with Vertical(id=f"control-{self.slug}", classes="aws-control"):
+            value = self._loaded_value()
+            yield Input(
+                value="" if value is None else str(value),
+                id=f"input-{self.slug}",
+                classes="field-input",
+            )
+
+    def _input(self) -> Input:
+        return self.query_one(f"#input-{self.slug}", Input)
+
+    def _raw_control_value(self) -> str:
+        try:
+            return self._input().value.strip()
+        except Exception:
+            return ""
+
+    def current_value(self) -> int | None:
+        if self.optional and self._automatic:
+            return None
+        raw = self._raw_control_value()
+        if raw == "":
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def _current_key(self) -> Any:
+        if self.optional and self._automatic:
+            return ("auto",)
+        return ("value", self._raw_control_value())
+
+    def validation_error(self) -> str | None:
+        if self.optional and self._automatic:
+            return None
+        raw = self._raw_control_value()
+        if raw == "":
+            return None
+        try:
+            int(raw)
+        except ValueError:
+            return f"{self.label} must be a whole number"
+        return None
+
+    def commit(self) -> None:
+        if not self.is_dirty():
+            return
+        if self.optional and self._automatic:
+            self.document.reset(self.field_path)
+            return
+        raw = self._raw_control_value()
+        if raw == "":
+            self.document.reset(self.field_path)
+            return
+        try:
+            self.document.set(self.field_path, int(raw))
+        except ValueError:
+            # Malformed input is surfaced by validation_error; do not corrupt the
+            # draft with a non-integer value.
+            return
+
+    def _focus_control(self) -> None:
+        try:
+            self._input().focus()
+        except Exception:
+            pass
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != f"input-{self.slug}":
+            return
+        event.stop()
+        self._notify_changed()
+
+
+class ServiceSelectField(EditableField):
+    """A dropdown bound to a scalar service-name field.
+
+    Lists only the services eligible as a routing target (the caller supplies the
+    eligible names according to the existing model rules) plus the currently
+    persisted value when it is set — so an existing reference round-trips and can
+    be corrected rather than crashing the control. Selecting the blank option
+    removes the key.
+    """
+
+    def __init__(self, *, eligible: list[str], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._eligible = list(eligible)
+
+    def _option_names(self) -> list[str]:
+        names = list(self._eligible)
+        value = self._loaded_value()
+        if value not in (None, "") and str(value) not in names:
+            names.append(str(value))
+        return names
+
+    def _compose_control(self):
+        value = self._loaded_value()
+        current = None if value in (None, "") else str(value)
+        yield Select(
+            [(name, name) for name in self._option_names()],
+            value=current if current is not None else Select.BLANK,
+            allow_blank=True,
+            id=f"input-{self.slug}",
+            classes="field-select",
+        )
+
+    def _select(self) -> Select:
+        return self.query_one(f"#input-{self.slug}", Select)
+
+    def current_value(self) -> str | None:
+        value = self._select().value
+        if value is Select.BLANK:
+            return None
+        return str(value)
+
+    def _current_key(self) -> Any:
+        return self.current_value()
+
+    def commit(self) -> None:
+        if not self.is_dirty():
+            return
+        value = self.current_value()
+        if value is None:
+            self.document.reset(self.field_path)
+        else:
+            self.document.set(self.field_path, value)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != f"input-{self.slug}":
+            return
+        event.stop()
+        self._notify_changed()
+
+
 __all__ = [
     "dom_slug",
     "EditableField",
@@ -1287,4 +1454,6 @@ __all__ = [
     "AwsReferenceField",
     "AwsSubnetListField",
     "OptionalSelectField",
+    "OptionalIntegerField",
+    "ServiceSelectField",
 ]

@@ -43,7 +43,13 @@ SECTION_LABELS: dict[Section, str] = {
 # Sections with a functional editor. Everything else renders a placeholder; the
 # set grows in later tickets without changing this interface.
 IMPLEMENTED_SECTIONS: frozenset[Section] = frozenset(
-    {Section.PROJECT, Section.NETWORK, Section.SERVICES, Section.DATABASE}
+    {
+        Section.PROJECT,
+        Section.NETWORK,
+        Section.SERVICES,
+        Section.ROUTING,
+        Section.DATABASE,
+    }
 )
 
 

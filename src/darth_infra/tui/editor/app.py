@@ -37,6 +37,7 @@ from .navigation import (
 from .aws_discovery import AwsDiscovery, OfflineAwsDiscovery
 from .database import DatabaseSection
 from .network import NetworkSection
+from .routing import RoutingSection
 from .sections import PlaceholderSection, ProjectSection
 from .services import ServicesSection
 from .theme import CONTROL_ROOM_THEME, THEME_NAME
@@ -433,6 +434,8 @@ class ConfigEditorApp(App[None]):
             widget = NetworkSection(self._document, self._discovery)
         elif section is Section.SERVICES:
             widget = ServicesSection(self._document)
+        elif section is Section.ROUTING:
+            widget = RoutingSection(self._document)
         elif section is Section.DATABASE:
             widget = DatabaseSection(self._document)
         else:
@@ -467,6 +470,19 @@ class ConfigEditorApp(App[None]):
         event.stop()
         if self._handle_save():
             self._suggest_next_section()
+
+    def on_routing_section_save_continue_requested(
+        self, event: RoutingSection.SaveContinueRequested
+    ) -> None:
+        event.stop()
+        if self._handle_save():
+            self._suggest_next_section()
+
+    def on_routing_section_navigate_to_network_requested(
+        self, event: RoutingSection.NavigateToNetworkRequested
+    ) -> None:
+        event.stop()
+        self.run_worker(self._show_section(Section.NETWORK))
 
     def on_database_section_save_continue_requested(
         self, event: DatabaseSection.SaveContinueRequested
