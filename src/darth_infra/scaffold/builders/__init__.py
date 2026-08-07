@@ -51,6 +51,12 @@ class _LegacySecurityGroupEgress(ec2.SecurityGroupEgress):
         return
 
 
+class _TaggableListener(elasticloadbalancingv2.Listener):
+    # CloudFormation accepts Tags on AWS::ElasticLoadBalancingV2::Listener, but
+    # troposphere 4.10.2 (latest) omits it from props, which silently drops them.
+    props = {**elasticloadbalancingv2.Listener.props, "Tags": (Tags, False)}
+
+
 def _resource_tags(context: RenderContext) -> Tags:
     return Tags(
         Tag("Project", Ref("ProjectName")),
@@ -1301,7 +1307,7 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
             Tags=_resource_tags(context),
         )
     )
-    http_listener = elasticloadbalancingv2.Listener(
+    http_listener = _TaggableListener(
         "DedicatedAlbHttpListener",
         Condition="UseDedicatedAlb",
         DefaultActions=[
@@ -1328,9 +1334,10 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
         LoadBalancerArn=Ref(dedicated_alb),
         Port=80,
         Protocol="HTTP",
+        Tags=_resource_tags(context),
     )
     root.add_resource(http_listener)
-    https_listener = elasticloadbalancingv2.Listener(
+    https_listener = _TaggableListener(
         "DedicatedAlbHttpsListener",
         Condition="UseDedicatedAlbWithCert",
         Certificates=[
@@ -1351,6 +1358,7 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
         LoadBalancerArn=Ref(dedicated_alb),
         Port=443,
         Protocol="HTTPS",
+        Tags=_resource_tags(context),
     )
     root.add_resource(https_listener)
 

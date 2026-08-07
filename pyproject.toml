@@ -33,5 +33,5 @@ packages = ["src/darth_infra"]
 
 [dependency-groups]
 dev = [
-    "cfn-lint>=1.53.0",
+    "cfn-lint>=1.54.0",
 ]

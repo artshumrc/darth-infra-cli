@@ -876,3 +876,19 @@ def test_builder_ec2_service_template_passes_cfn_lint(tmp_path: Path) -> None:
     ]
 
     assert_template_passes_cfn_lint(service, tmp_path / "worker-ec2.yaml")
+
+
+def test_builders_dedicated_alb_listeners_carry_project_tags() -> None:
+    # Regression: troposphere 4.10.2 omits Tags from Listener.props, which
+    # silently dropped project/environment tags from both dedicated-ALB
+    # listeners. CloudFormation does accept Tags there.
+    root = template_to_dict(
+        build_project_templates(_dedicated_alb_config())[
+            "templates/generated/root.yaml"
+        ]
+    )
+
+    for logical_id in ("DedicatedAlbHttpListener", "DedicatedAlbHttpsListener"):
+        assert (
+            root["Resources"][logical_id]["Properties"]["Tags"] == _expected_tags()
+        ), f"{logical_id} lost its resource tags"

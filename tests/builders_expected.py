@@ -2187,6 +2187,50 @@ DEDICATED_ALB_ROOT = {
                 "LoadBalancerArn": {"Ref": "DedicatedAlb"},
                 "Port": 80,
                 "Protocol": "HTTP",
+                "Tags": [
+                    {"Key": "Project", "Value": {"Ref": "ProjectName"}},
+                    {"Key": "Environment", "Value": {"Ref": "EnvironmentName"}},
+                    {
+                        "Fn::If": [
+                            "HasExtraTagEnvironmentType",
+                            {
+                                "Key": "environment-type",
+                                "Value": {"Ref": "ExtraTagEnvironmentType"},
+                            },
+                            {"Ref": "AWS::NoValue"},
+                        ]
+                    },
+                    {
+                        "Fn::If": [
+                            "HasExtraTagEphemeralCleanupId",
+                            {
+                                "Key": "ephemeral-cleanup-id",
+                                "Value": {"Ref": "ExtraTagEphemeralCleanupId"},
+                            },
+                            {"Ref": "AWS::NoValue"},
+                        ]
+                    },
+                    {
+                        "Fn::If": [
+                            "HasExtraTagPreviewBaseEnvironment",
+                            {
+                                "Key": "preview-base-environment",
+                                "Value": {"Ref": "ExtraTagPreviewBaseEnvironment"},
+                            },
+                            {"Ref": "AWS::NoValue"},
+                        ]
+                    },
+                    {
+                        "Fn::If": [
+                            "HasExtraTagPullRequest",
+                            {
+                                "Key": "pull-request",
+                                "Value": {"Ref": "ExtraTagPullRequest"},
+                            },
+                            {"Ref": "AWS::NoValue"},
+                        ]
+                    },
+                ],
             },
             "Type": "AWS::ElasticLoadBalancingV2::Listener",
             "Condition": "UseDedicatedAlb",
@@ -2207,6 +2251,50 @@ DEDICATED_ALB_ROOT = {
                 "LoadBalancerArn": {"Ref": "DedicatedAlb"},
                 "Port": 443,
                 "Protocol": "HTTPS",
+                "Tags": [
+                    {"Key": "Project", "Value": {"Ref": "ProjectName"}},
+                    {"Key": "Environment", "Value": {"Ref": "EnvironmentName"}},
+                    {
+                        "Fn::If": [
+                            "HasExtraTagEnvironmentType",
+                            {
+                                "Key": "environment-type",
+                                "Value": {"Ref": "ExtraTagEnvironmentType"},
+                            },
+                            {"Ref": "AWS::NoValue"},
+                        ]
+                    },
+                    {
+                        "Fn::If": [
+                            "HasExtraTagEphemeralCleanupId",
+                            {
+                                "Key": "ephemeral-cleanup-id",
+                                "Value": {"Ref": "ExtraTagEphemeralCleanupId"},
+                            },
+                            {"Ref": "AWS::NoValue"},
+                        ]
+                    },
+                    {
+                        "Fn::If": [
+                            "HasExtraTagPreviewBaseEnvironment",
+                            {
+                                "Key": "preview-base-environment",
+                                "Value": {"Ref": "ExtraTagPreviewBaseEnvironment"},
+                            },
+                            {"Ref": "AWS::NoValue"},
+                        ]
+                    },
+                    {
+                        "Fn::If": [
+                            "HasExtraTagPullRequest",
+                            {
+                                "Key": "pull-request",
+                                "Value": {"Ref": "ExtraTagPullRequest"},
+                            },
+                            {"Ref": "AWS::NoValue"},
+                        ]
+                    },
+                ],
             },
             "Type": "AWS::ElasticLoadBalancingV2::Listener",
             "Condition": "UseDedicatedAlbWithCert",
@@ -2383,6 +2471,50 @@ DEDICATED_ALB_NOCERT = {
             "LoadBalancerArn": {"Ref": "DedicatedAlb"},
             "Port": 80,
             "Protocol": "HTTP",
+            "Tags": [
+                {"Key": "Project", "Value": {"Ref": "ProjectName"}},
+                {"Key": "Environment", "Value": {"Ref": "EnvironmentName"}},
+                {
+                    "Fn::If": [
+                        "HasExtraTagEnvironmentType",
+                        {
+                            "Key": "environment-type",
+                            "Value": {"Ref": "ExtraTagEnvironmentType"},
+                        },
+                        {"Ref": "AWS::NoValue"},
+                    ]
+                },
+                {
+                    "Fn::If": [
+                        "HasExtraTagEphemeralCleanupId",
+                        {
+                            "Key": "ephemeral-cleanup-id",
+                            "Value": {"Ref": "ExtraTagEphemeralCleanupId"},
+                        },
+                        {"Ref": "AWS::NoValue"},
+                    ]
+                },
+                {
+                    "Fn::If": [
+                        "HasExtraTagPreviewBaseEnvironment",
+                        {
+                            "Key": "preview-base-environment",
+                            "Value": {"Ref": "ExtraTagPreviewBaseEnvironment"},
+                        },
+                        {"Ref": "AWS::NoValue"},
+                    ]
+                },
+                {
+                    "Fn::If": [
+                        "HasExtraTagPullRequest",
+                        {
+                            "Key": "pull-request",
+                            "Value": {"Ref": "ExtraTagPullRequest"},
+                        },
+                        {"Ref": "AWS::NoValue"},
+                    ]
+                },
+            ],
         },
         "Type": "AWS::ElasticLoadBalancingV2::Listener",
         "Condition": "UseDedicatedAlb",
