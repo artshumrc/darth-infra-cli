@@ -963,11 +963,13 @@ class AwsBackedField(EditableField):
             return
         if not result.ok:
             select.set_options([])
+            select.remove_class("picker-visible")
             message = result.failure.message if result.failure else "Lookup failed."
             self._set_discovery_status(f"Lookup failed: {message}", "failure")
             return
         if result.empty:
             select.set_options([])
+            select.remove_class("picker-visible")
             self._set_discovery_status("No matching AWS resources found.", "empty")
             return
         options: list[tuple[str, str]] = []
@@ -975,6 +977,7 @@ class AwsBackedField(EditableField):
             self._records_by_value[record.value] = record
             options.append((record.label, record.value))
         select.set_options(options)
+        select.add_class("picker-visible")
         self._set_discovery_status(
             f"{len(options)} found — choose one to fill the field.", "results"
         )
@@ -1258,16 +1261,19 @@ class AwsSubnetListField(AwsBackedField):
         selection.clear_options()
         self._records_by_value = {}
         if not result.ok:
+            selection.remove_class("picker-visible")
             message = result.failure.message if result.failure else "Lookup failed."
             self._set_discovery_status(f"Lookup failed: {message}", "failure")
             return
         if result.empty:
+            selection.remove_class("picker-visible")
             self._set_discovery_status("No matching AWS resources found.", "empty")
             return
         current = set(self.current_value())
         for record in result.records:
             self._records_by_value[record.value] = record
             selection.add_option((record.label, record.value, record.value in current))
+        selection.add_class("picker-visible")
         self._set_discovery_status(
             f"{len(result.records)} found — tick subnets to use them.", "results"
         )

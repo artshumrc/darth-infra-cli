@@ -130,35 +130,54 @@ class ConfigEditorApp(App[None]):
         width: 100%;
         height: 1fr;
     }
+
+    /* -- navigation rail ------------------------------------------------ */
     #nav-rail {
-        width: 22;
+        width: 24;
         height: 100%;
         border-right: solid $panel;
-        padding: 1 1;
+        padding: 1 1 0 1;
         background: $surface;
     }
     #nav-rail .nav-heading {
         text-style: bold;
-        color: $accent;
+        color: $text-muted;
+        text-align: left;
+        padding: 0 1;
         margin-bottom: 1;
     }
     #nav-rail Button {
         width: 100%;
+        height: 1;
         margin-bottom: 0;
         border: none;
-        height: 1;
+        background: transparent;
+        color: $foreground;
+        text-align: left;
+        content-align: left middle;
+        padding: 0 1;
     }
-    .nav-active {
-        color: $accent;
+    #nav-rail Button:hover {
+        background: $panel;
+        color: $foreground;
+    }
+    #nav-rail Button:focus {
         text-style: bold;
     }
-    .nav-unavailable {
-        color: $text-muted;
+    #nav-rail Button.nav-active {
+        background: $primary 25%;
+        color: $primary;
+        text-style: bold;
     }
+    #nav-rail Button.nav-unavailable {
+        color: $text-muted 60%;
+    }
+
+    /* -- content host --------------------------------------------------- */
     #content-host {
         width: 1fr;
         height: 100%;
-        padding: 1 2;
+        padding: 1 2 0 2;
     }
     .section-content {
         width: 100%;
@@ -166,75 +185,161 @@ class ConfigEditorApp(App[None]):
     }
     .section-title {
         text-style: bold;
-        color: $accent;
+        color: $primary;
+        width: 100%;
+        border-bottom: solid $panel;
         margin-bottom: 1;
     }
     .section-subtitle {
         text-style: bold;
-        margin-bottom: 1;
+        color: $foreground;
+        margin: 1 0;
     }
+
+    /* -- field cards ---------------------------------------------------- */
     .editable-field {
         height: auto;
+        width: 100%;
         margin-bottom: 1;
-        border-left: solid $panel;
         padding: 0 1;
+        border: round $panel;
+        background: $surface;
+    }
+    .editable-field:focus-within {
+        border: round $primary;
+        background: $boost;
     }
     .editable-field.field-invalid {
-        border-left: solid $error;
+        border: round $error;
+    }
+    .editable-field.readonly-field {
+        background: $surface-darken-1;
+        border: round $panel-darken-1;
     }
     .field-label-row {
-        height: auto;
+        height: 1;
         width: 100%;
     }
     .field-label {
         text-style: bold;
+        color: $foreground;
         width: 1fr;
     }
     .field-badge {
         width: auto;
         color: $text-muted;
+        text-align: right;
     }
     .badge-explicit {
-        color: $accent;
+        color: $primary;
+        text-style: bold;
     }
     .badge-default, .badge-readonly {
         color: $text-muted;
     }
     .badge-automatic {
-        color: $accent;
+        color: $primary;
+        text-style: bold;
     }
+
+    /* -- inputs & selects ----------------------------------------------- */
+    .editable-field Input,
+    .nested-detail Input,
+    .md-detail Input {
+        background: $background;
+        border: tall $panel;
+    }
+    .editable-field Input:focus,
+    .nested-detail Input:focus,
+    .md-detail Input:focus {
+        border: tall $primary;
+        background: $surface;
+    }
+    .editable-field Select > SelectCurrent,
+    .nested-detail Select > SelectCurrent {
+        background: $background;
+        border: tall $panel;
+    }
+    .editable-field Select:focus > SelectCurrent,
+    .nested-detail Select:focus > SelectCurrent {
+        border: tall $primary;
+    }
+    Checkbox {
+        border: none;
+        background: transparent;
+        padding: 0;
+    }
+    Checkbox:focus {
+        text-style: bold;
+    }
+
     .aws-control {
         height: auto;
     }
     .mode-row, .aws-actions {
         height: auto;
+        margin-top: 1;
     }
     .aws-select {
         width: 100%;
+        display: none;
+    }
+    .aws-select.picker-visible {
+        display: block;
     }
     .aws-multiselect {
         height: auto;
         max-height: 6;
         border: round $panel;
+        background: $background;
+        display: none;
+    }
+    .aws-multiselect.picker-visible {
+        display: block;
     }
     .aws-status {
         height: auto;
         color: $text-muted;
+        display: none;
     }
     .aws-status.status-loading {
-        color: $accent;
+        color: $primary;
+        display: block;
     }
     .aws-status.status-results {
         color: $success;
+        display: block;
     }
     .aws-status.status-empty {
         color: $warning;
+        display: block;
     }
     .aws-status.status-failure {
         color: $error;
+        display: block;
+    }
+
+    /* -- compact ghost action buttons (Select from AWS / Verify / etc.) - */
+    .aws-actions Button,
+    .mode-toggle {
+        min-width: 0;
+        height: 1;
+        border: none;
+        background: $panel;
+        color: $foreground;
+        margin: 0 1 0 0;
+        padding: 0 1;
+    }
+    .aws-actions Button:hover,
+    .mode-toggle:hover {
+        background: $primary;
+        color: $background;
     }
     .verify-status {
         width: auto;
+        content-align: left middle;
+        height: 1;
+        padding: 0 0 0 1;
     }
     .verify-status.verify-verified {
         color: $success;
@@ -255,6 +360,7 @@ class ConfigEditorApp(App[None]):
     .field-error {
         display: none;
         color: $error;
+        text-style: bold;
         height: auto;
     }
     .field-warning {
@@ -263,21 +369,27 @@ class ConfigEditorApp(App[None]):
         height: auto;
     }
     .readonly-value {
-        color: $text;
+        color: $foreground;
     }
     .kv-list {
         height: auto;
         max-height: 6;
         border: round $panel;
+        background: $background;
     }
     .kv-entry-row, .kv-button-row {
         height: auto;
+        margin-top: 1;
     }
     .kv-key, .kv-value {
         width: 1fr;
     }
-    #save-continue {
-        margin-top: 1;
+    .kv-key {
+        margin-right: 1;
+    }
+    #save-continue, .save-continue {
+        margin: 1 0;
+        min-width: 20;
     }
     #field-help-dialog {
         width: 70;
