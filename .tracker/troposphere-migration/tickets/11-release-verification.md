@@ -48,16 +48,26 @@ every stack reports no changes.
 
 ## Acceptance criteria
 
-- [ ] Running the check against a real deployed stack with an unchanged
+- [x] Running the check against a real deployed stack with an unchanged
       config exits 0 and reports no infrastructure changes.
-      **(Deferred to release manager — needs AWS.)**
-- [ ] Running it against a deliberately modified config (e.g. bump a
+      Confirmed 2026-08-07 on `iiif-cache-ecs-prod`,
+      `bta-infrastructure-ecs-prod` and `bta-infrastructure-ecs-pr-140`
+      (re-run after the listener-tags fix; all exit 0).
+- [x] Running it against a deliberately modified config (e.g. bump a
       container port on a sandbox stack) exits nonzero and names the changed
       resources — proving the check can actually fail.
-      **(Deferred to release manager — needs AWS.)**
-- [ ] Any changesets created by the check are deleted afterward
-      (verify via `aws cloudformation list-change-sets`).
-      **(Deferred to release manager — needs AWS.)**
+      Confirmed 2026-08-07: bumping `caddy.cpu` 256→512 gave exit 1 and
+      exactly `[ServiceCaddy] changed resource TaskDefinition … .Cpu`, with
+      no collateral findings. Config reverted.
+- [x] ~~Any changesets created by the check are deleted afterward~~ — no
+      longer applicable; the gate is a structural comparison and creates no
+      change sets (see finding 3).
+- [x] The gate's prediction verified against reality. The real deploy of
+      `bta-infrastructure-ecs-pr-140` on the new pipeline produced zero
+      CloudFormation events for any leaf resource; all four task definitions
+      stayed at revision `:1` and every physical ID was unchanged. This is
+      what makes the passes on the other stacks meaningful rather than
+      merely unfalsified.
 - [x] The release manager's procedure (command + expected output) is
       written down (epic README section or the changeset entry).
       See `.tracker/troposphere-migration/README.md`.
@@ -82,10 +92,25 @@ every stack reports no changes.
 
 ## Handoff to release manager
 
-The gate now runs read-only (no change sets to clean up), so the original
-"delete leftover change sets" criterion no longer applies. Validated on the
-real bta prod stack (exit 0). The release manager should run it against every
-remaining real stack before publishing.
+The gate now runs read-only against AWS (no change sets to clean up), so the
+original "delete leftover change sets" criterion no longer applies. It does
+rewrite `templates/generated/` in the target project repo, so expect a dirty
+working tree there.
+
+**Fleet status as of 2026-08-07** — see the README's inventory table for the
+full picture. Three of the four managed stacks gate clean (`iiif-cache` prod,
+`bta` prod, `bta` pr-140); `elasticsearch-shared` fails on pre-existing drift
+and is deliberately excluded from this release because its pending secret
+rename would break bta prod as well. `bta` pr-140 was additionally deployed for
+real and then destroyed, exercising both the update and teardown paths.
+
+Two caveats the original procedure missed:
+
+- Preview environments need `--preview-from <base>`; without it the command
+  exits 1 with "Environment not found in darth-infra.toml".
+- A long-unmaintained stack fails the gate for drift reasons unrelated to this
+  migration. Diff a `main` render against a branch render before concluding a
+  failure is a regression.
 
 Procedure (full version in `.tracker/troposphere-migration/README.md`):
 
@@ -133,11 +158,34 @@ old-Jinja vs new-troposphere, plus the deployed stack) found:
    `test_full_featured_cloudfront_service_declares_params_and_env`. After the
    fix, the semantic diff of every bta service template is empty.
 
-2. **Benign, non-blocking.** `DedicatedAlb*Listener` `Tags` removal (ticket 04
-   cfn-lint fix; invisible on bta because prod uses a shared ALB) and
-   `DefaultListenerPriority` moving from a hardcoded `49991` to a `Ref`
-   parameter that `_build_parameters` supplies as `49991` (resolves to the same
-   leaf value — no infra change, only nested-stack churn).
+2. **Partly benign — the listener half was a real regression (CORRECTED
+   2026-08-07, fixed in `0edc5a3`).** `DefaultListenerPriority` moving from a
+   hardcoded `49991` to a `Ref` parameter that `_build_parameters` supplies as
+   `49991` is genuinely benign (resolves to the same leaf value — no infra
+   change, only nested-stack churn).
+
+   The `DedicatedAlb*Listener` `Tags` removal was **not** benign, and calling it
+   a "ticket 04 cfn-lint fix" was wrong. CloudFormation *does* accept `Tags` on
+   `AWS::ElasticLoadBalancingV2::Listener`; the removal was forced by
+   troposphere 4.10.2 omitting `Tags` from `Listener.props`, and the original
+   cfn-lint E3002 that appeared to justify it came from this repo's pinned
+   cfn-lint 1.53.0, whose bundled schema predates AWS adding listener tagging.
+   cfn-lint 1.54.0 accepts it. Both listeners were therefore silently losing
+   `Project`, `Environment` and every configured extra tag — invisible on all
+   four current stacks only because every project uses `alb.mode = "shared"`,
+   which condition-gates the listeners off. Fixed via a `_TaggableListener`
+   subclass; cfn-lint floor raised to `>=1.54.0` (otherwise the repo's own lint
+   test enforces the bug); regression test
+   `test_builders_dedicated_alb_listeners_carry_project_tags`.
+
+   The related `Ec2InstanceProfile` `Tags` removal *is* a real fix and was
+   previously undocumented: `AWS::IAM::InstanceProfile` genuinely does not
+   accept `Tags`, so `main` renders an invalid elasticsearch service template
+   (E3002) and cannot deploy that stack at all.
+
+   Generalization worth carrying forward: troposphere's spec lag fails **closed
+   and silent** for properties, not just resource types — see the ADR
+   consequences section.
 
 3. **Gate rebuilt as a structural comparison (commit `62932a9`; validated on
    real prod, exit 0).** A change-set-based gate cannot verify this cutover:

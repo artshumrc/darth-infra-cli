@@ -15,15 +15,19 @@ minor release. See `SPEC.md` in this directory and
 
 ## Current Status
 
-Overall status: `In Progress` — all implementation tickets (01–10) Completed;
-only ticket 11's real-stack release gate remains, which requires a human with
-AWS credentials.
+Overall status: `In Progress` — all implementation tickets (01–10) Completed.
+Ticket 11's real-stack validation ran on 2026-08-07: three of four managed
+stacks gate clean, one live deploy + destroy was exercised end to end, and one
+real regression (dedicated-ALB listener tags) was found and fixed. Remaining
+before publish: real deploys of `iiif-cache` prod and `bta` prod.
 
-Current ticket: 11 (awaiting human validation — the `--verify-noop` tooling is
-built, unit-tested, and documented; the against-real-stacks run and release
-publish are the remaining human steps).
+`elasticsearch-shared` is excluded from this release — its gate failure is
+6 months of pre-existing drift, and its pending secret rename would break bta
+prod's hardcoded secret ARNs. Tracked separately.
 
-Last updated: 2026-07-14
+Current ticket: 11 (validation substantially done; release publish pending).
+
+Last updated: 2026-08-07
 
 ## Ledger
 
