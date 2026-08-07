@@ -17,10 +17,10 @@ https://docs.docker.com/go/buildx/
 ## Quick Start
 
 ```bash
-# Interactive project setup
-darth-infra tui
+# Create a new project (first-run, guided creation)
+darth-infra init
 
-# Re-run TUI (it auto-rehydrates from darth-infra.toml when present)
+# Edit an existing darth-infra.toml (document-preserving Guided editor)
 darth-infra tui
 
 # Deploy production
@@ -52,16 +52,25 @@ darth-infra destroy --env dev
 
 ## How It Works
 
-1. **`darth-infra tui`** — Interactive Textual editor with validation for `darth-infra.toml`:
+1. **`darth-infra init`** — First-run project creation. It opens the Guided
+   editor in creation mode and, after you confirm in Review, scaffolds a
+   **complete CloudFormation YAML project** that you own and can customize.
+   Use `--non-interactive --config <path>` to scaffold directly from an existing
+   `darth-infra.toml` without launching the editor.
+
+2. **`darth-infra tui`** — Document-preserving Guided editor for an existing
+   `darth-infra.toml`. Every user-authored setting is editable across nine
+   sections (Project, Network, Services, Routing, Database, Storage, Secrets,
+   Environments, Review). Saves preserve your comments, ordering, and formatting;
+   editing is non-linear (save one field from any section) and never scaffolds,
+   renders, or deploys. It configures:
    - Project name, region, VPC
    - ECS services (name, Dockerfile, port)
    - Optional RDS PostgreSQL database
    - Optional S3 buckets (with optional CloudFront)
-  - Shared ALB and cluster routing
-  - Optional CloudFront distribution in front of ALB with allowlisted cached paths
+   - Shared or dedicated ALB and cluster routing
+   - Optional CloudFront distribution in front of ALB with allowlisted cached paths
    - Secrets management (auto-generated or from env vars)
-
-2. The TUI scaffolds a **complete CloudFormation YAML project** that you own and can customize.
 
 3. **`darth-infra deploy --env <name>`** deploys via CloudFormation change sets. Prod must be deployed first.
 
@@ -87,13 +96,13 @@ darth-infra destroy --env dev
    - Generate new secrets
    - Get environment-prefixed subdomains (e.g., `dev.myapp.example.com`)
 
-The interactive wizard rehydrates from `darth-infra.toml` when present.
-On quit/cancel, if confirmed wizard values differ from an existing `darth-infra.toml`,
-you are prompted to save or disregard those changes.
+`darth-infra tui` opens the existing `darth-infra.toml` directly and edits it in
+place. Saving is explicit (Ctrl+S), and quitting with unsaved changes prompts you
+to save, discard, or cancel.
 
 ## Configuration
 
-The `darth-infra.toml` file is the source of truth and seed source for the wizard. Example:
+The `darth-infra.toml` file is the source of truth. Example:
 
 ```toml
 [project]

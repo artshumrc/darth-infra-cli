@@ -11,6 +11,7 @@ from darth_infra.cli.cfn import (
     _resolve_rds_snapshot,
 )
 from darth_infra.cli.helpers import resolve_environment_config
+from darth_infra.config.document import ProjectDocument
 from darth_infra.config.loader import dump_config, load_config
 from darth_infra.config.models import (
     ActivePreviewEnvironment,
@@ -27,9 +28,7 @@ from darth_infra.config.models import (
     ServiceDiscoveryConfig,
     ServiceConfig,
 )
-from darth_infra.scaffold.generator import generate_project
-from darth_infra.tui.screens.review import build_config_from_state
-from darth_infra.tui.wizard_export import project_config_to_wizard_state
+from darth_infra.scaffold.builders import build_project_templates
 
 
 def _config() -> ProjectConfig:
@@ -91,6 +90,57 @@ class _FakeElbv2Rules:
     def get_paginator(self, name: str) -> _RulePaginator:
         assert name == "describe_rules"
         return _RulePaginator(self.rules)
+
+
+def test_listener_arn_derived_from_rule_arn() -> None:
+    from darth_infra.cli.cfn import _listener_arn_from_rule_arn
+
+    rule = (
+        "arn:aws:elasticloadbalancing:us-east-1:407196791491:"
+        "listener-rule/app/global-prod/6f88af06/acb5c24f/b7d3f009"
+    )
+    assert _listener_arn_from_rule_arn(rule) == (
+        "arn:aws:elasticloadbalancing:us-east-1:407196791491:"
+        "listener/app/global-prod/6f88af06/acb5c24f"
+    )
+    assert _listener_arn_from_rule_arn("not-a-rule-arn") == ""
+
+
+def test_stack_owned_priority_detected_when_describe_rules_omits_listener_arn(
+    monkeypatch,
+) -> None:
+    """Regression: describe_rules(RuleArns=...) does not return a ListenerArn
+    field, so filtering rules on rule["ListenerArn"] dropped every stack-owned
+    rule, causing the deploy to reassign existing priorities (e.g. 49991 -> 1)
+    on every deploy. The listener must be derived from the rule's own ARN."""
+    from darth_infra.cli import cfn
+
+    listener = (
+        "arn:aws:elasticloadbalancing:us-east-1:1:listener/app/lb/lbid/lsid"
+    )
+    rule_arn = (
+        "arn:aws:elasticloadbalancing:us-east-1:1:"
+        "listener-rule/app/lb/lbid/lsid/ruleid"
+    )
+
+    monkeypatch.setattr(
+        cfn,
+        "_list_listener_rule_resources_for_stack",
+        lambda cf, stack, visited=None: [("DefaultHostHeaderRule", rule_arn)],
+    )
+    monkeypatch.setattr(cfn.boto3, "client", lambda *a, **k: object())
+
+    class _FakeElb:
+        def describe_rules(self, *, RuleArns):
+            # Mirror real AWS: no ListenerArn key on each rule.
+            return {"Rules": [{"RuleArn": RuleArns[0], "Priority": "49991"}]}
+
+    config = ProjectConfig(project_name="demo", services=[ServiceConfig(name="web")])
+    result = cfn._resolve_stack_owned_listener_rule_priorities_by_label(
+        config, "prod", listener, _FakeElb()
+    )
+
+    assert result == {"default": 49991}
 
 
 def test_preview_config_load_and_dump_roundtrip(tmp_path: Path) -> None:
@@ -314,9 +364,19 @@ def test_listener_priority_resolution_rejects_configured_duplicates() -> None:
         )
 
 
-def test_tui_roundtrips_preview_config() -> None:
-    state = project_config_to_wizard_state(_config())
-    rebuilt = build_config_from_state(state)
+def test_preview_config_roundtrips_through_document(tmp_path: Path) -> None:
+    """Preview config survives a document-preserving load/save round-trip.
+
+    This replaces the old wizard-state round-trip: the Guided editor preserves
+    the TOML document rather than reconstructing config from mutable state, so
+    an unedited save must reproduce the same effective preview configuration.
+    """
+    path = tmp_path / "darth-infra.toml"
+    path.write_text(dump_config(_config()))
+
+    document = ProjectDocument.load(path)
+    document.save()
+    rebuilt = load_config(path)
 
     assert rebuilt.preview_environments.enabled is True
     assert rebuilt.preview_environments.domain_template == "pr-{number}.bta.darthcrimson.org"
@@ -348,20 +408,29 @@ def test_preview_service_discovery_names_are_isolated(tmp_path: Path) -> None:
     )
 
     preview_config = resolve_environment_config(config, "pr-123", "prod")
-    output_dir = generate_project(preview_config, tmp_path / "out")
+    templates = build_project_templates(preview_config)
+    django_service = templates[
+        "templates/generated/services/django.yaml"
+    ].to_dict()
+    sveltekit_service = templates[
+        "templates/generated/services/sveltekit.yaml"
+    ].to_dict()
+    root = templates["templates/generated/root.yaml"].to_dict()
 
-    django_service = (
-        output_dir / "templates" / "generated" / "services" / "django.yaml"
-    ).read_text()
-    sveltekit_service = (
-        output_dir / "templates" / "generated" / "services" / "sveltekit.yaml"
-    ).read_text()
-    root = (output_dir / "templates" / "generated" / "root.yaml").read_text()
-
-    assert "Name: django" in django_service
-    assert "Name: django-pr-123" not in django_service
-    assert "Name: !Sub '${ProjectName}-${EnvironmentName}.local'" in root
-    assert "Value: 'http://django.demo-pr-123.local:8000'" in sveltekit_service
+    assert (
+        django_service["Resources"]["CloudMapService"]["Properties"]["Name"]
+        == "django"
+    )
+    assert root["Resources"]["ServiceNamespace"]["Properties"]["Name"] == {
+        "Fn::Sub": "${ProjectName}-${EnvironmentName}.local"
+    }
+    sveltekit_environment = sveltekit_service["Resources"]["TaskDefinition"][
+        "Properties"
+    ]["ContainerDefinitions"][0]["Environment"]
+    assert {
+        "Name": "DJANGO_INTERNAL_URL",
+        "Value": "http://django.demo-pr-123.local:8000",
+    } in sveltekit_environment
 
 
 def test_preview_s3_overlay_renders_fallback_parameters_and_permissions(
@@ -394,23 +463,35 @@ def test_preview_s3_overlay_renders_fallback_parameters_and_permissions(
     )
 
     preview_config = resolve_environment_config(config, "pr-123", "prod")
-    output_dir = generate_project(preview_config, tmp_path / "out")
-    root = (output_dir / "templates" / "generated" / "root.yaml").read_text()
-    service = (
-        output_dir / "templates" / "generated" / "services" / "web.yaml"
-    ).read_text()
+    templates = build_project_templates(preview_config)
+    root = templates["templates/generated/root.yaml"].to_dict()
+    service = templates["templates/generated/services/web.yaml"].to_dict()
 
-    assert "        FallbackBucketNameMedia: 'prod-media'" in root
-    assert "        FallbackBucketArnMedia: !Sub 'arn:aws:s3:::prod-media'" in root
-    assert "AWS_STORAGE_FALLBACK_BUCKET_NAME" in service
-    assert "Value: !Ref FallbackBucketNameMedia" in service
-    fallback_statement = service.split("- !Ref FallbackBucketArnMedia", 1)[0].rsplit(
-        "- Effect: Allow", 1
-    )[1]
-    assert "s3:GetObject" in fallback_statement
-    assert "s3:ListBucket" in fallback_statement
-    assert "s3:PutObject" not in fallback_statement
-    assert "s3:DeleteObject" not in fallback_statement
+    service_parameters = root["Resources"]["ServiceWeb"]["Properties"][
+        "Parameters"
+    ]
+    assert service_parameters["FallbackBucketNameMedia"] == "prod-media"
+    assert service_parameters["FallbackBucketArnMedia"] == {
+        "Fn::Sub": "arn:aws:s3:::prod-media"
+    }
+    environment = service["Resources"]["TaskDefinition"]["Properties"][
+        "ContainerDefinitions"
+    ][0]["Environment"]
+    assert {
+        "Name": "AWS_STORAGE_FALLBACK_BUCKET_NAME",
+        "Value": {"Ref": "FallbackBucketNameMedia"},
+    } in environment
+    s3_policy = next(
+        policy
+        for policy in service["Resources"]["TaskRole"]["Properties"]["Policies"]
+        if policy["PolicyName"] == "S3Access"
+    )
+    fallback_statement = next(
+        statement
+        for statement in s3_policy["PolicyDocument"]["Statement"]
+        if {"Ref": "FallbackBucketArnMedia"} in statement["Resource"]
+    )
+    assert fallback_statement["Action"] == ["s3:GetObject", "s3:ListBucket"]
 
 
 def test_preview_s3_overlay_derives_fallback_bucket_from_base_environment(
@@ -441,16 +522,25 @@ def test_preview_s3_overlay_derives_fallback_bucket_from_base_environment(
     )
 
     preview_config = resolve_environment_config(config, "pr-123", "prod")
-    output_dir = generate_project(preview_config, tmp_path / "out")
-    root = (output_dir / "templates" / "generated" / "root.yaml").read_text()
-    service = (
-        output_dir / "templates" / "generated" / "services" / "web.yaml"
-    ).read_text()
+    templates = build_project_templates(preview_config)
+    root = templates["templates/generated/root.yaml"].to_dict()
+    service = templates["templates/generated/services/web.yaml"].to_dict()
 
     assert preview_config.s3_buckets[0].preview_fallback_bucket_name == "demo-prod-media"
-    assert "        FallbackBucketNameMedia: 'demo-prod-media'" in root
-    assert "        FallbackBucketArnMedia: !Sub 'arn:aws:s3:::demo-prod-media'" in root
-    assert "AWS_STORAGE_FALLBACK_BUCKET_NAME" in service
+    service_parameters = root["Resources"]["ServiceWeb"]["Properties"][
+        "Parameters"
+    ]
+    assert service_parameters["FallbackBucketNameMedia"] == "demo-prod-media"
+    assert service_parameters["FallbackBucketArnMedia"] == {
+        "Fn::Sub": "arn:aws:s3:::demo-prod-media"
+    }
+    environment = service["Resources"]["TaskDefinition"]["Properties"][
+        "ContainerDefinitions"
+    ][0]["Environment"]
+    assert any(
+        entry["Name"] == "AWS_STORAGE_FALLBACK_BUCKET_NAME"
+        for entry in environment
+    )
 
 
 def test_existing_preview_reuses_original_rds_snapshot(monkeypatch) -> None:

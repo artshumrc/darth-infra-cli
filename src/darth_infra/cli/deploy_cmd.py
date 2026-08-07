@@ -15,7 +15,8 @@ from .cfn import (
     package_template,
     resolve_lookup_data,
     run_seed_copy_tasks,
-    validate_rendered_deploy_templates,
+    validate_built_deploy_templates,
+    verify_noop_structural,
 )
 from .helpers import (
     console,
@@ -27,6 +28,7 @@ from .helpers import (
 )
 from .image_ops import build_images, push_images, select_internal_services
 from .version_floor import bump_cli_version_floor
+from ..scaffold.builders import build_project_templates
 from ..scaffold.generator import generate_project
 
 
@@ -47,6 +49,17 @@ from ..scaffold.generator import generate_project
     "--changeset-name",
     default=None,
     help="Optional explicit change set name.",
+)
+@click.option(
+    "--verify-noop",
+    is_flag=True,
+    default=False,
+    help=(
+        "Release gate: render templates, create a CloudFormation change set "
+        "without executing it, report whether any infrastructure changes would "
+        "occur, then delete the change set. Exit 0 only when there are no "
+        "changes; nonzero (with the changed resources listed) otherwise."
+    ),
 )
 @click.option(
     "--with-images",
@@ -73,6 +86,7 @@ def deploy(
     with_images: bool,
     cancel_update: bool,
     preview_from: str | None,
+    verify_noop: bool,
 ) -> None:
     """Deploy the CloudFormation stack for a given environment."""
     loaded_config, project_dir = require_config()
@@ -81,6 +95,12 @@ def deploy(
     if cancel_update and (no_execute or with_images or changeset_name is not None):
         console.print(
             "[red]--cancel cannot be combined with --no-execute, --with-images, or --changeset-name.[/red]"
+        )
+        raise SystemExit(1)
+
+    if verify_noop and (cancel_update or with_images or no_execute):
+        console.print(
+            "[red]--verify-noop cannot be combined with --cancel, --with-images, or --no-execute.[/red]"
         )
         raise SystemExit(1)
 
@@ -104,10 +124,16 @@ def deploy(
         console.print("[red]--with-images cannot be combined with --no-execute.[/red]")
         raise SystemExit(1)
 
-    console.print(
-        f"[bold]Deploying [cyan]{config.project_name}[/cyan] "
-        f"environment [cyan]{env_name}[/cyan]...[/bold]"
-    )
+    if verify_noop:
+        console.print(
+            f"[bold]Verifying no-op deploy for [cyan]{config.project_name}[/cyan] "
+            f"environment [cyan]{env_name}[/cyan]...[/bold]"
+        )
+    else:
+        console.print(
+            f"[bold]Deploying [cyan]{config.project_name}[/cyan] "
+            f"environment [cyan]{env_name}[/cyan]...[/bold]"
+        )
 
     try:
         if with_images:
@@ -119,20 +145,41 @@ def deploy(
         generate_project(config, project_dir, write_config=False)
 
         lookups = resolve_lookup_data(config, env_name)
-        validate_rendered_deploy_templates(project_dir, config, env_name, lookups)
-        bucket = ensure_artifact_bucket(config)
-        packaged_template = package_template(project_dir, config, env_name, bucket)
-        rc = deploy_changeset(
-            config,
-            env_name,
-            packaged_template,
-            lookups,
-            no_execute=no_execute,
-            changeset_name=changeset_name,
+        validate_built_deploy_templates(
+            build_project_templates(config), config, env_name, lookups
         )
+
+        if verify_noop:
+            # Read-only structural comparison of deployed vs freshly-built
+            # templates — no packaging, no change set. This avoids CloudFormation's
+            # conservative false positives on nested-stack updates.
+            rc = verify_noop_structural(config, env_name, lookups)
+        else:
+            bucket = ensure_artifact_bucket(config)
+            packaged_template = package_template(project_dir, config, env_name, bucket)
+            rc = deploy_changeset(
+                config,
+                env_name,
+                packaged_template,
+                lookups,
+                no_execute=no_execute,
+                changeset_name=changeset_name,
+            )
     except Exception as exc:
         console.print(f"[red]Deploy setup failed: {exc}[/red]")
         raise SystemExit(1)
+
+    if verify_noop:
+        if rc == 0:
+            console.print(
+                f"[green]✓ No-op verification passed for {env_name}.[/green]"
+            )
+        else:
+            console.print(
+                f"[red]✗ No-op verification failed for {env_name}: "
+                f"infrastructure changes detected (see above).[/red]"
+            )
+        raise SystemExit(rc)
 
     if rc == 0:
         bump_cli_version_floor(project_dir)
@@ -174,7 +221,12 @@ def _prepare_images_for_deploy(config, project_dir, env_name: str) -> None:
 
         generate_project(bootstrap_config, project_dir, write_config=False)
         lookups = resolve_lookup_data(config, env_name)
-        validate_rendered_deploy_templates(project_dir, bootstrap_config, env_name, lookups)
+        validate_built_deploy_templates(
+            build_project_templates(bootstrap_config),
+            bootstrap_config,
+            env_name,
+            lookups,
+        )
         bucket = ensure_artifact_bucket(config)
         packaged_template = package_template(project_dir, config, env_name, bucket)
         bootstrap_rc = deploy_changeset(

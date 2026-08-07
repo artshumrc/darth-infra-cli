@@ -3,6 +3,7 @@
 import click
 
 from .init_cmd import init_cmd
+from .tui_cmd import tui_cmd
 from .deploy_cmd import deploy
 from .build_cmd import build
 from .push_cmd import push
@@ -21,7 +22,8 @@ def cli() -> None:
     """darth-infra — Deploy websites to AWS ECS with multi-environment support."""
 
 
-cli.add_command(init_cmd, name="tui")
+cli.add_command(tui_cmd, name="tui")
+cli.add_command(init_cmd, name="init")
 cli.add_command(deploy)
 cli.add_command(build)
 cli.add_command(push)

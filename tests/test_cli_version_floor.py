@@ -8,8 +8,6 @@ from darth_infra.cli import version_floor
 from darth_infra.cli.helpers import require_config
 from darth_infra.config.loader import CONFIG_FILENAME, dump_config, load_config
 from darth_infra.config.models import ProjectConfig, ServiceConfig
-from darth_infra.tui.screens.review import build_config_from_state
-from darth_infra.tui.wizard_export import project_config_to_wizard_state
 
 
 def _config(version: str | None = None) -> ProjectConfig:
@@ -99,13 +97,3 @@ def test_require_config_enforces_cli_version_floor(
 
     with pytest.raises(click.ClickException):
         require_config()
-
-
-def test_tui_roundtrip_preserves_cli_version_floor() -> None:
-    config = _config("1.2.3")
-
-    state = project_config_to_wizard_state(config)
-    rebuilt = build_config_from_state(state)
-
-    assert state["cli_version_floor"] == "1.2.3"
-    assert rebuilt.cli_version_floor == "1.2.3"

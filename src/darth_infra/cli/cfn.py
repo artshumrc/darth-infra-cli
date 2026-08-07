@@ -243,52 +243,133 @@ def _validate_resolved_lookup_data(
             raise RuntimeError("Preview DNS requires a resolved Route53 hosted zone id")
 
 
-def validate_rendered_deploy_templates(
-    project_dir: Path,
+_RDS_SECRET_KEY_BY_ENV = {
+    "DATABASE_HOST": "host",
+    "DATABASE_PORT": "port",
+    "DATABASE_DB": "dbname",
+    "DATABASE_USER": "username",
+    "DATABASE_PASSWORD": "password",
+    "POSTGRES_HOST": "host",
+    "POSTGRES_PORT": "port",
+    "POSTGRES_DB": "dbname",
+    "POSTGRES_USER": "username",
+    "POSTGRES_PASSWORD": "password",
+}
+
+_ROOT_TEMPLATE_KEY = "templates/generated/root.yaml"
+
+
+def _find_policy_document(resources: dict, role_id: str, policy_name: str):
+    """Return the PolicyDocument dict for ``policy_name`` on ``role_id``, or None."""
+    role = resources.get(role_id)
+    if not role:
+        return None
+    for policy in role.get("Properties", {}).get("Policies", []) or []:
+        if policy.get("PolicyName") == policy_name:
+            return policy.get("PolicyDocument", {})
+    return None
+
+
+def _policy_actions(policy_document: dict) -> set[str]:
+    """Flatten every Action across every statement of a policy document."""
+    actions: set[str] = set()
+    for statement in (policy_document or {}).get("Statement", []) or []:
+        action = statement.get("Action")
+        if isinstance(action, str):
+            actions.add(action)
+        elif isinstance(action, list):
+            actions.update(a for a in action if isinstance(a, str))
+    return actions
+
+
+def _read_secrets_resources(resources: dict) -> list:
+    """Return the Resource list of the TaskExecutionRole ReadSecrets policy."""
+    document = _find_policy_document(resources, "TaskExecutionRole", "ReadSecrets")
+    if document is None:
+        return []
+    statements = document.get("Statement", []) or []
+    if not statements:
+        return []
+    resource = statements[0].get("Resource", [])
+    if isinstance(resource, list):
+        return resource
+    return [resource]
+
+
+def _container_secrets(resources: dict) -> list:
+    """Return the Secrets list of the primary container definition."""
+    task_definition = resources.get("TaskDefinition")
+    if not task_definition:
+        return []
+    containers = (
+        task_definition.get("Properties", {}).get("ContainerDefinitions", []) or []
+    )
+    if not containers:
+        return []
+    return containers[0].get("Secrets", []) or []
+
+
+def _root_stack_parameter_sets(root_resources: dict) -> list[dict]:
+    """Return the Parameters mapping of every nested CloudFormation stack."""
+    parameter_sets: list[dict] = []
+    for resource in root_resources.values():
+        if resource.get("Type") != "AWS::CloudFormation::Stack":
+            continue
+        parameter_sets.append(resource.get("Properties", {}).get("Parameters", {}) or {})
+    return parameter_sets
+
+
+def validate_built_deploy_templates(
+    templates: dict,
     config: ProjectConfig,
     env_name: str,
     lookups: ResolvedLookupData,
 ) -> None:
-    root_template = project_dir / "templates" / "generated" / "root.yaml"
-    if not root_template.is_file():
-        raise FileNotFoundError(f"Missing template file: {root_template}")
+    """Structurally validate built templates before any AWS call.
 
-    root_body = root_template.read_text()
-    service_dir = project_dir / "templates" / "generated" / "services"
+    Inspects the troposphere ``Template`` objects produced by
+    ``build_project_templates`` (via ``Template.to_dict()``) rather than
+    substring-matching rendered YAML. Raises before returning when a required
+    template element is missing, naming the service and the missing element.
+    """
+    root_template = templates.get(_ROOT_TEMPLATE_KEY)
+    if root_template is None:
+        raise FileNotFoundError(f"Missing template: {_ROOT_TEMPLATE_KEY}")
+    root_dict = root_template.to_dict()
+    root_resources = root_dict.get("Resources", {})
+    root_parameter_sets = _root_stack_parameter_sets(root_resources)
+
     secrets_by_name = {sec.name: sec for sec in config.secrets}
-    rds_key_by_env = {
-        "DATABASE_HOST": "host",
-        "DATABASE_PORT": "port",
-        "DATABASE_DB": "dbname",
-        "DATABASE_USER": "username",
-        "DATABASE_PASSWORD": "password",
-        "POSTGRES_HOST": "host",
-        "POSTGRES_PORT": "port",
-        "POSTGRES_DB": "dbname",
-        "POSTGRES_USER": "username",
-        "POSTGRES_PASSWORD": "password",
-    }
 
     for service in config.services:
-        service_template = service_dir / f"{service.name}.yaml"
-        if not service_template.is_file():
-            raise FileNotFoundError(
-                f"Missing service template file: {service_template}"
-            )
-        service_body = service_template.read_text()
+        service_key = f"templates/generated/services/{service.name}.yaml"
+        service_template = templates.get(service_key)
+        if service_template is None:
+            raise FileNotFoundError(f"Missing service template: {service_key}")
+        service_dict = service_template.to_dict()
+        service_resources = service_dict.get("Resources", {})
+        container_secrets = _container_secrets(service_resources)
+        container_secret_names = {
+            secret.get("Name") for secret in container_secrets
+        }
+        exec_role_resources = _read_secrets_resources(service_resources)
 
         if service.enable_ses_send_email:
-            for required_marker in (
-                "PolicyName: SesSendEmail",
-                "- ses:SendEmail",
-                "- ses:SendRawEmail",
-                "- ses:GetSendQuota",
+            document = _find_policy_document(
+                service_resources, "TaskRole", "SesSendEmail"
+            )
+            required_actions = {
+                "ses:SendEmail",
+                "ses:SendRawEmail",
+                "ses:GetSendQuota",
+            }
+            if document is None or not required_actions.issubset(
+                _policy_actions(document)
             ):
-                if required_marker not in service_body:
-                    raise RuntimeError(
-                        f"Preflight validation failed for service '{service.name}': "
-                        "SES task-role policy is missing required permissions"
-                    )
+                raise RuntimeError(
+                    f"Preflight validation failed for service '{service.name}': "
+                    "SES task-role policy is missing required permissions"
+                )
 
         expected_secret_names = list(service.secrets)
         if config.rds and service.name in config.rds.expose_to:
@@ -310,7 +391,7 @@ def validate_rendered_deploy_templates(
                 if (
                     config.rds
                     and service.name in config.rds.expose_to
-                    and secret_name in rds_key_by_env
+                    and secret_name in _RDS_SECRET_KEY_BY_ENV
                 ):
                     source = "rds"
                 else:
@@ -318,17 +399,21 @@ def validate_rendered_deploy_templates(
 
             if source == "rds":
                 expected_sources.add("RdsSecretArn")
-                json_key = rds_key_by_env.get(
+                json_key = _RDS_SECRET_KEY_BY_ENV.get(
                     secret_name,
                     str(secret_cfg.existing_secret_name).strip() if secret_cfg else "",
                 )
-                expected_value = f"ValueFrom: !Sub '${{RdsSecretArn}}:{json_key}::'"
-                if expected_value not in service_body:
+                expected_value_from = {"Fn::Sub": f"${{RdsSecretArn}}:{json_key}::"}
+                if not any(
+                    secret.get("Name") == secret_name
+                    and secret.get("ValueFrom") == expected_value_from
+                    for secret in container_secrets
+                ):
                     raise RuntimeError(
                         f"Preflight validation failed for service '{service.name}': "
                         f"secret '{secret_name}' is missing the expected RDS ValueFrom mapping"
                     )
-                if f"- Name: {secret_name}" not in service_body:
+                if secret_name not in container_secret_names:
                     raise RuntimeError(
                         f"Preflight validation failed for service '{service.name}': "
                         f"secret '{secret_name}' is missing from the ECS task definition"
@@ -336,48 +421,61 @@ def validate_rendered_deploy_templates(
                 continue
 
             param_name = f"SecretArn{_secret_logical_suffix(secret_name)}"
-            if f"- Name: {secret_name}" not in service_body:
+            expected_ref = {"Ref": param_name}
+            if secret_name not in container_secret_names:
                 raise RuntimeError(
                     f"Preflight validation failed for service '{service.name}': "
                     f"secret '{secret_name}' is missing from the ECS task definition"
                 )
-            if f"ValueFrom: !Ref {param_name}" not in service_body:
+            if not any(
+                secret.get("Name") == secret_name
+                and secret.get("ValueFrom") == expected_ref
+                for secret in container_secrets
+            ):
                 raise RuntimeError(
                     f"Preflight validation failed for service '{service.name}': "
                     f"secret '{secret_name}' is missing the expected task ValueFrom reference"
                 )
-            if f"- !Ref {param_name}" not in service_body:
+            if expected_ref not in exec_role_resources:
                 raise RuntimeError(
                     f"Preflight validation failed for service '{service.name}': "
                     f"secret '{secret_name}' is missing from the task execution role policy"
                 )
 
             if source == "generate":
-                expected_root_value = (
-                    f"{param_name}: !Ref Secret{_secret_logical_suffix(secret_name)}"
-                )
+                expected_root_value = {
+                    "Ref": f"Secret{_secret_logical_suffix(secret_name)}"
+                }
             else:
                 expected_arn = lookups.external_secret_arns.get(secret_name, "").strip()
                 if not expected_arn:
                     raise RuntimeError(
                         f"Preflight validation failed: external secret '{secret_name}' did not resolve to an ARN"
                     )
-                expected_root_value = f"{param_name}: !Ref EnvSecretArn{_secret_logical_suffix(secret_name)}"
+                expected_root_value = {
+                    "Ref": f"EnvSecretArn{_secret_logical_suffix(secret_name)}"
+                }
 
-            if expected_root_value not in root_body:
+            if not any(
+                params.get(param_name) == expected_root_value
+                for params in root_parameter_sets
+            ):
                 raise RuntimeError(
                     f"Preflight validation failed for service '{service.name}': "
                     f"secret '{secret_name}' is missing from the root stack nested-service parameters"
                 )
 
         for source_name in sorted(expected_sources):
-            if f"- !Ref {source_name}" not in service_body:
+            if {"Ref": source_name} not in exec_role_resources:
                 raise RuntimeError(
                     f"Preflight validation failed for service '{service.name}': "
                     f"required secret source '{source_name}' is missing from the task execution role policy"
                 )
 
-    if config.rds and "RdsSecretArn: !Ref RdsCredentialsSecret" not in root_body:
+    if config.rds and not any(
+        params.get("RdsSecretArn") == {"Ref": "RdsCredentialsSecret"}
+        for params in root_parameter_sets
+    ):
         raise RuntimeError(
             "Preflight validation failed: root stack is missing the nested RDS secret ARN wiring"
         )
@@ -483,6 +581,13 @@ def deploy_changeset(
     no_execute: bool,
     changeset_name: str | None,
 ) -> int:
+    """Create (and possibly execute) a CloudFormation change set for a stack.
+
+    The read-only no-op release gate is a separate function,
+    ``verify_noop_structural`` — it compares templates structurally rather than
+    relying on a change set, which avoids CloudFormation's conservative false
+    positives on nested-stack updates.
+    """
     cf = boto3.client("cloudformation", region_name=config.aws_region)
     stack_name = f"{config.project_name}-ecs-{env_name}"
 
@@ -528,25 +633,26 @@ def deploy_changeset(
         "StackName": stack_name,
     }
 
-    resp = cf.create_change_set(
-        StackName=stack_name,
-        ChangeSetName=cs_name,
-        ChangeSetType=change_set_type,
-        Description=f"darth-infra deploy {env_name}",
-        TemplateBody=template_body,
-        Capabilities=[
+    create_kwargs: dict[str, object] = {
+        "StackName": stack_name,
+        "ChangeSetName": cs_name,
+        "ChangeSetType": change_set_type,
+        "Description": f"darth-infra deploy {env_name}",
+        "TemplateBody": template_body,
+        "Capabilities": [
             "CAPABILITY_IAM",
             "CAPABILITY_NAMED_IAM",
             "CAPABILITY_AUTO_EXPAND",
         ],
-        Parameters=parameters,
-        Tags=[
+        "Parameters": parameters,
+        "Tags": [
             {"Key": "darth-project", "Value": config.project_name},
             {"Key": "darth-environment", "Value": env_name},
             {"Key": "managed-by", "Value": "darth-infra"},
             {"Key": "deployment-type", "Value": "ecs"},
         ],
-    )
+    }
+    resp = cf.create_change_set(**create_kwargs)
     cs_arn = resp["Id"]
     execute_kwargs["ChangeSetName"] = cs_arn
 
@@ -573,6 +679,7 @@ def deploy_changeset(
         return 1
 
     console.print(f"[bold]Change set:[/bold] [cyan]{cs_name}[/cyan]")
+
     if changes:
         for c in changes:
             rc = c.get("ResourceChange", {})
@@ -2567,6 +2674,23 @@ def _resolve_stack_owned_listener_rule_priorities(
     )
 
 
+def _listener_arn_from_rule_arn(rule_arn: str) -> str:
+    """Derive the listener ARN a listener-rule belongs to from the rule's ARN.
+
+    A rule ARN
+    ``…:listener-rule/app/<lb>/<lb-id>/<listener-id>/<rule-id>`` maps to its
+    listener ``…:listener/app/<lb>/<lb-id>/<listener-id>``. Returns "" if the
+    ARN is not a recognizable listener-rule ARN.
+    """
+    marker = ":listener-rule/"
+    if marker not in rule_arn:
+        return ""
+    prefix, tail = rule_arn.split(marker, 1)
+    # tail: app/<lb>/<lb-id>/<listener-id>/<rule-id> — drop the rule-id segment.
+    listener_tail = tail.rsplit("/", 1)[0]
+    return f"{prefix}:listener/{listener_tail}"
+
+
 def _resolve_stack_owned_listener_rule_priorities_by_label(
     config: ProjectConfig,
     env_name: str,
@@ -2596,9 +2720,11 @@ def _resolve_stack_owned_listener_rule_priorities_by_label(
             continue
 
         for rule in response.get("Rules", []):
+            # describe_rules(RuleArns=...) does not populate a ListenerArn field
+            # on each rule, so derive the listener from the rule's own ARN.
             if (
                 listener_arn
-                and str(rule.get("ListenerArn", "")).strip() != listener_arn
+                and _listener_arn_from_rule_arn(rule_arn) != listener_arn
             ):
                 continue
             priority = rule.get("Priority")
@@ -2876,6 +3002,288 @@ def _stack_owned_service_discovery_namespace_ids(
         == "AWS::ServiceDiscovery::PrivateDnsNamespace"
         and str(resource.get("PhysicalResourceId", "")).strip()
     }
+
+
+def _load_deployed_stack(cf, stack: str) -> tuple[dict, dict[str, str]]:
+    """Fetch a deployed stack's template (as a long-form dict) and its current
+    parameter values."""
+    from cfn_tools import load_yaml
+
+    body = cf.get_template(StackName=stack, TemplateStage="Original")["TemplateBody"]
+    if isinstance(body, str):
+        template = json.loads(json.dumps(load_yaml(body)))
+    else:
+        template = json.loads(json.dumps(body))
+    desc = cf.describe_stacks(StackName=stack)["Stacks"][0]
+    params = {
+        p["ParameterKey"]: p.get("ParameterValue")
+        for p in desc.get("Parameters", [])
+    }
+    return template, params
+
+
+# Sentinel returned by _canon for ``{"Ref": "AWS::NoValue"}`` (and any
+# ``Fn::If`` that resolves to it): the enclosing list/dict must drop the entry
+# entirely, matching CloudFormation's own removal semantics.
+_CANON_NO_VALUE = object()
+
+
+def _canon(value, params: dict, conditions: dict | None = None, memo: dict | None = None) -> object:
+    """Canonicalize a template value for structural comparison: resolve a
+    ``Ref`` to a known scalar parameter value, evaluate ``Fn::If`` against the
+    stack's conditions (dropping ``AWS::NoValue`` branches so condition-gated-off
+    tags/properties disappear the way CloudFormation drops them), coerce scalars
+    to ``str``, and recurse. Refs to non-scalar (e.g. GetAtt-derived) parameters
+    and other intrinsics are kept symbolically."""
+    conditions = conditions or {}
+    memo = memo if memo is not None else {}
+    if isinstance(value, dict):
+        if set(value.keys()) == {"Ref"}:
+            ref = value["Ref"]
+            if ref == "AWS::NoValue":
+                return _CANON_NO_VALUE
+            resolved = params.get(ref)
+            if isinstance(resolved, (str, int, float, bool)):
+                return str(resolved)
+            return {"Ref": ref}
+        if set(value.keys()) == {"Fn::If"} and isinstance(value["Fn::If"], list):
+            cond_name, true_val, false_val = value["Fn::If"]
+            chosen = true_val if _eval_condition(cond_name, conditions, params, memo) else false_val
+            return _canon(chosen, params, conditions, memo)
+        canon: dict = {}
+        for k, v in value.items():
+            cv = _canon(v, params, conditions, memo)
+            if cv is _CANON_NO_VALUE:
+                continue
+            canon[k] = cv
+        return canon
+    if isinstance(value, list):
+        out = []
+        for v in value:
+            cv = _canon(v, params, conditions, memo)
+            if cv is _CANON_NO_VALUE:
+                continue
+            out.append(cv)
+        return out
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)):
+        return str(value)
+    return value
+
+
+def _eval_condition(name: str, conditions: dict, params: dict, memo: dict) -> bool:
+    if name in memo:
+        return memo[name]
+    memo[name] = _eval_cond_expr(conditions.get(name), conditions, params, memo)
+    return memo[name]
+
+
+def _eval_cond_operand(expr, conditions: dict, params: dict, memo: dict):
+    if isinstance(expr, dict):
+        if set(expr.keys()) == {"Ref"}:
+            return params.get(expr["Ref"])
+        if set(expr.keys()) == {"Condition"}:
+            return _eval_condition(expr["Condition"], conditions, params, memo)
+    return expr
+
+
+def _eval_cond_expr(expr, conditions: dict, params: dict, memo: dict) -> bool:
+    if not isinstance(expr, dict) or len(expr) != 1:
+        return bool(expr)
+    (fn, arg), = expr.items()
+    if fn == "Condition":
+        return _eval_condition(arg, conditions, params, memo)
+    if fn == "Fn::Equals":
+        a, b = (
+            _eval_cond_operand(arg[0], conditions, params, memo),
+            _eval_cond_operand(arg[1], conditions, params, memo),
+        )
+        aval = a if isinstance(a, bool) else (None if a is None else str(a))
+        bval = b if isinstance(b, bool) else (None if b is None else str(b))
+        return aval == bval
+    if fn == "Fn::Not":
+        return not _eval_cond_expr(arg[0], conditions, params, memo)
+    if fn == "Fn::And":
+        return all(_eval_cond_expr(item, conditions, params, memo) for item in arg)
+    if fn == "Fn::Or":
+        return any(_eval_cond_expr(item, conditions, params, memo) for item in arg)
+    return False
+
+
+def _resource_active(resource: dict, conditions: dict, params: dict, memo: dict) -> bool:
+    cond = resource.get("Condition")
+    if not cond:
+        return True
+    return _eval_condition(cond, conditions, params, memo)
+
+
+def _resolve_nested_param_values(
+    nested_params: dict, root_params: dict, deployed_child_params: dict
+) -> dict:
+    """Resolve the parameter values a root stack passes to a nested stack.
+
+    ``Ref``s to root parameters resolve to their (scalar) value. Values that
+    stay intrinsic (e.g. ``GetAtt`` of a stable resource) fall back to the
+    deployed child's current value, so an unchanged cross-reference does not
+    read as a change; if the referenced resource were really changing it would
+    surface as its own finding."""
+    resolved: dict[str, object] = {}
+    for key, value in (nested_params or {}).items():
+        if isinstance(value, dict) and set(value.keys()) == {"Ref"} and isinstance(
+            root_params.get(value["Ref"]), (str, int, float, bool)
+        ):
+            resolved[key] = str(root_params[value["Ref"]])
+        elif isinstance(value, (str, int, float, bool)):
+            resolved[key] = str(value)
+        else:
+            resolved[key] = deployed_child_params.get(key, value)
+    return resolved
+
+
+def _diff_stack_resources(
+    label: str,
+    deployed: dict,
+    deployed_params: dict,
+    generated: dict,
+    generated_params: dict,
+) -> list[str]:
+    """Compare deployed vs generated stack resources, condition-aware and with
+    parameter references resolved. Returns human-readable finding lines for
+    real resource differences (empty == no-op for this stack)."""
+    findings: list[str] = []
+    dep_conds = deployed.get("Conditions", {})
+    gen_conds = generated.get("Conditions", {})
+    dep_memo: dict = {}
+    gen_memo: dict = {}
+    dres = deployed.get("Resources", {})
+    gres = generated.get("Resources", {})
+    for lid in sorted(set(dres) | set(gres)):
+        d = dres.get(lid)
+        g = gres.get(lid)
+        d_active = d is not None and _resource_active(d, dep_conds, deployed_params, dep_memo)
+        g_active = g is not None and _resource_active(g, gen_conds, generated_params, gen_memo)
+        if not d_active and not g_active:
+            continue
+        if d_active != g_active:
+            rtype = (g or d).get("Type")
+            verb = "removed" if not g_active else "added"
+            findings.append(f"[{label}] {verb} resource {lid} ({rtype})")
+            continue
+        # Nested stacks: their real contents are compared by recursion, and
+        # TemplateURL/Parameters are plumbing (content hashes + inputs).
+        if g.get("Type") == "AWS::CloudFormation::Stack":
+            continue
+        dp = _canon(d.get("Properties", {}), deployed_params, dep_conds, dep_memo)
+        gp = _canon(g.get("Properties", {}), generated_params, gen_conds, gen_memo)
+        if dp != gp:
+            findings.append(f"[{label}] changed resource {lid} ({g.get('Type')})")
+            for pk in sorted(set(dp) | set(gp)):
+                if dp.get(pk) != gp.get(pk):
+                    findings.append(f"    .{pk}")
+    return findings
+
+
+def verify_noop_structural(
+    config: ProjectConfig,
+    env_name: str,
+    lookups: ResolvedLookupData,
+) -> int:
+    """Structural no-op release gate.
+
+    Compares each deployed stack template (root + nested) against the
+    freshly-built templates, resolving parameter references and evaluating
+    conditions so that deploy-time-looked-up values, packaging artifacts
+    (nested TemplateURL content hashes), and condition-gated-off resources do
+    not register as changes. Read-only. Returns 0 when no real resource change
+    would occur, 1 otherwise."""
+    from ..scaffold.builders import build_project_templates
+
+    cf = boto3.client("cloudformation", region_name=config.aws_region)
+    stack_name = f"{config.project_name}-ecs-{env_name}"
+
+    generated = {
+        path: template.to_dict()
+        for path, template in build_project_templates(config).items()
+    }
+    gen_root = generated["templates/generated/root.yaml"]
+    new_root_params = {
+        p["ParameterKey"]: p["ParameterValue"]
+        for p in _build_parameters(config, env_name, lookups)
+    }
+
+    try:
+        deployed_root, deployed_root_params = _load_deployed_stack(cf, stack_name)
+    except ClientError:
+        console.print(
+            f"[red]Stack '{stack_name}' does not exist or is not readable; "
+            f"cannot verify a no-op deploy.[/red]"
+        )
+        return 1
+
+    findings = _diff_stack_resources(
+        "root", deployed_root, deployed_root_params, gen_root, new_root_params
+    )
+
+    nested_physical: dict[str, str] = {}
+    for page in cf.get_paginator("list_stack_resources").paginate(StackName=stack_name):
+        for res in page["StackResourceSummaries"]:
+            if res["ResourceType"] == "AWS::CloudFormation::Stack":
+                nested_physical[res["LogicalResourceId"]] = res["PhysicalResourceId"]
+
+    gen_memo: dict = {}
+    gen_conds = gen_root.get("Conditions", {})
+    skipped_static: list[str] = []
+    for lid, res in gen_root.get("Resources", {}).items():
+        if res.get("Type") != "AWS::CloudFormation::Stack":
+            continue
+        if not _resource_active(res, gen_conds, new_root_params, gen_memo):
+            continue
+        url = res.get("Properties", {}).get("TemplateURL", "")
+        child_key = "templates/generated/" + url
+        gen_child = generated.get(child_key)
+        if gen_child is None:
+            # e.g. the static custom/overrides.yaml placeholder — not built by
+            # build_project_templates; a fixed WaitConditionHandle placeholder.
+            skipped_static.append(f"{lid} ({url})")
+            continue
+        physical = nested_physical.get(lid)
+        if physical is None:
+            findings.append(f"[root] nested stack {lid} not deployed")
+            continue
+        try:
+            deployed_child, deployed_child_params = _load_deployed_stack(cf, physical)
+        except ClientError:
+            findings.append(f"[{lid}] deployed template not readable")
+            continue
+        child_params = _resolve_nested_param_values(
+            res.get("Properties", {}).get("Parameters", {}),
+            new_root_params,
+            deployed_child_params,
+        )
+        findings += _diff_stack_resources(
+            lid, deployed_child, deployed_child_params, gen_child, child_params
+        )
+
+    if skipped_static:
+        console.print(
+            f"[dim]Skipped {len(skipped_static)} static nested template(s) not "
+            f"built from config: {', '.join(skipped_static)}.[/dim]"
+        )
+    if findings:
+        console.print(
+            f"[red]No-op verification FAILED: {len(findings)} structural "
+            f"change line(s):[/red]"
+        )
+        for line in findings:
+            console.print(f"[red]  {line}[/red]")
+        return 1
+    console.print(
+        "[green]No real infrastructure changes — structural no-op confirmed "
+        "(nested-stack template churn and deploy-time-resolved values "
+        "ignored).[/green]"
+    )
+    return 0
 
 
 def _build_parameters(
