@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.7.4
+
+### Patch Changes
+
+- [`ea664c3`](https://github.com/artshumrc/darth-infra-cli/commit/ea664c39c21ede4c9bc4994cc06492e9e802703a) Thanks [@d-flood](https://github.com/d-flood)! - Resolve ALB listener rule priorities dynamically during deploy and allow preview stack retries from CREATE_FAILED.
+
 ## 0.7.3
 
 ### Patch Changes
