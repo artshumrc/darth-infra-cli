@@ -1,5 +1,15 @@
 # darth-infra
 
+## 0.8.0
+
+### Minor Changes
+
+- [#22](https://github.com/artshumrc/darth-infra-cli/pull/22) [`48bcde7`](https://github.com/artshumrc/darth-infra-cli/commit/48bcde7f3ac2ef5cd0e2097353921c6e39c28acf) Thanks [@d-flood](https://github.com/d-flood)! - Generate CloudFormation templates from a troposphere object pipeline instead of Jinja text templates. On the next render, files under `templates/generated/` will change formatting (key ordering, quoting, whitespace) — this is a one-time cosmetic diff. Deployed stacks are unaffected: an unchanged `darth-infra.toml` changes no real infrastructure, because every logical ID, parameter, and resource property is preserved exactly. Hand-edited `templates/custom/overrides.yaml` is still never overwritten.
+
+  Note that the deploy's change set is _not_ empty on the cutover. Nested child templates are referenced by content-hashed S3 URLs, and troposphere serializes YAML differently, so every nested `AWS::CloudFormation::Stack` shows as `Modify` with a new `TemplateURL` even when nothing inside it changed. Verify with `darth-infra deploy --env <env> --verify-noop`, which compares leaf resources structurally and ignores that wrapper churn.
+
+  Also fixes a tag regression: dedicated-ALB HTTP/HTTPS listeners are tagged again. troposphere 4.10.2 omits `Tags` from its `Listener` spec, which silently dropped them. Only affects projects using `alb.mode = "dedicated"`.
+
 ## 0.7.4
 
 ### Patch Changes
