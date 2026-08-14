@@ -244,6 +244,14 @@ class RdsConfig:
         expose_to: Service names that receive DB connection env vars.
         engine_version: PostgreSQL major version.
         backup_retention_days: Number of days to keep automated backups.
+        initial_snapshot_identifier: RDS snapshot to restore prod from on its
+            first deploy, for adopting a database this CLI did not create. Read
+            only when the prod stack does not yet exist; afterwards the deployed
+            identifier is authoritative.
+        initial_snapshot_credentials_secret: Secrets Manager name or ARN holding
+            the ``username`` and ``password`` of the snapshot's source database.
+            Required alongside ``initial_snapshot_identifier`` because a restored
+            instance keeps the source master credentials.
     """
 
     database_name: str
@@ -252,6 +260,8 @@ class RdsConfig:
     allocated_storage_gb: int = 20
     engine_version: str = "15"
     backup_retention_days: int = 7
+    initial_snapshot_identifier: str | None = None
+    initial_snapshot_credentials_secret: str | None = None
 
 
 @dataclass
@@ -566,6 +576,23 @@ class ProjectConfig:
                     raise ValueError(
                         f"RDS expose_to references unknown service '{svc_name}'"
                     )
+            snapshot = (self.rds.initial_snapshot_identifier or "").strip()
+            snapshot_secret = (
+                self.rds.initial_snapshot_credentials_secret or ""
+            ).strip()
+            if snapshot and not snapshot_secret:
+                raise ValueError(
+                    "RDS initial_snapshot_identifier requires "
+                    "initial_snapshot_credentials_secret: a restored instance keeps "
+                    "the source database's master credentials"
+                )
+            if snapshot_secret and not snapshot:
+                raise ValueError(
+                    "RDS initial_snapshot_credentials_secret requires "
+                    "initial_snapshot_identifier"
+                )
+            self.rds.initial_snapshot_identifier = snapshot or None
+            self.rds.initial_snapshot_credentials_secret = snapshot_secret or None
 
         for override in self.environment_overrides.values():
             if override.instance_type_override:

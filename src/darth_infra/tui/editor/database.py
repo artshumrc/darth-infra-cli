@@ -62,7 +62,12 @@ _RDS_ENV_VARS = (
 )
 
 # Advanced (collapsible) paths owned by this section.
-_ADVANCED_PATHS = ("rds.engine_version", "rds.backup_retention_days")
+_ADVANCED_PATHS = (
+    "rds.engine_version",
+    "rds.backup_retention_days",
+    "rds.initial_snapshot_identifier",
+    "rds.initial_snapshot_credentials_secret",
+)
 
 
 def _help(path: str) -> str:
@@ -200,6 +205,19 @@ class DatabaseSection(VerticalScroll):
                 label="Backup retention (days)",
                 help=_help("rds.backup_retention_days"),
                 default_display="7",
+            ),
+            TextField(
+                field_path="rds.initial_snapshot_identifier",
+                document=self.document,
+                label="Adopt from snapshot (first prod deploy only)",
+                help=_help("rds.initial_snapshot_identifier"),
+                example=_example("rds.initial_snapshot_identifier"),
+            ),
+            TextField(
+                field_path="rds.initial_snapshot_credentials_secret",
+                document=self.document,
+                label="Snapshot source credentials secret",
+                help=_help("rds.initial_snapshot_credentials_secret"),
             ),
         ]
 

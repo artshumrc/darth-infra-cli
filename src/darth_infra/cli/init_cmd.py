@@ -19,6 +19,7 @@ import click
 from rich.console import Console
 
 from ..config.loader import CONFIG_FILENAME, load_config
+from .install_skill_cmd import install_skill_for_new_project
 from .version_floor import apply_current_cli_version_floor, enforce_cli_version_floor
 
 console = Console()
@@ -55,6 +56,12 @@ port = 8000
     help="Skip the editor and scaffold directly from a config file.",
 )
 @click.option(
+    "--no-skill",
+    is_flag=True,
+    default=False,
+    help="Skip installing the darth-infra.toml authoring skill for coding agents.",
+)
+@click.option(
     "--config",
     "config_path",
     type=click.Path(exists=True, path_type=Path),
@@ -64,6 +71,7 @@ port = 8000
 def init_cmd(
     output_dir: Path | None,
     non_interactive: bool,
+    no_skill: bool,
     config_path: Path | None,
 ) -> None:
     """Create a new darth-infra project and scaffold its CloudFormation output."""
@@ -78,6 +86,7 @@ def init_cmd(
         out = output_dir or Path.cwd()
         result = generate_project(config, out)
         console.print(f"[green]Project scaffolded at {result}[/green]")
+        install_skill_for_new_project(out, skip=no_skill)
         return
 
     # Interactive first-run creation via the Guided editor. Creation mode holds
@@ -90,3 +99,4 @@ def init_cmd(
     document = ProjectDocument(out / CONFIG_FILENAME, NEW_PROJECT_TEMPLATE)
     app = ConfigEditorApp(document=document, mode="create", output_dir=out)
     app.run()
+    install_skill_for_new_project(out, skip=no_skill)

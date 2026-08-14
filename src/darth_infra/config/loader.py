@@ -36,6 +36,7 @@ from .models import (
     ServiceConfig,
     UlimitConfig,
 )
+from .schema import ConfigError, format_unknown_keys, unknown_keys
 
 CONFIG_FILENAME = "darth-infra.toml"
 
@@ -75,6 +76,12 @@ def load_config(path: Path | None = None) -> ProjectConfig:
     config_path = path or find_config()
     with open(config_path, "rb") as f:
         raw = tomllib.load(f)
+
+    # Parsing reads known keys and ignores the rest, so an unrecognized key
+    # would otherwise deploy its default without comment.
+    unrecognized = unknown_keys(raw)
+    if unrecognized:
+        raise ConfigError(format_unknown_keys(unrecognized))
 
     return _parse_project(raw)
 
@@ -199,6 +206,10 @@ def _parse_rds(raw: dict[str, Any]) -> RdsConfig:
         expose_to=raw.get("expose_to", []),
         engine_version=raw.get("engine_version", "15"),
         backup_retention_days=raw.get("backup_retention_days", 7),
+        initial_snapshot_identifier=raw.get("initial_snapshot_identifier"),
+        initial_snapshot_credentials_secret=raw.get(
+            "initial_snapshot_credentials_secret"
+        ),
     )
 
 
@@ -468,6 +479,16 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f"expose_to = [{expose_list}]")
         lines.append(f'engine_version = "{config.rds.engine_version}"')
         lines.append(f"backup_retention_days = {config.rds.backup_retention_days}")
+        if config.rds.initial_snapshot_identifier:
+            lines.append(
+                "initial_snapshot_identifier = "
+                f'"{_toml_escape(config.rds.initial_snapshot_identifier)}"'
+            )
+        if config.rds.initial_snapshot_credentials_secret:
+            lines.append(
+                "initial_snapshot_credentials_secret = "
+                f'"{_toml_escape(config.rds.initial_snapshot_credentials_secret)}"'
+            )
         lines.append("")
 
     if config.s3_buckets:

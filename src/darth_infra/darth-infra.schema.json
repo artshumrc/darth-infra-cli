@@ -379,6 +379,22 @@
           "default": 7,
           "minimum": 0,
           "maximum": 35
+        },
+        "initial_snapshot_identifier": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "RDS snapshot to restore prod from on its first deploy, for adopting a database this CLI did not create. Read only while the prod stack does not exist; afterwards the deployed identifier is authoritative.",
+          "default": null
+        },
+        "initial_snapshot_credentials_secret": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Secrets Manager name or ARN holding the username and password of the snapshot's source database. Required alongside initial_snapshot_identifier.",
+          "default": null
         }
       }
     },

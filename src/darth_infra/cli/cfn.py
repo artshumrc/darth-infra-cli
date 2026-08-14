@@ -2804,14 +2804,19 @@ def _list_stack_resource_summaries(cf, stack_name: str) -> list[dict[str, Any]]:
 
 def _get_existing_stack_parameter(
     config: ProjectConfig, env_name: str, parameter_key: str
-) -> str:
+) -> str | None:
+    """Read a deployed stack parameter.
+
+    Returns None when the stack does not exist yet, which callers must
+    distinguish from a deployed-but-empty parameter value.
+    """
     stack_name = f"{config.project_name}-ecs-{env_name}"
     cf = boto3.client("cloudformation", region_name=config.aws_region)
     try:
         stack = cf.describe_stacks(StackName=stack_name)["Stacks"][0]
     except ClientError as exc:
         if _is_missing_stack_error(exc):
-            return ""
+            return None
         raise
 
     for parameter in stack.get("Parameters", []):
@@ -2821,16 +2826,55 @@ def _get_existing_stack_parameter(
 
 
 def _resolve_rds_snapshot(config: ProjectConfig, env_name: str) -> str:
-    if not config.rds or env_name == "prod":
+    if not config.rds:
         return ""
 
-    if config.active_preview and config.active_preview.env_name == env_name:
-        existing_snapshot = _get_existing_stack_parameter(
-            config, env_name, "RdsSnapshotIdentifier"
-        )
-        if existing_snapshot:
-            return existing_snapshot
+    # DBSnapshotIdentifier is sticky in RDS: once an instance has been restored
+    # from a snapshot, every later update must carry the same identifier or
+    # CloudFormation builds an empty instance and deletes the original. The
+    # deployed value is therefore authoritative, and just as importantly a stack
+    # deployed *without* one must never acquire one later.
+    deployed = _get_existing_stack_parameter(
+        config, env_name, "RdsSnapshotIdentifier"
+    )
+    if deployed is not None:
+        return deployed
 
+    if env_name == "prod":
+        snapshot_id = (config.rds.initial_snapshot_identifier or "").strip()
+        if not snapshot_id:
+            return ""
+        return _verified_snapshot(config, snapshot_id)
+
+    return _resolve_latest_prod_snapshot(config, env_name)
+
+
+def _verified_snapshot(config: ProjectConfig, snapshot_id: str) -> str:
+    """Return the snapshot id, failing the deploy if it does not exist."""
+    rds = boto3.client("rds", region_name=config.aws_region)
+    # An automated snapshot ("rds:db-2026-08-13-…") is only returned when
+    # SnapshotType is given, so accept either kind of identifier.
+    for extra in ({}, {"SnapshotType": "automated"}):
+        try:
+            found = rds.describe_db_snapshots(
+                DBSnapshotIdentifier=snapshot_id, **extra
+            ).get("DBSnapshots", [])
+        except ClientError:
+            continue
+        if found:
+            return snapshot_id
+
+    raise RuntimeError(
+        f"rds.initial_snapshot_identifier '{snapshot_id}' was not found in "
+        f"{config.aws_region}"
+    )
+
+
+def _resolve_latest_prod_snapshot(config: ProjectConfig, env_name: str) -> str:
+    """Seed a non-prod environment from the newest automated prod snapshot."""
+    is_preview = bool(
+        config.active_preview and config.active_preview.env_name == env_name
+    )
     rds = boto3.client("rds", region_name=config.aws_region)
     db_id = f"{config.project_name}-prod-db"
     try:
@@ -2839,14 +2883,14 @@ def _resolve_rds_snapshot(config: ProjectConfig, env_name: str) -> str:
             SnapshotType="automated",
         ).get("DBSnapshots", [])
     except Exception as exc:
-        if config.active_preview and config.active_preview.env_name == env_name:
+        if is_preview:
             raise RuntimeError(
                 f"Could not resolve latest prod RDS snapshot from '{db_id}' for preview '{env_name}'"
             ) from exc
         return ""
 
     if not snapshots:
-        if config.active_preview and config.active_preview.env_name == env_name:
+        if is_preview:
             raise RuntimeError(
                 f"No automated prod RDS snapshots found for '{db_id}' to seed preview '{env_name}'"
             )
@@ -2860,11 +2904,26 @@ def _resolve_rds_source_secret_arn(
     env_name: str,
     rds_snapshot_identifier: str,
 ) -> str:
-    if not config.rds or env_name == "prod" or not rds_snapshot_identifier:
+    if not config.rds or not rds_snapshot_identifier:
         return ""
 
-    if not (config.active_preview and config.active_preview.env_name == env_name):
-        return ""
+    # The credentials secret re-resolves this ARN on every deploy, so a snapshot
+    # restore that loses it fails the stack update on an invalid dynamic
+    # reference. Prefer whatever the deployed stack already carries.
+    deployed = _get_existing_stack_parameter(config, env_name, "RdsSourceSecretArn")
+    if deployed:
+        return deployed
+
+    if env_name == "prod":
+        configured = (config.rds.initial_snapshot_credentials_secret or "").strip()
+        if not configured:
+            raise RuntimeError(
+                f"prod is deployed from RDS snapshot '{rds_snapshot_identifier}' but "
+                "rds.initial_snapshot_credentials_secret is not set; the snapshot's "
+                "source credentials are re-resolved on every deploy, so the key must "
+                "stay in the config"
+            )
+        return _lookup_secret_arn(config, configured)
 
     cf = boto3.client("cloudformation", region_name=config.aws_region)
     stack_name = f"{config.project_name}-ecs-prod"
@@ -2875,7 +2934,7 @@ def _resolve_rds_source_secret_arn(
         )
     except Exception as exc:
         raise RuntimeError(
-            f"Could not resolve prod RDS credentials secret from stack '{stack_name}' for preview '{env_name}'"
+            f"Could not resolve prod RDS credentials secret from stack '{stack_name}' for environment '{env_name}'"
         ) from exc
 
     secret_id = str(
@@ -2886,6 +2945,18 @@ def _resolve_rds_source_secret_arn(
             f"Prod stack '{stack_name}' does not expose a physical RdsCredentialsSecret resource id"
         )
     return secret_id
+
+
+def _lookup_secret_arn(config: ProjectConfig, name_or_arn: str) -> str:
+    if name_or_arn.startswith("arn:"):
+        return name_or_arn
+    sm = boto3.client("secretsmanager", region_name=config.aws_region)
+    try:
+        return str(sm.describe_secret(SecretId=name_or_arn)["ARN"])
+    except ClientError as exc:
+        raise RuntimeError(
+            f"Secrets Manager secret '{name_or_arn}' was not found in {config.aws_region}"
+        ) from exc
 
 
 def _resolve_external_secrets(config: ProjectConfig) -> dict[str, str]:

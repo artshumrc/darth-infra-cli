@@ -2,7 +2,9 @@
 
 import click
 
+from ..config.schema import ConfigError
 from .init_cmd import init_cmd
+from .install_skill_cmd import install_skill_cmd
 from .tui_cmd import tui_cmd
 from .deploy_cmd import deploy
 from .build_cmd import build
@@ -16,7 +18,20 @@ from .status_cmd import status
 from .render_cmd import render_cmd
 
 
-@click.group()
+class _ConfigErrorGroup(click.Group):
+    """Report config-file problems as CLI errors rather than tracebacks.
+
+    Only :class:`ConfigError` is caught, so genuine bugs keep their traceback.
+    """
+
+    def invoke(self, ctx: click.Context):
+        try:
+            return super().invoke(ctx)
+        except ConfigError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+
+@click.group(cls=_ConfigErrorGroup)
 @click.version_option(package_name="darth-infra")
 def cli() -> None:
     """darth-infra — Deploy websites to AWS ECS with multi-environment support."""
@@ -24,6 +39,7 @@ def cli() -> None:
 
 cli.add_command(tui_cmd, name="tui")
 cli.add_command(init_cmd, name="init")
+cli.add_command(install_skill_cmd)
 cli.add_command(deploy)
 cli.add_command(build)
 cli.add_command(push)

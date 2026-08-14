@@ -32,11 +32,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-import json
-from pathlib import Path
 from typing import Any
 
-SCHEMA_PATH = Path(__file__).resolve().parent.parent / "darth-infra.schema.json"
+# Re-exported: the schema document is owned by the config layer, but callers of
+# the registry have always reached it through here.
+from ..config.schema import SCHEMA_PATH as SCHEMA_PATH, load_schema as load_schema
 
 
 class Section(str, Enum):
@@ -214,11 +214,6 @@ def enumerate_schema_paths(schema: dict[str, Any]) -> SchemaFieldSet:
         editable=frozenset(fields.editable),
         read_only=frozenset(fields.read_only),
     )
-
-
-def load_schema(path: Path = SCHEMA_PATH) -> dict[str, Any]:
-    """Load and parse the canonical packaged schema document."""
-    return json.loads(Path(path).read_text())
 
 
 def registry_paths() -> set[str]:
@@ -625,6 +620,15 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
     FieldEntry(
         "rds.backup_retention_days", _S.DATABASE, _P.ADVANCED, _C.INTEGER,
         "Number of days to keep automated backups.",
+    ),
+    FieldEntry(
+        "rds.initial_snapshot_identifier", _S.DATABASE, _P.ADVANCED, _C.TEXT,
+        "Snapshot to restore prod from on its first deploy only.",
+        example="legacy-prod-final-2026-08-14",
+    ),
+    FieldEntry(
+        "rds.initial_snapshot_credentials_secret", _S.DATABASE, _P.ADVANCED, _C.TEXT,
+        "Secrets Manager name/ARN with the snapshot source's username and password.",
     ),
     # -- Storage (S3) ------------------------------------------------------
     FieldEntry(
