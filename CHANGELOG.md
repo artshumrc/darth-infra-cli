@@ -1,5 +1,24 @@
 # darth-infra
 
+## 0.9.0
+
+### Minor Changes
+
+- [#25](https://github.com/artshumrc/darth-infra-cli/pull/25) [`c5c21f0`](https://github.com/artshumrc/darth-infra-cli/commit/c5c21f05029e312532b51609d5e74c14f90c21a4) Thanks [@d-flood](https://github.com/d-flood)! - Describe environments that differ in more than their name.
+
+  - Add `[environments.<env>.services.<service>]` accepting `cpu`, `memory_mib`, `desired_count`, and `environment_variables`, applied over that service's own values. Scalars replace; `environment_variables` merges key by key, so an environment restates only what actually differs. Covers per-environment values the `{env}` / `{domain}` placeholders cannot derive.
+  - Add `[environments.<env>.alb]` accepting `shared_alb_name`, `shared_listener_arn`, and `shared_alb_security_group_id`, for projects whose environments live behind different shared load balancers. Resolved at deploy time and never rendered into a template, so all environments still share one set of templates.
+  - Support the `{project}` and `{env}` placeholders in a secret's `existing_secret_name`, so one `[[secrets]]` entry can name a per-environment Secrets Manager secret. A preview environment resolves `{env}` to its base environment.
+  - Add `services[].entrypoint`, emitting the container's `EntryPoint` in exec form. Needed when an image's own `ENTRYPOINT` ignores its arguments, which makes a `command` override silently do nothing.
+  - An explicit `alb.default_listener_priority` now wins over the priority the deployed rule currently holds, so changing it and redeploying moves the live rule. Omitted priorities are still auto-allocated once and then reused, unchanged. This makes a priority change usable to cut traffic over between two stacks sharing one ALB.
+
+- [`f485dc7`](https://github.com/artshumrc/darth-infra-cli/commit/f485dc76d028e38ecbabdede64ceb02dbb6462c9) Thanks [@d-flood](https://github.com/d-flood)! - - Add `[rds]` keys `initial_snapshot_identifier` and `initial_snapshot_credentials_secret`, restoring prod from an existing database's snapshot on its first deploy.
+  - Read the deployed RDS snapshot identifier and source credentials ARN back from the stack for every environment, not just active previews.
+  - Reject configuration keys the schema does not define, suggesting the closest valid name.
+  - Print config-file problems as CLI errors instead of tracebacks.
+  - Add `darth-infra install-skill`, installing the `darth-infra.toml` authoring skill to `.claude/skills/` and `.agents/skills/`.
+  - Install that skill from `darth-infra init`; `--no-skill` skips it.
+
 ## 0.8.0
 
 ### Minor Changes
