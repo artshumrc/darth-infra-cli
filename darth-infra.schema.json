@@ -186,6 +186,12 @@
             "description": "Override the container CMD.",
             "default": null
           },
+          "entrypoint": {
+            "type": ["string", "null"],
+            "description": "Override the image ENTRYPOINT. Split on shell words and emitted in exec form, so an entrypoint script's $0 is its own path and signals reach it directly.",
+            "default": null,
+            "examples": ["/opt/app/entrypoint_worker.sh"]
+          },
           "secrets": {
             "type": "array",
             "description": "Names of secrets entries to inject into this container.",
@@ -825,6 +831,64 @@
             "type": "object",
             "description": "Map of service name to EC2 instance type override for this environment.",
             "additionalProperties": { "type": "string" }
+          },
+          "alb": {
+            "type": "object",
+            "description": "Shared ALB targeting for this environment, overriding [alb]. Resolved at deploy time and never rendered into a template, so environments on different shared ALBs share one set of templates.",
+            "additionalProperties": false,
+            "properties": {
+              "shared_alb_name": {
+                "type": ["string", "null"],
+                "description": "Name of the shared ALB to look up for this environment.",
+                "default": null,
+                "examples": ["global-dev"]
+              },
+              "shared_listener_arn": {
+                "type": ["string", "null"],
+                "description": "Shared ALB listener ARN for this environment.",
+                "default": null,
+                "pattern": "^arn:aws:elasticloadbalancing:[a-z0-9-]+:\\d{12}:listener/.+$"
+              },
+              "shared_alb_security_group_id": {
+                "type": ["string", "null"],
+                "description": "Security group ID attached to this environment's shared ALB listener.",
+                "default": null,
+                "pattern": "^sg-[a-z0-9]+$"
+              }
+            }
+          },
+          "services": {
+            "type": "object",
+            "description": "Map of service name to per-environment service settings, applied over that service's own values.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cpu": {
+                  "type": ["integer", "null"],
+                  "description": "Task CPU units for this environment.",
+                  "default": null,
+                  "minimum": 256
+                },
+                "memory_mib": {
+                  "type": ["integer", "null"],
+                  "description": "Task memory in MiB for this environment.",
+                  "default": null,
+                  "minimum": 512
+                },
+                "desired_count": {
+                  "type": ["integer", "null"],
+                  "description": "Number of running tasks for this environment.",
+                  "default": null,
+                  "minimum": 0
+                },
+                "environment_variables": {
+                  "type": "object",
+                  "description": "Environment variables merged over the service's own, key by key.",
+                  "additionalProperties": { "type": "string" }
+                }
+              }
+            }
           }
         }
       }

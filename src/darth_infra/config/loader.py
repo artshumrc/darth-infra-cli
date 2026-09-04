@@ -22,7 +22,9 @@ from .models import (
     CloudFrontCookiesMode,
     CloudFrontQueryStringsMode,
     EbsVolumeConfig,
+    EnvironmentAlbOverride,
     EnvironmentOverride,
+    EnvironmentServiceOverride,
     LaunchType,
     PreviewEnvironmentsConfig,
     ProjectConfig,
@@ -182,6 +184,7 @@ def _parse_service(raw: dict[str, Any]) -> ServiceConfig:
         memory_mib=raw.get("memory_mib", 512),
         desired_count=raw.get("desired_count", 1),
         command=raw.get("command"),
+        entrypoint=raw.get("entrypoint"),
         secrets=raw.get("secrets", []),
         s3_access=raw.get("s3_access", []),
         environment_variables=raw.get("environment_variables", {}),
@@ -321,10 +324,26 @@ def _parse_secret(raw: dict[str, Any]) -> SecretConfig:
 
 
 def _parse_env_override(raw: dict[str, Any]) -> EnvironmentOverride:
+    alb_raw = raw.get("alb", {})
     return EnvironmentOverride(
         instance_type_override=raw.get("instance_type_override"),
         ec2_instance_type_override=raw.get("ec2_instance_type_override", {}),
         tags=raw.get("tags", {}),
+        alb=EnvironmentAlbOverride(
+            shared_alb_name=alb_raw.get("shared_alb_name"),
+            shared_listener_arn=alb_raw.get("shared_listener_arn"),
+            shared_alb_security_group_id=alb_raw.get("shared_alb_security_group_id"),
+        ),
+        services={
+            name: EnvironmentServiceOverride(
+                cpu=data.get("cpu"),
+                memory_mib=data.get("memory_mib"),
+                desired_count=data.get("desired_count"),
+                environment_variables=data.get("environment_variables", {}),
+            )
+            for name, data in raw.get("services", {}).items()
+            if isinstance(data, dict)
+        },
     )
 
 
@@ -416,6 +435,8 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f"desired_count = {svc.desired_count}")
         if svc.command:
             lines.append(f'command = "{_toml_escape(svc.command)}"')
+        if svc.entrypoint:
+            lines.append(f'entrypoint = "{_toml_escape(svc.entrypoint)}"')
         lines.append(f'launch_type = "{_enum_value(svc.launch_type)}"')
         if svc.ec2_instance_type:
             lines.append(f'ec2_instance_type = "{svc.ec2_instance_type}"')
@@ -651,6 +672,43 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append(f"[environments.{env_name}.ec2_instance_type_override]")
             for svc_name, itype in override.ec2_instance_type_override.items():
                 lines.append(f'"{_toml_escape(svc_name)}" = "{_toml_escape(itype)}"')
+        alb_override = override.alb
+        if (
+            alb_override.shared_alb_name
+            or alb_override.shared_listener_arn
+            or alb_override.shared_alb_security_group_id
+        ):
+            lines.append("")
+            lines.append(f"[environments.{env_name}.alb]")
+            if alb_override.shared_alb_name:
+                lines.append(
+                    f'shared_alb_name = "{_toml_escape(alb_override.shared_alb_name)}"'
+                )
+            if alb_override.shared_listener_arn:
+                lines.append(
+                    "shared_listener_arn = "
+                    f'"{_toml_escape(alb_override.shared_listener_arn)}"'
+                )
+            if alb_override.shared_alb_security_group_id:
+                lines.append(
+                    "shared_alb_security_group_id = "
+                    f'"{_toml_escape(alb_override.shared_alb_security_group_id)}"'
+                )
+        for svc_name, svc_override in override.services.items():
+            lines.append("")
+            lines.append(f"[environments.{env_name}.services.{svc_name}]")
+            if svc_override.cpu is not None:
+                lines.append(f"cpu = {svc_override.cpu}")
+            if svc_override.memory_mib is not None:
+                lines.append(f"memory_mib = {svc_override.memory_mib}")
+            if svc_override.desired_count is not None:
+                lines.append(f"desired_count = {svc_override.desired_count}")
+            if svc_override.environment_variables:
+                env_inline = ", ".join(
+                    f'"{_toml_escape(k)}" = "{_toml_escape(v)}"'
+                    for k, v in svc_override.environment_variables.items()
+                )
+                lines.append(f"environment_variables = {{ {env_inline} }}")
         lines.append("")
     if not config.environment_overrides:
         lines.append("# [deploy-live] no [environments.<name>] overrides configured")

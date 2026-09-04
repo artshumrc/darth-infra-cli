@@ -16,6 +16,7 @@ from ..config.models import (
     EnvironmentOverride,
     ProjectConfig,
     S3BucketMode,
+    SecretSource,
 )
 from .version_floor import enforce_cli_version_floor
 
@@ -48,12 +49,14 @@ def resolve_environment_config(
             )
             raise SystemExit(1)
         resolved = copy.deepcopy(config)
+        _apply_environment_overrides(resolved, env_name)
         _render_service_environment_templates(
             resolved,
             env_name,
             "",
             resolved.get_cluster_domain(env_name),
         )
+        _render_external_secret_names(resolved, env_name)
         return resolved
 
     preview = config.preview_environments
@@ -116,7 +119,11 @@ def resolve_environment_config(
     )
     _resolve_preview_s3_fallback_buckets(resolved, preview_from)
     resolved._validate_preview_overlay_bucket_collisions()
+    _apply_environment_overrides(resolved, preview_from)
     _render_service_environment_templates(resolved, env_name, number, domain)
+    # A preview environment has no external secrets of its own, so `{env}`
+    # names the base environment's, matching the S3 fallback overlay.
+    _render_external_secret_names(resolved, preview_from)
     return resolved
 
 
@@ -146,6 +153,62 @@ def _render_preview_value(
         number=number,
         base_environment=config.preview_environments.base_environment,
     )
+
+
+def _apply_environment_overrides(config: ProjectConfig, env_name: str) -> None:
+    """Fold ``[environments.<env_name>]`` overrides into the config in place.
+
+    Called once per env-scoped command, before templates are built, so the rest
+    of the pipeline only ever sees effective values.
+    """
+    override = config.environment_overrides.get(env_name)
+    if not override:
+        return
+
+    alb_override = override.alb
+    if alb_override.shared_alb_name is not None:
+        config.alb.shared_alb_name = alb_override.shared_alb_name
+    if alb_override.shared_listener_arn is not None:
+        config.alb.shared_listener_arn = alb_override.shared_listener_arn
+    if alb_override.shared_alb_security_group_id is not None:
+        config.alb.shared_alb_security_group_id = (
+            alb_override.shared_alb_security_group_id
+        )
+
+    for service in config.services:
+        service_override = override.services.get(service.name)
+        if not service_override:
+            continue
+        if service_override.cpu is not None:
+            service.cpu = service_override.cpu
+        if service_override.memory_mib is not None:
+            service.memory_mib = service_override.memory_mib
+        if service_override.desired_count is not None:
+            service.desired_count = service_override.desired_count
+        service.environment_variables = {
+            **service.environment_variables,
+            **service_override.environment_variables,
+        }
+
+
+def _render_external_secret_names(config: ProjectConfig, env_name: str) -> None:
+    """Substitute ``{project}`` and ``{env}`` in ``existing_secret_name``.
+
+    Lets one ``[[secrets]]`` entry name a per-environment secret. An ARN or a
+    name with no placeholder passes through unchanged.
+    """
+    replacements = {"project": config.project_name, "env": env_name}
+    for secret in config.secrets:
+        if secret.source != SecretSource.EXISTING or not secret.existing_secret_name:
+            continue
+        try:
+            secret.existing_secret_name = secret.existing_secret_name.format(
+                **replacements
+            )
+        except (KeyError, IndexError, ValueError):
+            # Leave an unrecognized placeholder alone rather than guessing; the
+            # deploy-time lookup reports the unresolvable name.
+            continue
 
 
 def _render_service_environment_templates(

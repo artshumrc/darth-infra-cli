@@ -333,6 +333,63 @@ def test_listener_priority_resolution_reuses_stack_owned_by_rule(monkeypatch) ->
     assert path_priorities == {"api": 102}
 
 
+def test_explicit_default_listener_priority_overrides_the_live_rule(monkeypatch) -> None:
+    # The live rule sits at 49997; the config now asks for 400. Lowering the
+    # priority of an existing rule is how a cutover onto a shared ALB happens,
+    # so the configured value has to win over the deployed one.
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        alb=AlbConfig(
+            mode=AlbMode.SHARED,
+            shared_alb_name="shared-alb",
+            domain="app.example.com",
+            default_target_service="web",
+            default_listener_priority=400,
+        ),
+    )
+    monkeypatch.setattr(
+        "darth_infra.cli.cfn._resolve_stack_owned_listener_rule_priorities_by_label",
+        lambda *_: {"default": 49997},
+    )
+
+    default_priority, _ = _resolve_listener_priorities(
+        config,
+        "prod",
+        _FakeElbv2Rules([{"Priority": "49996"}, {"Priority": "49997"}]),
+        "listener-arn",
+    )
+
+    assert default_priority == 400
+
+
+def test_explicit_priority_matching_the_live_rule_is_a_noop(monkeypatch) -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        alb=AlbConfig(
+            mode=AlbMode.SHARED,
+            shared_alb_name="shared-alb",
+            domain="app.example.com",
+            default_target_service="web",
+            default_listener_priority=49997,
+        ),
+    )
+    monkeypatch.setattr(
+        "darth_infra.cli.cfn._resolve_stack_owned_listener_rule_priorities_by_label",
+        lambda *_: {"default": 49997},
+    )
+
+    default_priority, _ = _resolve_listener_priorities(
+        config,
+        "prod",
+        _FakeElbv2Rules([{"Priority": "49997"}]),
+        "listener-arn",
+    )
+
+    assert default_priority == 49997
+
+
 def test_listener_priority_resolution_rejects_configured_duplicates() -> None:
     config = ProjectConfig(
         project_name="demo",
