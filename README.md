@@ -405,6 +405,11 @@ redeploying moves the live rule. That is an in-place listener-rule update, not a
 replacement — which is what makes it usable to cut traffic over between two stacks
 sharing one ALB.
 
+An explicit priority is never silently moved. If it is already used by another rule on
+that listener, the deploy fails and names it, rather than allocating a different one:
+auto-allocation searches from the bottom of the range, so a silent fallback could place
+your rule *above* another stack's rule for the same host and take its traffic.
+
 ### `[cloudfront]`
 
 Optional CloudFront distribution **in front of the ALB** (distinct from the per-bucket
@@ -494,6 +499,7 @@ worker = "t4g.small"                          # service name -> EC2 instance typ
 shared_alb_name = "global-dev"
 shared_listener_arn = "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/…"
 shared_alb_security_group_id = "sg-0123456789abcdef0"
+default_listener_priority = 49997               # this env's listener rule priority
 
 [environments.dev.services.web]               # per-service runtime settings
 cpu = 512
@@ -515,6 +521,12 @@ prod and non-prod live behind different load balancers. These three fields are r
 at deploy time and never appear in a rendered template, so all environments still share
 one set of templates. Fields you leave unset inherit `[alb]`. `alb.domain` needs no
 override: non-prod hostnames are already derived as `<env>.<domain>`.
+
+`default_listener_priority` is overridable per environment because priorities are unique
+*per listener*, not per project. When environments sit on different shared listeners that
+already carry other projects' rules, there may be no single priority free on all of them
+— and picking one that is taken is a hard error, not something to discover at deploy
+time.
 
 ### `[service_discovery]`
 
@@ -615,7 +627,9 @@ AWS call:
 - `cloudfront_env_key` on a bucket connection requires `cloudfront = true` on that
   bucket. A service may not reuse the same `env_key` (or `cloudfront_env_key`) across
   two bucket connections.
-- Listener priorities must be 1–50000 and unique within the config.
+- Listener priorities must be 1–50000 and unique within the config, including any
+  set under `[environments.<env>.alb]`. At deploy time an explicitly configured
+  priority must also be free on the resolved listener.
 - TTLs must satisfy `min ≤ default ≤ max`.
 - `alb.shared_alb_name` is required in shared mode (unless both
   `shared_listener_arn` and `shared_alb_security_group_id` are given). This is enforced

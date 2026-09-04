@@ -421,6 +421,7 @@ class EnvironmentAlbOverride:
     shared_alb_name: str | None = None
     shared_listener_arn: str | None = None
     shared_alb_security_group_id: str | None = None
+    default_listener_priority: int | None = None
 
 
 @dataclass
@@ -915,6 +916,13 @@ class ProjectConfig:
             raise ValueError(
                 "alb.default_listener_priority must be between 1 and 50000"
             )
+        for env_name, override in self.environment_overrides.items():
+            priority = override.alb.default_listener_priority
+            if priority is not None and not 1 <= priority <= 50000:
+                raise ValueError(
+                    f"environments.{env_name}.alb.default_listener_priority "
+                    "must be between 1 and 50000"
+                )
 
         seen_rule_names: set[str] = set()
         seen_rule_param_suffixes: set[str] = set()

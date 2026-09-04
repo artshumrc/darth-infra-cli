@@ -174,6 +174,8 @@ def _apply_environment_overrides(config: ProjectConfig, env_name: str) -> None:
         config.alb.shared_alb_security_group_id = (
             alb_override.shared_alb_security_group_id
         )
+    if alb_override.default_listener_priority is not None:
+        config.alb.default_listener_priority = alb_override.default_listener_priority
 
     for service in config.services:
         service_override = override.services.get(service.name)

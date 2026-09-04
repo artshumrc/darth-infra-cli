@@ -745,6 +745,11 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "Security group on this environment's shared ALB listener.",
     ),
     FieldEntry(
+        "environments.*.alb.default_listener_priority", _S.ENVIRONMENTS, _P.ADVANCED, _C.INTEGER,
+        "Listener rule priority for this environment. Needed when no single "
+        "priority is free on every environment's listener.",
+    ),
+    FieldEntry(
         "environments.*.services.*.cpu", _S.ENVIRONMENTS, _P.ADVANCED, _C.INTEGER,
         "Task CPU units for one service in this environment.",
     ),

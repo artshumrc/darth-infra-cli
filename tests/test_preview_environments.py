@@ -390,6 +390,74 @@ def test_explicit_priority_matching_the_live_rule_is_a_noop(monkeypatch) -> None
     assert default_priority == 49997
 
 
+def test_configured_priority_already_taken_on_the_listener_is_rejected(monkeypatch) -> None:
+    # Silently reallocating would search from the bottom of the range and could
+    # place this rule above another stack's rule for the same host.
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        alb=AlbConfig(
+            mode=AlbMode.SHARED,
+            shared_alb_name="shared-alb",
+            domain="app.example.com",
+            default_target_service="web",
+            default_listener_priority=49997,
+        ),
+    )
+    monkeypatch.setattr(
+        "darth_infra.cli.cfn._resolve_stack_owned_listener_rule_priorities_by_label",
+        lambda *_: {},
+    )
+
+    with pytest.raises(RuntimeError, match="already used by another rule"):
+        _resolve_listener_priorities(
+            config,
+            "prod",
+            _FakeElbv2Rules([{"Priority": "1"}, {"Priority": "49996"}, {"Priority": "49997"}]),
+            "listener-arn",
+        )
+
+
+def test_configured_priority_outside_a_preview_band_is_rejected(monkeypatch) -> None:
+    # 1-50000 is enforced at load time, so the only way to fall outside the
+    # allowed range is a preview environment with a narrower configured band.
+    config = ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        alb=AlbConfig(
+            mode=AlbMode.SHARED,
+            shared_alb_name="shared-alb",
+            domain="app.example.com",
+            default_target_service="web",
+            default_listener_priority=100,
+        ),
+        preview_environments=PreviewEnvironmentsConfig(
+            enabled=True,
+            base_environment="prod",
+            name_pattern="pr-{number}",
+            listener_priority_start=30000,
+            listener_priority_end=30005,
+        ),
+    )
+    config.active_preview = ActivePreviewEnvironment(
+        env_name="pr-123",
+        base_environment="prod",
+        number="123",
+        domain="pr-123.example.com",
+        hosted_zone_name=None,
+        tags={},
+    )
+    monkeypatch.setattr(
+        "darth_infra.cli.cfn._resolve_stack_owned_listener_rule_priorities_by_label",
+        lambda *_: {},
+    )
+
+    with pytest.raises(RuntimeError, match="outside the allowed range"):
+        _resolve_listener_priorities(
+            config, "pr-123", _FakeElbv2Rules([]), "listener-arn"
+        )
+
+
 def test_listener_priority_resolution_rejects_configured_duplicates() -> None:
     config = ProjectConfig(
         project_name="demo",

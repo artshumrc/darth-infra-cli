@@ -333,6 +333,7 @@ def _parse_env_override(raw: dict[str, Any]) -> EnvironmentOverride:
             shared_alb_name=alb_raw.get("shared_alb_name"),
             shared_listener_arn=alb_raw.get("shared_listener_arn"),
             shared_alb_security_group_id=alb_raw.get("shared_alb_security_group_id"),
+            default_listener_priority=alb_raw.get("default_listener_priority"),
         ),
         services={
             name: EnvironmentServiceOverride(
@@ -677,6 +678,7 @@ def dump_config(config: ProjectConfig) -> str:
             alb_override.shared_alb_name
             or alb_override.shared_listener_arn
             or alb_override.shared_alb_security_group_id
+            or alb_override.default_listener_priority is not None
         ):
             lines.append("")
             lines.append(f"[environments.{env_name}.alb]")
@@ -693,6 +695,11 @@ def dump_config(config: ProjectConfig) -> str:
                 lines.append(
                     "shared_alb_security_group_id = "
                     f'"{_toml_escape(alb_override.shared_alb_security_group_id)}"'
+                )
+            if alb_override.default_listener_priority is not None:
+                lines.append(
+                    "default_listener_priority = "
+                    f"{alb_override.default_listener_priority}"
                 )
         for svc_name, svc_override in override.services.items():
             lines.append("")
