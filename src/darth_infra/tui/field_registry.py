@@ -374,6 +374,12 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "Override the container CMD.",
     ),
     FieldEntry(
+        "services[].entrypoint", _S.SERVICES, _P.ADVANCED, _C.TEXT,
+        "Override the image ENTRYPOINT. Needed when the image's own entrypoint "
+        "ignores its arguments, so a command override alone would be discarded.",
+        example="/opt/app/entrypoint_worker.sh",
+    ),
+    FieldEntry(
         "services[].secrets", _S.SERVICES, _P.COMMON, _C.REFERENCE_LIST,
         "Names of secrets entries to inject into this container.",
     ),
@@ -723,6 +729,37 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
     FieldEntry(
         "environments.*.tags.*", _S.ENVIRONMENTS, _P.ADVANCED, _C.KEY_VALUE_MAP,
         "Tags applied only when deploying this environment.",
+    ),
+    FieldEntry(
+        "environments.*.alb.shared_alb_name", _S.ENVIRONMENTS, _P.ADVANCED, _C.TEXT,
+        "Shared ALB to target in this environment instead of the project's.",
+        example="global-dev",
+    ),
+    FieldEntry(
+        "environments.*.alb.shared_listener_arn", _S.ENVIRONMENTS, _P.ADVANCED, _C.TEXT,
+        "Shared ALB listener ARN for this environment. Set with the security "
+        "group ID to skip name lookup.",
+    ),
+    FieldEntry(
+        "environments.*.alb.shared_alb_security_group_id", _S.ENVIRONMENTS, _P.ADVANCED, _C.TEXT,
+        "Security group on this environment's shared ALB listener.",
+    ),
+    FieldEntry(
+        "environments.*.services.*.cpu", _S.ENVIRONMENTS, _P.ADVANCED, _C.INTEGER,
+        "Task CPU units for one service in this environment.",
+    ),
+    FieldEntry(
+        "environments.*.services.*.memory_mib", _S.ENVIRONMENTS, _P.ADVANCED, _C.INTEGER,
+        "Task memory in MiB for one service in this environment.",
+    ),
+    FieldEntry(
+        "environments.*.services.*.desired_count", _S.ENVIRONMENTS, _P.ADVANCED, _C.INTEGER,
+        "Running task count for one service in this environment.",
+    ),
+    FieldEntry(
+        "environments.*.services.*.environment_variables.*", _S.ENVIRONMENTS, _P.ADVANCED, _C.KEY_VALUE_MAP,
+        "Environment variables merged over the service's own for this "
+        "environment, key by key.",
     ),
     FieldEntry(
         "environments.*.ec2_instance_type_override.*", _S.ENVIRONMENTS, _P.ADVANCED, _C.KEY_VALUE_MAP,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from typing import TypeAlias
 
 from troposphere import (
@@ -694,6 +695,10 @@ def _build_service_template(
         ]
     if service.svc.command:
         container.Command = ["sh", "-c", service.svc.command]
+    if service.svc.entrypoint:
+        # Exec form, not `sh -c`: an entrypoint script may re-exec itself via
+        # `exec $0`, and signals must reach the process rather than a shell.
+        container.EntryPoint = shlex.split(service.svc.entrypoint)
     if service.launch_type == "ec2":
         container.Cpu = service.svc.cpu
         container.Memory = service.svc.memory_mib

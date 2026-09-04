@@ -214,6 +214,7 @@ cpu = 256                                # Fargate: 256/512/1024/2048/4096
 memory_mib = 512
 desired_count = 1
 command = "gunicorn app.wsgi"            # optional container command override
+entrypoint = "/opt/app/worker.sh"        # optional image ENTRYPOINT override
 secrets = ["DJANGO_SECRET_KEY"]          # names from [[secrets]]
 environment_variables = { DEBUG = "0", SITE_URL = "{domain}" }
 enable_exec = true                       # ECS Exec (needed by `darth-infra exec`)
@@ -254,6 +255,12 @@ filesystem_type = "ext4"                 # ext4|xfs
 | `{number}` | preview environment number (empty otherwise) |
 | `{base_environment}` | `preview_environments.base_environment` |
 | `{service_discovery_namespace}` | resolved Cloud Map namespace |
+
+`command` is run through a shell (`sh -c`), so it takes a whole command line.
+`entrypoint` is emitted in **exec form** — split on shell words, no shell — so an
+entrypoint script's `$0` is its own path and signals reach it directly. Reach for
+`entrypoint` when the image's own `ENTRYPOINT` ignores its arguments, which makes a
+`command` override silently do nothing.
 
 > **`s3_access` is not template-generating.** `services[].s3_access` exists in the
 > schema and the editor, but S3 environment variables and IAM grants are produced
@@ -390,7 +397,13 @@ In shared mode without an explicit `shared_listener_arn`, the ALB's `HTTPS:443` 
 is preferred, falling back to any listener on port 80 or 443.
 
 Listener priorities you omit are allocated automatically at deploy time against the live
-listener, so parallel environments don't collide.
+listener, so parallel environments don't collide, and an allocated priority is then
+reused on every later deploy rather than churning.
+
+A priority you set explicitly is authoritative: changing `default_listener_priority` and
+redeploying moves the live rule. That is an in-place listener-rule update, not a
+replacement — which is what makes it usable to cut traffic over between two stacks
+sharing one ALB.
 
 ### `[cloudfront]`
 
@@ -449,6 +462,20 @@ existing_secret_name = "…"     # required for source="existing" and "rds";
 
 Every name in `services[].secrets` must exist in `[[secrets]]`.
 
+For `source = "existing"`, `existing_secret_name` accepts the `{project}` and `{env}`
+placeholders, resolved per deploy — so one entry names a per-environment secret:
+
+```toml
+[[secrets]]
+name = "DATABASE_URL"
+source = "existing"
+existing_secret_name = "myapp/{env}/DATABASE_URL"
+```
+
+A preview environment resolves `{env}` to its **base** environment, since it has no
+external secrets of its own. An ARN, or a name with no placeholder, passes through
+unchanged.
+
 ### `[environments.<name>]`
 
 Per-environment overrides. The table key is the environment name.
@@ -462,9 +489,32 @@ cost-center = "sandbox"
 
 [environments.dev.ec2_instance_type_override]
 worker = "t4g.small"                          # service name -> EC2 instance type
+
+[environments.dev.alb]                        # shared ALB targeting for this env
+shared_alb_name = "global-dev"
+shared_listener_arn = "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/…"
+shared_alb_security_group_id = "sg-0123456789abcdef0"
+
+[environments.dev.services.web]               # per-service runtime settings
+cpu = 512
+memory_mib = 1024
+desired_count = 1
+environment_variables = { SITE_ID = "1", DEBUG = "1" }
 ```
 
 Environment tags override project tags of the same key for that environment only.
+
+`[environments.<env>.services.<service>]` applies over that service's own values:
+`cpu`, `memory_mib`, and `desired_count` replace the service default, and
+`environment_variables` is merged key by key, so an environment only restates the
+variables that actually differ. Use it for values the `{env}` / `{domain}` placeholders
+cannot derive. The service name must exist in `[[services]]`.
+
+`[environments.<env>.alb]` retargets the shared ALB for one environment — the case where
+prod and non-prod live behind different load balancers. These three fields are resolved
+at deploy time and never appear in a rendered template, so all environments still share
+one set of templates. Fields you leave unset inherit `[alb]`. `alb.domain` needs no
+override: non-prod hostnames are already derived as `<env>.<domain>`.
 
 ### `[service_discovery]`
 
@@ -542,6 +592,7 @@ AWS call:
 - `"prod"` must appear in `project.environments` (it is reordered to first if needed).
 - Service names must be unique; S3 bucket names must be unique.
 - Every name in `services[].secrets` must exist in `[[secrets]]`.
+- Every service named by an `[environments.<env>.services.<service>]` table must exist.
 - Every service named by `rds.expose_to`, `s3_buckets[].connections[].service`,
   `cloudfront.connections[].service`, `alb.default_target_service`, and
   `alb.path_rules[].target_service` must exist.

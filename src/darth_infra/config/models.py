@@ -355,6 +355,9 @@ class ServiceConfig:
         memory_mib: Task memory in MiB.
         desired_count: Number of running tasks.
         command: Override the container CMD.
+        entrypoint: Override the image ENTRYPOINT. Split with ``shlex`` and
+            emitted in exec form, so a script's ``$0`` is its own path and
+            signals reach it directly.
         secrets: Names of ``SecretConfig`` entries to inject into this container.
         s3_access: Names of ``S3BucketConfig`` entries to grant read/write.
         environment_variables: Static env vars passed to the container.
@@ -390,6 +393,7 @@ class ServiceConfig:
     memory_mib: int = 512
     desired_count: int = 1
     command: str | None = None
+    entrypoint: str | None = None
     secrets: list[str] = field(default_factory=list)
     s3_access: list[str] = field(default_factory=list)
     environment_variables: dict[str, str] = field(default_factory=dict)
@@ -403,6 +407,34 @@ class ServiceConfig:
     user_data_script_content: str | None = None
     ebs_volumes: list[EbsVolumeConfig] = field(default_factory=list)
     enable_service_discovery: bool = False
+
+
+@dataclass
+class EnvironmentAlbOverride:
+    """Per-environment shared-ALB targeting.
+
+    All three fields are consumed only when resolving deploy-time lookups and
+    never appear in a rendered template, so a project whose environments live on
+    different shared ALBs still renders one set of templates.
+    """
+
+    shared_alb_name: str | None = None
+    shared_listener_arn: str | None = None
+    shared_alb_security_group_id: str | None = None
+
+
+@dataclass
+class EnvironmentServiceOverride:
+    """Per-environment overrides for one service.
+
+    Scalars set to None inherit the service default; ``environment_variables``
+    is merged key-wise over the service's own map.
+    """
+
+    cpu: int | None = None
+    memory_mib: int | None = None
+    desired_count: int | None = None
+    environment_variables: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -420,6 +452,12 @@ class EnvironmentOverride:
 
     tags: dict[str, str] = field(default_factory=dict)
     """Additional tags applied only when deploying this environment."""
+
+    alb: EnvironmentAlbOverride = field(default_factory=lambda: EnvironmentAlbOverride())
+    """Shared-ALB targeting for this environment."""
+
+    services: dict[str, EnvironmentServiceOverride] = field(default_factory=dict)
+    """Map of service name -> per-environment service settings."""
 
 
 @dataclass
@@ -594,11 +632,17 @@ class ProjectConfig:
             self.rds.initial_snapshot_identifier = snapshot or None
             self.rds.initial_snapshot_credentials_secret = snapshot_secret or None
 
-        for override in self.environment_overrides.values():
+        for env_name, override in self.environment_overrides.items():
             if override.instance_type_override:
                 override.instance_type_override = normalize_rds_instance_type(
                     override.instance_type_override
                 )
+            for svc_name in override.services:
+                if svc_name not in service_names:
+                    raise ValueError(
+                        f"environments.{env_name}.services references unknown "
+                        f"service '{svc_name}'"
+                    )
 
         for secret in self.secrets:
             if secret.source == SecretSource.GENERATE and not secret.generate_once:

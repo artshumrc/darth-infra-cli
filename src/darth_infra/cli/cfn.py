@@ -2615,8 +2615,16 @@ def _resolve_listener_priorities(
     allocated = set(unavailable)
 
     for label, requested_priority in desired_priority_items:
+        # Reuse the live priority only when the config does not name one, so an
+        # auto-allocated priority stays stable across deploys while an explicit
+        # value stays authoritative and can be changed. Priority is an in-place
+        # update on a listener rule, so a change is not a replacement.
         owned_priority = stack_owned_by_label.get(label)
-        if owned_priority is not None and 1 <= owned_priority <= 50000:
+        if (
+            requested_priority is None
+            and owned_priority is not None
+            and 1 <= owned_priority <= 50000
+        ):
             if owned_priority not in resolved.values():
                 resolved[label] = owned_priority
                 allocated.add(owned_priority)
