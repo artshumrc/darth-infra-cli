@@ -214,6 +214,31 @@ def test_derived_dev_hostname_is_unaffected_by_an_alb_override() -> None:
     )
 
 
+def test_alb_override_can_set_a_per_environment_listener_priority() -> None:
+    # Two environments on different shared listeners may have no single free
+    # priority in common, so the priority has to be settable per environment.
+    config = _config(
+        alb=AlbConfig(
+            mode=AlbMode.SHARED,
+            shared_alb_name="global-prod",
+            domain="app.example.com",
+            default_target_service="web",
+            default_listener_priority=49998,
+        ),
+        environment_overrides={
+            "dev": EnvironmentOverride(
+                alb=EnvironmentAlbOverride(
+                    shared_alb_name="global-dev",
+                    default_listener_priority=49997,
+                )
+            )
+        },
+    )
+
+    assert resolve_environment_config(config, "prod").alb.default_listener_priority == 49998
+    assert resolve_environment_config(config, "dev").alb.default_listener_priority == 49997
+
+
 # -- existing_secret_name placeholders ---------------------------------------
 
 
@@ -362,6 +387,7 @@ existing_secret_name = "demo/{env}/DATABASE_URL"
 
 [environments.dev.alb]
 shared_alb_name = "global-dev"
+default_listener_priority = 49997
 
 [environments.dev.services.web]
 cpu = 512
@@ -383,6 +409,7 @@ desired_count = 0
 
     dev = second.environment_overrides["dev"]
     assert dev.alb.shared_alb_name == "global-dev"
+    assert dev.alb.default_listener_priority == 49997
     assert dev.services["web"].cpu == 512
     assert dev.services["web"].memory_mib == 1024
     assert dev.services["web"].environment_variables == {"SITE_ID": "1"}

@@ -2630,11 +2630,21 @@ def _resolve_listener_priorities(
                 allocated.add(owned_priority)
                 continue
 
-        if (
-            requested_priority is not None
-            and start <= requested_priority <= end
-            and requested_priority not in allocated
-        ):
+        if requested_priority is not None:
+            # Never silently move an explicit priority. Auto-allocating from the
+            # bottom of the range could place a rule *above* another stack's rule
+            # for the same host and take its traffic.
+            if not start <= requested_priority <= end:
+                raise RuntimeError(
+                    f"Configured ALB listener priority {requested_priority} "
+                    f"({label}) is outside the allowed range {start}-{end}."
+                )
+            if requested_priority in allocated:
+                raise RuntimeError(
+                    f"Configured ALB listener priority {requested_priority} "
+                    f"({label}) is already used by another rule on this listener. "
+                    "Choose a free priority, or remove it to have one allocated."
+                )
             resolved[label] = requested_priority
             allocated.add(requested_priority)
             continue

@@ -854,6 +854,13 @@
                 "description": "Security group ID attached to this environment's shared ALB listener.",
                 "default": null,
                 "pattern": "^sg-[a-z0-9]+$"
+              },
+              "default_listener_priority": {
+                "type": ["integer", "null"],
+                "description": "Listener rule priority for the default host-header rule in this environment. Needed when environments share a listener with other rules and no single priority is free on all of them.",
+                "default": null,
+                "minimum": 1,
+                "maximum": 50000
               }
             }
           },
