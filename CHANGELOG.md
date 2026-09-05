@@ -1,5 +1,16 @@
 # darth-infra
 
+## 0.10.0
+
+### Minor Changes
+
+- [#26](https://github.com/artshumrc/darth-infra-cli/pull/26) [`89b7d2d`](https://github.com/artshumrc/darth-infra-cli/commit/89b7d2d1d81b6c2d0e9f1a3ef014d9774254ade2) Thanks [@d-flood](https://github.com/d-flood)! - Make an explicitly configured ALB listener priority safe to rely on.
+
+  - Add `default_listener_priority` to `[environments.<env>.alb]`. Priorities are unique per _listener_, not per project, so environments on different shared listeners that already carry other projects' rules may have no single free priority in common. The project-level value is used when an environment does not set one; both are validated to 1–50000 at load time.
+  - A configured priority that is already used by another rule on the resolved listener is now a hard error naming the conflict, instead of being silently replaced with an allocated one. Auto-allocation searches from the bottom of the range, so the old fallback could place a rule _above_ another stack's rule for the same host and take all of its traffic — an outage triggered by a priority typo, invisible until requests moved. A configured priority outside the allowed range fails the same way.
+
+  Omitted priorities are still allocated automatically and then reused across deploys, unchanged.
+
 ## 0.9.0
 
 ### Minor Changes
