@@ -144,6 +144,7 @@ class CloudFrontCachedBehaviorRenderContext:
     query_string_allowlist: tuple[str, ...]
     cookies: str
     cookie_allowlist: tuple[str, ...]
+    origin_request_headers: tuple[str, ...]
     forward_authorization_header: bool
 
 
@@ -623,6 +624,7 @@ def derive_render_context(config: ProjectConfig) -> RenderContext:
                     query_string_allowlist=tuple(behavior.query_string_allowlist),
                     cookies=_enum_value(behavior.cookies),
                     cookie_allowlist=tuple(behavior.cookie_allowlist),
+                    origin_request_headers=tuple(behavior.origin_request_headers),
                     forward_authorization_header=(
                         behavior.forward_authorization_header
                     ),

@@ -272,3 +272,138 @@ def test_full_featured_cloudfront_root_passes_cfn_lint(tmp_path: Path) -> None:
     ]
 
     assert_template_passes_cfn_lint(root, tmp_path / "root-cloudfront.yaml")
+
+
+def _origin_request_config(
+    *, headers: list[str] | None = None, forward_auth: bool = False
+) -> ProjectConfig:
+    return ProjectConfig(
+        project_name="demo",
+        services=[ServiceConfig(name="web", port=8000)],
+        alb=AlbConfig(
+            mode=AlbMode.SHARED,
+            domain="app.example.com",
+            default_target_service="web",
+            default_listener_priority=100,
+        ),
+        cloudfront=CloudFrontConfig(
+            enabled=True,
+            origin_https_only=True,
+            cached_behaviors=[
+                CloudFrontCachedBehavior(
+                    name="iiif",
+                    path_pattern="/iiif/*",
+                    origin_request_headers=headers
+                    if headers is not None
+                    else ["Referer"],
+                    forward_authorization_header=forward_auth,
+                    min_ttl_seconds=0,
+                    default_ttl_seconds=3600,
+                    max_ttl_seconds=31536000,
+                ),
+                CloudFrontCachedBehavior(name="assets", path_pattern="/assets/*"),
+            ],
+        ),
+    )
+
+
+def _cache_behaviors(root: dict[str, object]) -> list[dict[str, object]]:
+    return root["Resources"]["AlbCloudFront"]["Properties"]["DistributionConfig"][
+        "CacheBehaviors"
+    ]
+
+
+def test_origin_request_headers_emit_a_cache_and_origin_request_policy() -> None:
+    root = _root(_origin_request_config())
+
+    cache_policy = root["Resources"]["CloudFrontCachePolicyIiif"]
+    origin_policy = root["Resources"]["CloudFrontOriginRequestPolicyIiif"]
+
+    assert cache_policy["Type"] == "AWS::CloudFront::CachePolicy"
+    assert origin_policy["Type"] == "AWS::CloudFront::OriginRequestPolicy"
+    assert origin_policy["Properties"]["OriginRequestPolicyConfig"][
+        "HeadersConfig"
+    ] == {"HeaderBehavior": "whitelist", "Headers": ["Referer"]}
+
+
+def test_forwarded_header_stays_out_of_the_cache_key() -> None:
+    """The whole point of the policy pair: the origin sees Referer, but two
+    projects requesting the same object still share one cache entry.
+    """
+    root = _root(_origin_request_config())
+
+    parameters = root["Resources"]["CloudFrontCachePolicyIiif"]["Properties"][
+        "CachePolicyConfig"
+    ]["ParametersInCacheKeyAndForwardedToOrigin"]
+
+    assert parameters["HeadersConfig"] == {
+        "HeaderBehavior": "whitelist",
+        "Headers": ["Host"],
+    }
+
+
+def test_cache_policy_still_keys_on_authorization_when_configured() -> None:
+    root = _root(_origin_request_config(forward_auth=True))
+
+    parameters = root["Resources"]["CloudFrontCachePolicyIiif"]["Properties"][
+        "CachePolicyConfig"
+    ]["ParametersInCacheKeyAndForwardedToOrigin"]
+
+    assert parameters["HeadersConfig"]["Headers"] == ["Host", "Authorization"]
+
+
+def test_cache_policy_carries_the_behavior_ttls_and_query_strings() -> None:
+    root = _root(_origin_request_config())
+
+    config = root["Resources"]["CloudFrontCachePolicyIiif"]["Properties"][
+        "CachePolicyConfig"
+    ]
+
+    assert (config["MinTTL"], config["DefaultTTL"], config["MaxTTL"]) == (
+        0,
+        3600,
+        31536000,
+    )
+    assert config["ParametersInCacheKeyAndForwardedToOrigin"][
+        "QueryStringsConfig"
+    ] == {"QueryStringBehavior": "all"}
+
+
+def test_policy_behavior_drops_forwarded_values_and_inline_ttls() -> None:
+    """CloudFormation rejects a cache behavior that sets both a cache policy and
+    the legacy fields.
+    """
+    behavior = _cache_behaviors(_root(_origin_request_config()))[0]
+
+    assert behavior["CachePolicyId"] == {"Ref": "CloudFrontCachePolicyIiif"}
+    assert behavior["OriginRequestPolicyId"] == {
+        "Ref": "CloudFrontOriginRequestPolicyIiif"
+    }
+    for key in ("ForwardedValues", "MinTTL", "DefaultTTL", "MaxTTL"):
+        assert key not in behavior
+
+
+def test_behaviors_without_origin_request_headers_keep_forwarded_values() -> None:
+    root = _root(_origin_request_config())
+    behavior = _cache_behaviors(root)[1]
+
+    assert behavior["PathPattern"] == "/assets/*"
+    assert behavior["ForwardedValues"]["Headers"] == ["Host"]
+    assert "CachePolicyId" not in behavior
+    assert "CloudFrontCachePolicyAssets" not in root["Resources"]
+
+
+def test_no_policies_without_origin_request_headers() -> None:
+    root = _root(_origin_request_config(headers=[]))
+
+    assert "CloudFrontCachePolicyIiif" not in root["Resources"]
+    assert "CloudFrontOriginRequestPolicyIiif" not in root["Resources"]
+    assert "ForwardedValues" in _cache_behaviors(root)[0]
+
+
+def test_origin_request_policy_root_passes_cfn_lint(tmp_path: Path) -> None:
+    root = build_project_templates(_origin_request_config())[
+        "templates/generated/root.yaml"
+    ]
+
+    assert_template_passes_cfn_lint(root, tmp_path / "root-origin-request.yaml")

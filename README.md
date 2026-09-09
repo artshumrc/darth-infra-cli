@@ -441,10 +441,27 @@ query_string_allowlist = []              # required iff query_strings = "allowli
 cookies = "none"                         # none | all | allowlist
 cookie_allowlist = []                    # required iff cookies = "allowlist"
 forward_authorization_header = false
+origin_request_headers = []              # sent to the origin, kept out of the cache key
 ```
 
 The default behavior is uncached; only the paths you list in `cached_behaviors` are
 cached. Cached-behavior names and path patterns must each be unique.
+
+`origin_request_headers` lists viewer headers your origin needs to see but must not
+cache on — `Referer` to attribute a request to the site that made it, for example.
+Everything else a behavior forwards is part of the cache key, so a header listed there
+would split the cache one entry per distinct value.
+
+Setting it renders that behavior with a CloudFront cache policy and origin request
+policy in place of legacy forwarded values. The two are equivalent for the behavior's
+other settings, but the cache key is computed differently, so **the first deploy after
+adding it refills that behavior's cache from the origin**. Behaviors that leave the list
+empty are unchanged.
+
+`Host` and `Authorization` are rejected: `Host` is always forwarded, and `Authorization`
+has its own `forward_authorization_header` flag, which keeps it in the cache key where it
+belongs. `Accept-Encoding` is rejected while `compress = true`, because CloudFront
+normalizes that header itself and ignores an origin request policy's copy of it.
 
 ### `[[secrets]]`
 

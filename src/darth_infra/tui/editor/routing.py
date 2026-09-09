@@ -952,6 +952,13 @@ class CachedBehaviorDetail(Vertical):
             help=_help("cloudfront.cached_behaviors[].cookie_allowlist"),
             constraints="required in allowlist mode",
         )
+        yield StringListField(
+            field_path=self._p("origin_request_headers"),
+            document=self.document,
+            label="Origin request headers",
+            help=_help("cloudfront.cached_behaviors[].origin_request_headers"),
+            example=_example("cloudfront.cached_behaviors[].origin_request_headers"),
+        )
         yield BooleanField(
             field_path=self._p("forward_authorization_header"),
             document=self.document,

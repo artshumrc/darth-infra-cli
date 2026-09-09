@@ -303,6 +303,9 @@ def _parse_cloudfront(raw: dict[str, Any]) -> CloudFrontConfig:
                 query_string_allowlist=list(behavior.get("query_string_allowlist", [])),
                 cookies=CloudFrontCookiesMode(behavior.get("cookies", "none")),
                 cookie_allowlist=list(behavior.get("cookie_allowlist", [])),
+                origin_request_headers=list(
+                    behavior.get("origin_request_headers", [])
+                ),
                 forward_authorization_header=behavior.get(
                     "forward_authorization_header", False
                 ),
@@ -632,6 +635,11 @@ def dump_config(config: ProjectConfig) -> str:
                     f'"{_toml_escape(v)}"' for v in behavior.cookie_allowlist
                 )
                 lines.append(f"cookie_allowlist = [{allowlist}]")
+            if behavior.origin_request_headers:
+                headers = ", ".join(
+                    f'"{_toml_escape(v)}"' for v in behavior.origin_request_headers
+                )
+                lines.append(f"origin_request_headers = [{headers}]")
             lines.append(
                 "forward_authorization_header = "
                 f"{str(behavior.forward_authorization_header).lower()}"

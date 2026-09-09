@@ -102,3 +102,63 @@ def test_dedicated_mode_origin_https_only_requires_alb_certificate() -> None:
             alb=_base_alb(mode=AlbMode.DEDICATED, certificate_arn=None),
             cloudfront=_base_cloudfront(origin_https_only=True),
         )
+
+
+def _with_origin_request_headers(
+    headers: list[str], **behavior_kwargs: object
+) -> ProjectConfig:
+    return ProjectConfig(
+        project_name="demo",
+        services=[_base_service()],
+        alb=_base_alb(),
+        cloudfront=CloudFrontConfig(
+            enabled=True,
+            cached_behaviors=[
+                CloudFrontCachedBehavior(
+                    name="images",
+                    path_pattern="/images/*",
+                    origin_request_headers=headers,
+                    **behavior_kwargs,
+                )
+            ],
+        ),
+    )
+
+
+def test_origin_request_headers_accepts_a_viewer_header() -> None:
+    config = _with_origin_request_headers(["Referer"])
+
+    assert config.cloudfront.cached_behaviors[0].origin_request_headers == ["Referer"]
+
+
+def test_origin_request_headers_rejects_host() -> None:
+    with pytest.raises(ValueError, match="it is always forwarded to the origin"):
+        _with_origin_request_headers(["Host"])
+
+
+def test_origin_request_headers_rejects_authorization() -> None:
+    with pytest.raises(ValueError, match="use forward_authorization_header instead"):
+        _with_origin_request_headers(["Authorization"])
+
+
+def test_origin_request_headers_rejects_accept_encoding_when_compressed() -> None:
+    with pytest.raises(ValueError, match="normalizes it into the cache key"):
+        _with_origin_request_headers(["Accept-Encoding"])
+
+
+def test_origin_request_headers_allows_accept_encoding_without_compression() -> None:
+    config = _with_origin_request_headers(["Accept-Encoding"], compress=False)
+
+    assert config.cloudfront.cached_behaviors[0].origin_request_headers == [
+        "Accept-Encoding"
+    ]
+
+
+def test_origin_request_headers_rejects_case_insensitive_duplicates() -> None:
+    with pytest.raises(ValueError, match="Duplicate cloudfront.cached_behaviors"):
+        _with_origin_request_headers(["Referer", "referer"])
+
+
+def test_origin_request_headers_rejects_a_malformed_header_name() -> None:
+    with pytest.raises(ValueError, match="is not a valid HTTP header name"):
+        _with_origin_request_headers(["X Real IP"])
