@@ -453,10 +453,11 @@ Everything else a behavior forwards is part of the cache key, so a header listed
 would split the cache one entry per distinct value.
 
 Setting it renders that behavior with a CloudFront cache policy and origin request
-policy in place of legacy forwarded values. The two are equivalent for the behavior's
-other settings, but the cache key is computed differently, so **the first deploy after
-adding it refills that behavior's cache from the origin**. Behaviors that leave the list
-empty are unchanged.
+policy in place of legacy forwarded values. The cache key is deliberately unchanged:
+the policy keys on the same `Host`, query strings, and cookies the forwarded values did,
+carries the same TTLs, and leaves Brotli off, because legacy settings cannot express
+Brotli and enabling it would add a dimension that re-splits everything already cached
+under that path. Behaviors that leave the list empty are unchanged.
 
 `Host` and `Authorization` are rejected: `Host` is always forwarded, and `Authorization`
 has its own `forward_authorization_header` flag, which keeps it in the cache key where it
