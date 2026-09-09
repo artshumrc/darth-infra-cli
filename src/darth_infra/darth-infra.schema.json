@@ -628,6 +628,12 @@
                 "type": "boolean",
                 "description": "Forward Authorization header for this behavior.",
                 "default": false
+              },
+              "origin_request_headers": {
+                "type": "array",
+                "description": "Viewer headers forwarded to the origin but excluded from the cache key. Setting this renders the behavior with a CloudFront cache policy and origin request policy instead of legacy forwarded values.",
+                "default": [],
+                "items": { "type": "string" }
               }
             }
           }

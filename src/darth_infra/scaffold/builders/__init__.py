@@ -134,6 +134,151 @@ def _alb_cached_behavior_forwarded_values(
     return forwarded_values
 
 
+def _cache_key_headers(behavior: object) -> list[str]:
+    headers = ["Host"]
+    if behavior.forward_authorization_header:
+        headers.append("Authorization")
+    return headers
+
+
+def _cache_policy_logical_id(behavior: object) -> str:
+    return f"CloudFrontCachePolicy{behavior.name_pascal}"
+
+
+def _origin_request_policy_logical_id(behavior: object) -> str:
+    return f"CloudFrontOriginRequestPolicy{behavior.name_pascal}"
+
+
+def _build_alb_cached_behavior_policies(context: RenderContext) -> list[object]:
+    """Cache and origin request policies for behaviors forwarding extra headers.
+
+    Legacy ``ForwardedValues`` cannot separate the two: every header it forwards
+    also enters the cache key. A behavior that wants a viewer header at the
+    origin without fragmenting the cache needs this policy pair instead.
+    """
+    resources: list[object] = []
+    for behavior in context.alb_cloudfront.cached_behaviors:
+        if not behavior.origin_request_headers:
+            continue
+
+        if behavior.query_strings == "none":
+            cache_query_strings = cloudfront.CacheQueryStringsConfig(
+                QueryStringBehavior="none"
+            )
+        elif behavior.query_strings == "allowlist":
+            cache_query_strings = cloudfront.CacheQueryStringsConfig(
+                QueryStringBehavior="whitelist",
+                QueryStrings=list(behavior.query_string_allowlist),
+            )
+        else:
+            cache_query_strings = cloudfront.CacheQueryStringsConfig(
+                QueryStringBehavior="all"
+            )
+
+        if behavior.cookies == "all":
+            cache_cookies = cloudfront.CacheCookiesConfig(CookieBehavior="all")
+        elif behavior.cookies == "allowlist":
+            cache_cookies = cloudfront.CacheCookiesConfig(
+                CookieBehavior="whitelist",
+                Cookies=list(behavior.cookie_allowlist),
+            )
+        else:
+            cache_cookies = cloudfront.CacheCookiesConfig(CookieBehavior="none")
+
+        resources.append(
+            cloudfront.CachePolicy(
+                _cache_policy_logical_id(behavior),
+                CachePolicyConfig=cloudfront.CachePolicyConfig(
+                    Name=Sub(
+                        "${ProjectName}-${EnvironmentName}-"
+                        f"{behavior.name_pascal}-cache"
+                    ),
+                    Comment=f"Cache key for the {behavior.name} behavior",
+                    MinTTL=behavior.min_ttl_seconds,
+                    DefaultTTL=behavior.default_ttl_seconds,
+                    MaxTTL=behavior.max_ttl_seconds,
+                    ParametersInCacheKeyAndForwardedToOrigin=(
+                        cloudfront.ParametersInCacheKeyAndForwardedToOrigin(
+                            # CloudFront normalizes Accept-Encoding into the
+                            # cache key only when these are set, and its own
+                            # compression depends on that normalization.
+                            EnableAcceptEncodingGzip=behavior.compress,
+                            EnableAcceptEncodingBrotli=behavior.compress,
+                            HeadersConfig=cloudfront.CacheHeadersConfig(
+                                HeaderBehavior="whitelist",
+                                Headers=_cache_key_headers(behavior),
+                            ),
+                            CookiesConfig=cache_cookies,
+                            QueryStringsConfig=cache_query_strings,
+                        )
+                    ),
+                ),
+            )
+        )
+        resources.append(
+            cloudfront.OriginRequestPolicy(
+                _origin_request_policy_logical_id(behavior),
+                OriginRequestPolicyConfig=cloudfront.OriginRequestPolicyConfig(
+                    Name=Sub(
+                        "${ProjectName}-${EnvironmentName}-"
+                        f"{behavior.name_pascal}-origin-request"
+                    ),
+                    Comment=(
+                        f"Headers sent to the origin for the {behavior.name} "
+                        "behavior without entering the cache key"
+                    ),
+                    HeadersConfig=cloudfront.OriginRequestHeadersConfig(
+                        HeaderBehavior="whitelist",
+                        Headers=list(behavior.origin_request_headers),
+                    ),
+                    # Cache-key cookies and query strings reach the origin
+                    # already; this policy only adds to them.
+                    CookiesConfig=cloudfront.OriginRequestCookiesConfig(
+                        CookieBehavior="none"
+                    ),
+                    QueryStringsConfig=cloudfront.OriginRequestQueryStringsConfig(
+                        QueryStringBehavior="none"
+                    ),
+                ),
+            )
+        )
+    return resources
+
+
+def _build_alb_cached_behavior(
+    behavior: object,
+) -> cloudfront.CacheBehavior:
+    cache_behavior = cloudfront.CacheBehavior(
+        PathPattern=behavior.path_pattern,
+        TargetOriginId="AlbOrigin",
+        ViewerProtocolPolicy="redirect-to-https",
+        AllowedMethods=[
+            "GET",
+            "HEAD",
+            "OPTIONS",
+            "PUT",
+            "PATCH",
+            "POST",
+            "DELETE",
+        ],
+        CachedMethods=["GET", "HEAD", "OPTIONS"],
+        Compress=behavior.compress,
+    )
+    if behavior.origin_request_headers:
+        # TTLs live on the cache policy; CloudFormation rejects a behavior that
+        # sets both.
+        cache_behavior.CachePolicyId = Ref(_cache_policy_logical_id(behavior))
+        cache_behavior.OriginRequestPolicyId = Ref(
+            _origin_request_policy_logical_id(behavior)
+        )
+        return cache_behavior
+    cache_behavior.MinTTL = behavior.min_ttl_seconds
+    cache_behavior.DefaultTTL = behavior.default_ttl_seconds
+    cache_behavior.MaxTTL = behavior.max_ttl_seconds
+    cache_behavior.ForwardedValues = _alb_cached_behavior_forwarded_values(behavior)
+    return cache_behavior
+
+
 def _build_alb_cloudfront(context: RenderContext) -> cloudfront.Distribution:
     alb_cloudfront = context.alb_cloudfront
     distribution_config = cloudfront.DistributionConfig(
@@ -194,26 +339,7 @@ def _build_alb_cloudfront(context: RenderContext) -> cloudfront.Distribution:
         )
     if alb_cloudfront.cached_behaviors:
         distribution_config.CacheBehaviors = [
-            cloudfront.CacheBehavior(
-                PathPattern=behavior.path_pattern,
-                TargetOriginId="AlbOrigin",
-                ViewerProtocolPolicy="redirect-to-https",
-                AllowedMethods=[
-                    "GET",
-                    "HEAD",
-                    "OPTIONS",
-                    "PUT",
-                    "PATCH",
-                    "POST",
-                    "DELETE",
-                ],
-                CachedMethods=["GET", "HEAD", "OPTIONS"],
-                Compress=behavior.compress,
-                MinTTL=behavior.min_ttl_seconds,
-                DefaultTTL=behavior.default_ttl_seconds,
-                MaxTTL=behavior.max_ttl_seconds,
-                ForwardedValues=_alb_cached_behavior_forwarded_values(behavior),
-            )
+            _build_alb_cached_behavior(behavior)
             for behavior in alb_cloudfront.cached_behaviors
         ]
     return cloudfront.Distribution(
@@ -1368,6 +1494,8 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
     root.add_resource(https_listener)
 
     if context.has_alb_cloudfront:
+        for policy in _build_alb_cached_behavior_policies(context):
+            root.add_resource(policy)
         root.add_resource(_build_alb_cloudfront(context))
 
     for service in context.services_ctx:

@@ -597,6 +597,11 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "Allowed cookie names when cookies is allowlist.",
     ),
     FieldEntry(
+        "cloudfront.cached_behaviors[].origin_request_headers", _S.ROUTING, _P.ADVANCED, _C.STRING_LIST,
+        "Viewer headers sent to the origin but kept out of the cache key.",
+        example="Referer",
+    ),
+    FieldEntry(
         "cloudfront.cached_behaviors[].forward_authorization_header", _S.ROUTING, _P.ADVANCED, _C.BOOLEAN,
         "Forward the Authorization header for this behavior.",
     ),

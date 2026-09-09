@@ -216,6 +216,7 @@ class CloudFrontCachedBehavior:
     query_string_allowlist: list[str] = field(default_factory=list)
     cookies: CloudFrontCookiesMode = CloudFrontCookiesMode.NONE
     cookie_allowlist: list[str] = field(default_factory=list)
+    origin_request_headers: list[str] = field(default_factory=list)
     forward_authorization_header: bool = False
 
 
@@ -879,6 +880,47 @@ class ProjectConfig:
                     f"cloudfront.cached_behaviors '{behavior.name}' cookie_allowlist "
                     "is only allowed when cookies='allowlist'"
                 )
+
+            seen_origin_request_headers: set[str] = set()
+            for header in behavior.origin_request_headers:
+                name = header.strip()
+                if not re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+", name):
+                    raise ValueError(
+                        "cloudfront.cached_behaviors "
+                        f"'{behavior.name}' origin_request_headers entry "
+                        f"'{header}' is not a valid HTTP header name"
+                    )
+                folded = name.lower()
+                if folded in seen_origin_request_headers:
+                    raise ValueError(
+                        "Duplicate cloudfront.cached_behaviors "
+                        f"'{behavior.name}' origin_request_headers entry '{header}'"
+                    )
+                seen_origin_request_headers.add(folded)
+
+                # Host is part of the cache key, and CloudFront forwards every
+                # cache-key value to the origin already.
+                if folded == "host":
+                    raise ValueError(
+                        "cloudfront.cached_behaviors "
+                        f"'{behavior.name}' origin_request_headers must not list "
+                        "'Host'; it is always forwarded to the origin"
+                    )
+                if folded == "authorization":
+                    raise ValueError(
+                        "cloudfront.cached_behaviors "
+                        f"'{behavior.name}' origin_request_headers must not list "
+                        "'Authorization'; use forward_authorization_header instead"
+                    )
+                # CloudFront normalizes Accept-Encoding itself for a compressed
+                # behavior, and ignores the header in an origin request policy.
+                if folded == "accept-encoding" and behavior.compress:
+                    raise ValueError(
+                        "cloudfront.cached_behaviors "
+                        f"'{behavior.name}' origin_request_headers must not list "
+                        "'Accept-Encoding' while compress=true; CloudFront "
+                        "normalizes it into the cache key"
+                    )
 
         seen_cf_connection_pairs: set[tuple[str, str]] = set()
         for conn in self.cloudfront.connections:
