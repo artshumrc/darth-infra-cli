@@ -199,11 +199,15 @@ def _build_alb_cached_behavior_policies(context: RenderContext) -> list[object]:
                     MaxTTL=behavior.max_ttl_seconds,
                     ParametersInCacheKeyAndForwardedToOrigin=(
                         cloudfront.ParametersInCacheKeyAndForwardedToOrigin(
-                            # CloudFront normalizes Accept-Encoding into the
-                            # cache key only when these are set, and its own
-                            # compression depends on that normalization.
+                            # Matches what Compress already does under legacy
+                            # forwarded values, which normalizes Accept-Encoding
+                            # into the cache key. Brotli stays off because
+                            # legacy settings cannot express it: enabling it
+                            # would add a cache-key dimension the behavior did
+                            # not have, splitting every compressible object
+                            # already cached under this path.
                             EnableAcceptEncodingGzip=behavior.compress,
-                            EnableAcceptEncodingBrotli=behavior.compress,
+                            EnableAcceptEncodingBrotli=False,
                             HeadersConfig=cloudfront.CacheHeadersConfig(
                                 HeaderBehavior="whitelist",
                                 Headers=_cache_key_headers(behavior),

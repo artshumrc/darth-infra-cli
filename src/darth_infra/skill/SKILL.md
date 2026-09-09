@@ -98,8 +98,8 @@ hand-written config invalid.
 - `cloudfront.cached_behaviors[].origin_request_headers` forwards viewer headers to the
   origin without adding them to the cache key. It rejects `Host` and `Authorization`
   (use `forward_authorization_header`), and `Accept-Encoding` while `compress = true`.
-  Adding it to a live behavior changes that behavior's cache key, so its cache refills
-  once on the next deploy.
+  The rendered cache policy keeps the behavior's existing cache key, so adding it to a
+  live behavior does not discard what that path has already cached.
 - `[[secrets]]` with `source = "existing"` or `"rds"` requires `existing_secret_name`;
   `source = "generate"` or `"env"` forbids it. For `source = "rds"` the value is a JSON
   key (`host`, `port`, `dbname`, `username`, `password`), not a secret name.

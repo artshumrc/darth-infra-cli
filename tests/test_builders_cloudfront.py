@@ -407,3 +407,43 @@ def test_origin_request_policy_root_passes_cfn_lint(tmp_path: Path) -> None:
     ]
 
     assert_template_passes_cfn_lint(root, tmp_path / "root-origin-request.yaml")
+
+
+def test_policy_cache_key_matches_the_legacy_forwarded_values() -> None:
+    """Adding origin_request_headers must not change what the behavior caches
+    on. If it did, every object already cached under that path would stop
+    being hit and refill from the origin.
+    """
+    legacy = _cache_behaviors(_root(_origin_request_config(headers=[])))[0]
+    policy_root = _root(_origin_request_config())
+    parameters = policy_root["Resources"]["CloudFrontCachePolicyIiif"][
+        "Properties"
+    ]["CachePolicyConfig"]["ParametersInCacheKeyAndForwardedToOrigin"]
+
+    forwarded = legacy["ForwardedValues"]
+    assert parameters["HeadersConfig"]["Headers"] == forwarded["Headers"]
+    assert parameters["QueryStringsConfig"]["QueryStringBehavior"] == "all"
+    assert forwarded["QueryString"] is True
+    assert parameters["CookiesConfig"]["CookieBehavior"] == forwarded["Cookies"][
+        "Forward"
+    ]
+
+    config = policy_root["Resources"]["CloudFrontCachePolicyIiif"]["Properties"][
+        "CachePolicyConfig"
+    ]
+    assert config["MinTTL"] == legacy["MinTTL"]
+    assert config["DefaultTTL"] == legacy["DefaultTTL"]
+    assert config["MaxTTL"] == legacy["MaxTTL"]
+
+
+def test_brotli_stays_off_so_the_cache_key_is_unchanged() -> None:
+    """Legacy cache settings cannot express Brotli, so a behavior migrating to
+    a cache policy has only ever keyed on the Gzip-normalized Accept-Encoding.
+    Enabling Brotli would add a dimension and re-split the existing cache.
+    """
+    parameters = _root(_origin_request_config())["Resources"][
+        "CloudFrontCachePolicyIiif"
+    ]["Properties"]["CachePolicyConfig"]["ParametersInCacheKeyAndForwardedToOrigin"]
+
+    assert parameters["EnableAcceptEncodingGzip"] is True
+    assert parameters["EnableAcceptEncodingBrotli"] is False
