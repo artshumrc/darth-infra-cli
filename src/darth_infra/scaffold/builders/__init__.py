@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+from collections.abc import Sequence
 from typing import TypeAlias
 
 from troposphere import (
@@ -58,18 +59,63 @@ class _TaggableListener(elasticloadbalancingv2.Listener):
     props = {**elasticloadbalancingv2.Listener.props, "Tags": (Tags, False)}
 
 
+def _builtin_tags(
+    context: RenderContext,
+    builtins: Sequence[tuple[str, object]],
+    *,
+    propagate_at_launch: bool = False,
+) -> list[object]:
+    """Built-in tags, each yielding to a configured tag that shadows its key.
+
+    IAM compares tag keys case-insensitively and rejects a role carrying both
+    ``Project`` and ``project``, so a configured key has to replace the built-in
+    rather than sit beside it. The replacement is conditional because a configured
+    tag resolves to an empty value in environments that do not set it, and the
+    built-in still applies there; the two arms test the same condition in opposite
+    senses, so exactly one is ever rendered.
+    """
+    shadows = {tag.key.lower(): tag for tag in context.tag_parameters}
+    tags: list[object] = []
+    for key, value in builtins:
+        shadow = shadows.get(key.lower())
+        if shadow is None:
+            if propagate_at_launch:
+                tags.append(autoscaling.Tag(key, value, True))
+            else:
+                tags.append(Tag(key, value))
+            continue
+        entry: dict[str, object] = {"Key": key, "Value": value}
+        if propagate_at_launch:
+            entry["PropagateAtLaunch"] = True
+        tags.append(If(shadow.condition_name, Ref("AWS::NoValue"), entry))
+    return tags
+
+
+def _configured_tags(
+    context: RenderContext, *, propagate_at_launch: bool = False
+) -> list[object]:
+    tags: list[object] = []
+    for tag in context.tag_parameters:
+        entry: dict[str, object] = {
+            "Key": tag.key,
+            "Value": Ref(tag.parameter_name),
+        }
+        if propagate_at_launch:
+            entry["PropagateAtLaunch"] = True
+        tags.append(If(tag.condition_name, entry, Ref("AWS::NoValue")))
+    return tags
+
+
 def _resource_tags(context: RenderContext) -> Tags:
     return Tags(
-        Tag("Project", Ref("ProjectName")),
-        Tag("Environment", Ref("EnvironmentName")),
-        *(
-            If(
-                tag.condition_name,
-                {"Key": tag.key, "Value": Ref(tag.parameter_name)},
-                Ref("AWS::NoValue"),
-            )
-            for tag in context.tag_parameters
+        *_builtin_tags(
+            context,
+            (
+                ("Project", Ref("ProjectName")),
+                ("Environment", Ref("EnvironmentName")),
+            ),
         ),
+        *_configured_tags(context),
     )
 
 
@@ -77,17 +123,15 @@ def _service_tags(
     context: RenderContext, service: ServiceRenderContext
 ) -> Tags:
     return Tags(
-        Tag("Project", Ref("ProjectName")),
-        Tag("Environment", Ref("EnvironmentName")),
-        Tag("Service", service.name),
-        *(
-            If(
-                tag.condition_name,
-                {"Key": tag.key, "Value": Ref(tag.parameter_name)},
-                Ref("AWS::NoValue"),
-            )
-            for tag in context.tag_parameters
+        *_builtin_tags(
+            context,
+            (
+                ("Project", Ref("ProjectName")),
+                ("Environment", Ref("EnvironmentName")),
+                ("Service", service.name),
+            ),
         ),
+        *_configured_tags(context),
     )
 
 
@@ -714,28 +758,20 @@ def _build_service_template(
             )
         )
         propagated_tags = [
-            autoscaling.Tag(
-                "Name",
-                Sub(
-                    f"${{ProjectName}}-${{EnvironmentName}}-{service.name}"
+            *_builtin_tags(
+                context,
+                (
+                    (
+                        "Name",
+                        Sub(f"${{ProjectName}}-${{EnvironmentName}}-{service.name}"),
+                    ),
+                    ("Project", Ref("ProjectName")),
+                    ("Environment", Ref("EnvironmentName")),
+                    ("Service", service.name),
                 ),
-                True,
+                propagate_at_launch=True,
             ),
-            autoscaling.Tag("Project", Ref("ProjectName"), True),
-            autoscaling.Tag("Environment", Ref("EnvironmentName"), True),
-            autoscaling.Tag("Service", service.name, True),
-            *(
-                If(
-                    tag.condition_name,
-                    {
-                        "Key": tag.key,
-                        "Value": Ref(tag.parameter_name),
-                        "PropagateAtLaunch": True,
-                    },
-                    Ref("AWS::NoValue"),
-                )
-                for tag in context.tag_parameters
-            ),
+            *_configured_tags(context, propagate_at_launch=True),
         ]
         template.add_resource(
             autoscaling.AutoScalingGroup(
