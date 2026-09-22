@@ -313,15 +313,22 @@ aws secretsmanager create-secret \
   --secret-string '{"username":"myapp","password":"…"}'
 ```
 
-Both keys apply **only to prod's first deploy**, while the `<project>-ecs-prod` stack
-does not yet exist:
+Both keys apply to **prod's database's first deploy** — which is prod's first deploy
+for a new project, and the deploy that first adds `[rds]` for a project already running
+without one:
 
-- Once prod is deployed, the snapshot identifier recorded on the stack is
+- Once prod's database is deployed, the snapshot identifier recorded on the stack is
   authoritative and the config keys are ignored. RDS requires that identifier on
   every subsequent update, so **leave both keys in the file** — removing
   `initial_snapshot_credentials_secret` is a hard error on the next deploy.
-- A prod stack deployed *without* a snapshot never acquires one. Adding these keys to
-  an already-deployed project does nothing, rather than replacing a live database.
+- A prod database deployed *without* a snapshot never acquires one. Adding these keys
+  to a project whose database this CLI already manages does nothing, rather than
+  replacing a live database.
+- **Adding `[rds]` to a project deployed without it is an adoption, not a replacement.**
+  The stack has no database yet, so the snapshot restore applies and prod's data comes
+  across at the storage layer. The instance is created alongside whatever unmanaged
+  database the project is currently using — nothing repoints the application, so cut
+  over deliberately once the restored instance is verified.
 - Non-prod environments ignore these keys entirely; they keep seeding from the latest
   automated snapshot of `<project>-prod-db`.
 

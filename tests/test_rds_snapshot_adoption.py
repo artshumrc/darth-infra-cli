@@ -165,7 +165,10 @@ def test_deployed_snapshot_identifier_wins_over_configuration(monkeypatch) -> No
 
 
 def test_live_database_never_acquires_a_snapshot_identifier(monkeypatch) -> None:
-    """Adding the key to an already-deployed project must not replace its data."""
+    """An empty parameter means a live managed database deployed without a snapshot.
+
+    Adding the key to such a project must not replace its data.
+    """
     _patch_clients(
         monkeypatch,
         cloudformation=_FakeCloudFormation({"RdsSnapshotIdentifier": ""}),
@@ -173,6 +176,45 @@ def test_live_database_never_acquires_a_snapshot_identifier(monkeypatch) -> None
     config = _config(_LEGACY_SNAPSHOT, "legacy-prod-credentials")
 
     assert _resolve_rds_snapshot(config, "prod") == ""
+
+
+def test_adding_rds_to_a_deployed_project_restores_from_the_configured_snapshot(
+    monkeypatch,
+) -> None:
+    """A stack with no RdsSnapshotIdentifier parameter has no database yet.
+
+    Distinct from the empty-value case below: the key's absence means [rds] was
+    never configured, so there is no live instance the restore could replace.
+    """
+    _patch_clients(
+        monkeypatch,
+        cloudformation=_FakeCloudFormation({"ProjectName": "demo"}),
+    )
+    config = _config(_LEGACY_SNAPSHOT, "legacy-prod-credentials")
+
+    assert _resolve_rds_snapshot(config, "prod") == _LEGACY_SNAPSHOT
+
+
+def test_adding_rds_to_a_deployed_non_prod_stack_seeds_from_prod(monkeypatch) -> None:
+    class _ProdSnapshots:
+        def describe_db_snapshots(self, **kwargs: object) -> dict[str, object]:
+            assert kwargs["DBInstanceIdentifier"] == "demo-prod-db"
+            return {
+                "DBSnapshots": [
+                    {
+                        "DBSnapshotIdentifier": "rds:demo-prod-db-2026-09-22",
+                        "SnapshotCreateTime": 2,
+                    }
+                ]
+            }
+
+    _patch_clients(
+        monkeypatch,
+        cloudformation=_FakeCloudFormation({"ProjectName": "demo"}),
+        rds=_ProdSnapshots(),
+    )
+
+    assert _resolve_rds_snapshot(_config(), "dev") == "rds:demo-prod-db-2026-09-22"
 
 
 def test_non_prod_reuses_its_deployed_snapshot_identifier(monkeypatch) -> None:

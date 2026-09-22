@@ -2820,13 +2820,13 @@ def _list_stack_resource_summaries(cf, stack_name: str) -> list[dict[str, Any]]:
     return summaries
 
 
-def _get_existing_stack_parameter(
-    config: ProjectConfig, env_name: str, parameter_key: str
-) -> str | None:
-    """Read a deployed stack parameter.
+def _deployed_stack_parameters(
+    config: ProjectConfig, env_name: str
+) -> dict[str, str] | None:
+    """Read a deployed stack's parameters, or None when the stack does not exist.
 
-    Returns None when the stack does not exist yet, which callers must
-    distinguish from a deployed-but-empty parameter value.
+    A key's absence and its empty value mean different things to RDS snapshot
+    resolution, so this returns the mapping rather than flattening both to "".
     """
     stack_name = f"{config.project_name}-ecs-{env_name}"
     cf = boto3.client("cloudformation", region_name=config.aws_region)
@@ -2837,10 +2837,24 @@ def _get_existing_stack_parameter(
             return None
         raise
 
-    for parameter in stack.get("Parameters", []):
-        if parameter.get("ParameterKey") == parameter_key:
-            return str(parameter.get("ParameterValue") or "")
-    return ""
+    return {
+        str(parameter.get("ParameterKey")): str(parameter.get("ParameterValue") or "")
+        for parameter in stack.get("Parameters", [])
+    }
+
+
+def _get_existing_stack_parameter(
+    config: ProjectConfig, env_name: str, parameter_key: str
+) -> str | None:
+    """Read a deployed stack parameter.
+
+    Returns None when the stack does not exist yet, which callers must
+    distinguish from a deployed-but-empty parameter value.
+    """
+    parameters = _deployed_stack_parameters(config, env_name)
+    if parameters is None:
+        return None
+    return parameters.get(parameter_key, "")
 
 
 def _resolve_rds_snapshot(config: ProjectConfig, env_name: str) -> str:
@@ -2850,13 +2864,16 @@ def _resolve_rds_snapshot(config: ProjectConfig, env_name: str) -> str:
     # DBSnapshotIdentifier is sticky in RDS: once an instance has been restored
     # from a snapshot, every later update must carry the same identifier or
     # CloudFormation builds an empty instance and deletes the original. The
-    # deployed value is therefore authoritative, and just as importantly a stack
-    # deployed *without* one must never acquire one later.
-    deployed = _get_existing_stack_parameter(
-        config, env_name, "RdsSnapshotIdentifier"
-    )
-    if deployed is not None:
-        return deployed
+    # deployed value is therefore authoritative, and a stack whose database is
+    # already live must never acquire one.
+    #
+    # The parameter's absence is a different case from its emptiness: a stack
+    # that does not carry it at all was deployed without [rds] and so has no
+    # database to replace. Adding [rds] to such a project is its database's
+    # first deploy, and the configured snapshot applies.
+    parameters = _deployed_stack_parameters(config, env_name)
+    if parameters is not None and "RdsSnapshotIdentifier" in parameters:
+        return parameters["RdsSnapshotIdentifier"]
 
     if env_name == "prod":
         snapshot_id = (config.rds.initial_snapshot_identifier or "").strip()
