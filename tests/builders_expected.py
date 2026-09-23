@@ -2759,6 +2759,7 @@ RDS_ROOT_RESOURCES = {
             "DBInstanceClass": {"Ref": "RdsInstanceType"},
             "Engine": "postgres",
             "EngineVersion": "16",
+            "AllowMajorVersionUpgrade": True,
             "MasterUsername": {
                 "Fn::If": [
                     "HasRdsSnapshot",

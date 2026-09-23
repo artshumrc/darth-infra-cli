@@ -1479,6 +1479,9 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
                 DBInstanceClass=Ref("RdsInstanceType"),
                 Engine="postgres",
                 EngineVersion=context.rds.engine_version,
+                # CloudFormation rejects an EngineVersion change that crosses a
+                # major version unless this is set; it is inert otherwise.
+                AllowMajorVersionUpgrade=True,
                 MasterUsername=If(
                     "HasRdsSnapshot",
                     Ref("AWS::NoValue"),
