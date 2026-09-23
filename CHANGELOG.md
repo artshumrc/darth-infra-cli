@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.12.1
+
+### Patch Changes
+
+- [`d32b7cf`](https://github.com/artshumrc/darth-infra-cli/commit/d32b7cf0008dfc7b0ab4b655629e93f6c8d1d14a) Thanks [@d-flood](https://github.com/d-flood)! - Preview environments now create RDS ingress rules inside their service stacks, ensuring database access is available before ECS services start and avoiding CloudFormation dependency deadlocks. They also clear inherited ALB listener priorities so preview rules are allocated from the configured preview range, while named environments retain their existing stack layout and priorities.
+
 ## 0.12.0
 
 ### Minor Changes
