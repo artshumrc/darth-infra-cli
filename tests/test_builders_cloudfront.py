@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from darth_infra.config.models import (
     AlbConfig,
@@ -15,7 +20,10 @@ from darth_infra.config.models import (
     S3BucketConnection,
     ServiceConfig,
 )
-from darth_infra.scaffold.builders import build_project_templates
+from darth_infra.scaffold.builders import (
+    _referer_function_code,
+    build_project_templates,
+)
 
 from builders_expected import (
     CF_CUSTOM_DOMAIN,
@@ -447,3 +455,91 @@ def test_brotli_stays_off_so_the_cache_key_is_unchanged() -> None:
 
     assert parameters["EnableAcceptEncodingGzip"] is True
     assert parameters["EnableAcceptEncodingBrotli"] is False
+
+
+def _referer_config(referers: list[str]) -> ProjectConfig:
+    config = _origin_request_config()
+    config.cloudfront.allowed_referers = referers
+    return config
+
+
+def test_allowed_referers_emit_a_viewer_request_function_on_every_behavior() -> None:
+    root = _root(_referer_config(["Harvard.edu"]))
+
+    function = root["Resources"]["CloudFrontRefererFunction"]
+    assert function["Type"] == "AWS::CloudFront::Function"
+    assert function["Properties"]["FunctionConfig"]["Runtime"] == "cloudfront-js-2.0"
+    assert 'var ALLOWED_HOSTS = ["harvard.edu"];' in function["Properties"][
+        "FunctionCode"
+    ]
+
+    association = [
+        {
+            "EventType": "viewer-request",
+            "FunctionARN": {
+                "Fn::GetAtt": [
+                    "CloudFrontRefererFunction",
+                    "FunctionMetadata.FunctionARN",
+                ]
+            },
+        }
+    ]
+    distribution = root["Resources"]["AlbCloudFront"]["Properties"][
+        "DistributionConfig"
+    ]
+    assert distribution["DefaultCacheBehavior"]["FunctionAssociations"] == association
+    for behavior in distribution["CacheBehaviors"]:
+        assert behavior["FunctionAssociations"] == association
+
+
+def test_no_referer_function_without_allowed_referers() -> None:
+    root = _root(_referer_config([]))
+    distribution = root["Resources"]["AlbCloudFront"]["Properties"][
+        "DistributionConfig"
+    ]
+
+    assert "CloudFrontRefererFunction" not in root["Resources"]
+    assert "FunctionAssociations" not in distribution["DefaultCacheBehavior"]
+    for behavior in distribution["CacheBehaviors"]:
+        assert "FunctionAssociations" not in behavior
+
+
+def test_referer_function_root_passes_cfn_lint(tmp_path: Path) -> None:
+    root = build_project_templates(_referer_config(["harvard.edu"]))[
+        "templates/generated/root.yaml"
+    ]
+
+    assert_template_passes_cfn_lint(root, tmp_path / "root-referer.yaml")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+@pytest.mark.parametrize(
+    ("referer", "allowed"),
+    [
+        (None, True),
+        ("https://harvard.edu/", True),
+        ("https://bta.gse.harvard.edu/viewer?x=1", True),
+        ("http://HARVARD.EDU:8080/", True),
+        ("https://notharvard.edu/", False),
+        ("https://harvard.edu.evil.example/", False),
+        ("https://harvard.edu@evil.example/", False),
+        ("https://evil.example/?https://harvard.edu", False),
+        ("garbage", False),
+    ],
+)
+def test_referer_function_decides_by_referring_host(
+    referer: str | None, allowed: bool
+) -> None:
+    code = _referer_function_code(["harvard.edu"])
+    headers = {} if referer is None else {"referer": {"value": referer}}
+    script = (
+        code
+        + "\nvar request = { uri: '/iiif/x', headers: "
+        + json.dumps(headers)
+        + " };\nprocess.stdout.write(String(handler({ request: request }) === request));"
+    )
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, check=True
+    )
+
+    assert result.stdout == str(allowed).lower()

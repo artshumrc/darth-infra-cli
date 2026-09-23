@@ -232,6 +232,7 @@ class CloudFrontConfig:
     comment: str | None = None
     connections: list[CloudFrontConnection] = field(default_factory=list)
     cached_behaviors: list[CloudFrontCachedBehavior] = field(default_factory=list)
+    allowed_referers: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -791,10 +792,12 @@ class ProjectConfig:
             or self.cloudfront.origin_https_only
             or self.cloudfront.custom_domain
             or self.cloudfront.certificate_arn
+            or self.cloudfront.allowed_referers
         ):
             raise ValueError(
                 "cloudfront.connections, cloudfront.cached_behaviors, cloudfront.origin_https_only, "
-                "cloudfront.custom_domain, and cloudfront.certificate_arn require cloudfront.enabled=true"
+                "cloudfront.custom_domain, cloudfront.certificate_arn, and cloudfront.allowed_referers "
+                "require cloudfront.enabled=true"
             )
 
         if self.cloudfront.price_class not in {
@@ -805,6 +808,23 @@ class ProjectConfig:
             raise ValueError(
                 "cloudfront.price_class must be one of PriceClass_100, PriceClass_200, PriceClass_All"
             )
+
+        seen_allowed_referers: set[str] = set()
+        for referer in self.cloudfront.allowed_referers:
+            host = referer.strip().lower()
+            if not re.fullmatch(
+                r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*",
+                host,
+            ):
+                raise ValueError(
+                    f"cloudfront.allowed_referers entry '{referer}' must be a "
+                    "hostname without scheme, port, or path"
+                )
+            if host in seen_allowed_referers:
+                raise ValueError(
+                    f"Duplicate cloudfront.allowed_referers entry '{referer}'"
+                )
+            seen_allowed_referers.add(host)
 
         seen_cf_behavior_names: set[str] = set()
         seen_cf_behavior_paths: set[str] = set()

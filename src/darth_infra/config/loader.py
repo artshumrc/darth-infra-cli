@@ -312,6 +312,7 @@ def _parse_cloudfront(raw: dict[str, Any]) -> CloudFrontConfig:
             )
             for behavior in raw.get("cached_behaviors", [])
         ],
+        allowed_referers=list(raw.get("allowed_referers", [])),
     )
 
 
@@ -590,6 +591,7 @@ def dump_config(config: ProjectConfig) -> str:
         or cloudfront.custom_domain
         or cloudfront.certificate_arn
         or cloudfront.price_class != "PriceClass_100"
+        or cloudfront.allowed_referers
     ):
         lines.append("# [deploy-live] CloudFront distribution behavior")
         lines.append("[cloudfront]")
@@ -605,6 +607,11 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f'price_class = "{cloudfront.price_class}"')
         if cloudfront.comment:
             lines.append(f'comment = "{_toml_escape(cloudfront.comment)}"')
+        if cloudfront.allowed_referers:
+            referers = ", ".join(
+                f'"{_toml_escape(v)}"' for v in cloudfront.allowed_referers
+            )
+            lines.append(f"allowed_referers = [{referers}]")
         for conn in cloudfront.connections:
             lines.append("")
             lines.append("[[cloudfront.connections]]")

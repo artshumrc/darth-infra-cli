@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from darth_infra.config.loader import dump_config, load_config
+
 from darth_infra.config.models import (
     AlbConfig,
     AlbMode,
@@ -162,3 +164,61 @@ def test_origin_request_headers_rejects_case_insensitive_duplicates() -> None:
 def test_origin_request_headers_rejects_a_malformed_header_name() -> None:
     with pytest.raises(ValueError, match="is not a valid HTTP header name"):
         _with_origin_request_headers(["X Real IP"])
+
+
+def test_allowed_referers_accepts_hostnames() -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[_base_service()],
+        alb=_base_alb(),
+        cloudfront=_base_cloudfront(allowed_referers=["harvard.edu", "Example.org"]),
+    )
+
+    assert config.cloudfront.allowed_referers == ["harvard.edu", "Example.org"]
+
+
+@pytest.mark.parametrize(
+    "referer",
+    ["https://harvard.edu", "harvard.edu/path", "harvard.edu:443", "*.harvard.edu", ""],
+)
+def test_allowed_referers_rejects_anything_but_a_hostname(referer: str) -> None:
+    with pytest.raises(ValueError, match="must be a hostname"):
+        ProjectConfig(
+            project_name="demo",
+            services=[_base_service()],
+            alb=_base_alb(),
+            cloudfront=_base_cloudfront(allowed_referers=[referer]),
+        )
+
+
+def test_allowed_referers_rejects_case_insensitive_duplicates() -> None:
+    with pytest.raises(ValueError, match="Duplicate cloudfront.allowed_referers"):
+        ProjectConfig(
+            project_name="demo",
+            services=[_base_service()],
+            alb=_base_alb(),
+            cloudfront=_base_cloudfront(allowed_referers=["harvard.edu", "Harvard.edu"]),
+        )
+
+
+def test_allowed_referers_require_cloudfront_enabled() -> None:
+    with pytest.raises(ValueError, match="require cloudfront.enabled=true"):
+        ProjectConfig(
+            project_name="demo",
+            services=[_base_service()],
+            alb=_base_alb(),
+            cloudfront=CloudFrontConfig(allowed_referers=["harvard.edu"]),
+        )
+
+
+def test_allowed_referers_round_trip_through_toml(tmp_path) -> None:
+    config = ProjectConfig(
+        project_name="demo",
+        services=[_base_service()],
+        alb=_base_alb(),
+        cloudfront=_base_cloudfront(allowed_referers=["harvard.edu"]),
+    )
+    path = tmp_path / "darth-infra.toml"
+    path.write_text(dump_config(config))
+
+    assert load_config(path).cloudfront.allowed_referers == ["harvard.edu"]

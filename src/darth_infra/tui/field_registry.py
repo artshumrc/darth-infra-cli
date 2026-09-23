@@ -543,6 +543,11 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "Optional CloudFront distribution comment.",
     ),
     FieldEntry(
+        "cloudfront.allowed_referers", _S.ROUTING, _P.ADVANCED, _C.STRING_LIST,
+        "Hostnames (and their subdomains) allowed to refer requests; others get 403.",
+        example="harvard.edu",
+    ),
+    FieldEntry(
         "cloudfront.connections[].service", _S.ROUTING, _P.COMMON, _C.SERVICE_SELECT,
         "Service to receive a CloudFront URL env var.",
     ),

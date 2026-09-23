@@ -156,6 +156,7 @@ class AlbCloudFrontRenderContext:
     price_class: str
     comment: str | None
     cached_behaviors: tuple[CloudFrontCachedBehaviorRenderContext, ...]
+    allowed_referers: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -634,6 +635,9 @@ def derive_render_context(config: ProjectConfig) -> RenderContext:
                     ),
                 )
                 for behavior in cloudfront.cached_behaviors
+            ),
+            allowed_referers=tuple(
+                referer.strip().lower() for referer in cloudfront.allowed_referers
             ),
         ),
         has_ec2=any(

@@ -534,6 +534,12 @@
           "description": "Optional CloudFront distribution comment.",
           "default": null
         },
+        "allowed_referers": {
+          "type": "array",
+          "description": "Hostnames allowed to refer requests to the distribution; each also allows its subdomains. A CloudFront Function returns 403 for any other Referer. Requests without a Referer are allowed.",
+          "default": [],
+          "items": { "type": "string" }
+        },
         "connections": {
           "type": "array",
           "description": "Service env var connections for CloudFront URL injection.",

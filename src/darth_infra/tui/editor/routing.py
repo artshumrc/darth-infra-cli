@@ -71,6 +71,7 @@ _CF_ADVANCED_PATHS = (
     "cloudfront.certificate_arn",
     "cloudfront.price_class",
     "cloudfront.comment",
+    "cloudfront.allowed_referers",
 )
 
 _PRIORITY_HELP_CONSTRAINT = (
@@ -244,6 +245,13 @@ class RoutingSection(VerticalScroll):
                 document=self.document,
                 label="Comment",
                 help=_help("cloudfront.comment"),
+            ),
+            StringListField(
+                field_path="cloudfront.allowed_referers",
+                document=self.document,
+                label="Allowed referers",
+                help=_help("cloudfront.allowed_referers"),
+                example=_example("cloudfront.allowed_referers"),
             ),
         ]
 

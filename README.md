@@ -430,6 +430,7 @@ custom_domain = "cdn.myapp.example.com"  # hostname only, no scheme or path
 certificate_arn = "arn:aws:acm:us-east-1:…"   # must be issued in us-east-1
 price_class = "PriceClass_100"           # PriceClass_100 | PriceClass_200 | PriceClass_All
 comment = "myapp CDN"
+allowed_referers = []                    # hostnames; each also allows its subdomains
 
 [[cloudfront.connections]]               # inject the distribution URL into a service
 service = "web"
@@ -470,6 +471,14 @@ under that path. Behaviors that leave the list empty are unchanged.
 has its own `forward_authorization_header` flag, which keeps it in the cache key where it
 belongs. `Accept-Encoding` is rejected while `compress = true`, because CloudFront
 normalizes that header itself and ignores an origin request policy's copy of it.
+
+`allowed_referers` limits which sites can use the distribution. It renders a CloudFront
+Function on viewer-request for every behavior that returns `403` when the `Referer`
+names a host outside the list; `harvard.edu` allows `harvard.edu` and any subdomain.
+Requests without a `Referer` pass, since browsers omit it for direct navigation and under
+strict referrer policies. This stops hotlinking from other sites' pages, not a client
+that sets the header itself. Because the function runs at the edge, it applies to cached
+responses too, which a check at the origin could not.
 
 ### `[[secrets]]`
 

@@ -100,6 +100,9 @@ hand-written config invalid.
   (use `forward_authorization_header`), and `Accept-Encoding` while `compress = true`.
   The rendered cache policy keeps the behavior's existing cache key, so adding it to a
   live behavior does not discard what that path has already cached.
+- `cloudfront.allowed_referers` takes bare hostnames (no scheme, port, path, or
+  wildcard); each also allows its subdomains. Requests with any other `Referer` get
+  `403` from a viewer-request CloudFront Function; requests without one pass.
 - `[[secrets]]` with `source = "existing"` or `"rds"` requires `existing_secret_name`;
   `source = "generate"` or `"env"` forbids it. For `source = "rds"` the value is a JSON
   key (`host`, `port`, `dbname`, `username`, `password`), not a secret name.

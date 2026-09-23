@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shlex
 from collections.abc import Sequence
 from typing import TypeAlias
@@ -327,6 +328,68 @@ def _build_alb_cached_behavior(
     return cache_behavior
 
 
+_REFERER_FUNCTION_LOGICAL_ID = "CloudFrontRefererFunction"
+
+# Requests without a Referer pass: browsers omit it for direct navigation and
+# under strict referrer policies, so rejecting them would break legitimate use
+# while stopping nobody who can set the header themselves.
+_REFERER_FUNCTION_CODE = """\
+var ALLOWED_HOSTS = %s;
+
+function handler(event) {
+  var request = event.request;
+  var referer = request.headers.referer;
+  if (!referer) {
+    return request;
+  }
+  var authority = /^[a-z][a-z0-9+.-]*:\\/\\/([^\\/?#]*)/i.exec(referer.value);
+  if (authority) {
+    var host = authority[1]
+      .slice(authority[1].lastIndexOf("@") + 1)
+      .replace(/:[0-9]*$/, "")
+      .toLowerCase();
+    for (var i = 0; i < ALLOWED_HOSTS.length; i++) {
+      var allowed = ALLOWED_HOSTS[i];
+      if (host === allowed || host.endsWith("." + allowed)) {
+        return request;
+      }
+    }
+  }
+  return { statusCode: 403, statusDescription: "Forbidden" };
+}
+"""
+
+
+def _referer_function_code(allowed_referers: Sequence[str]) -> str:
+    return _REFERER_FUNCTION_CODE % json.dumps(list(allowed_referers))
+
+
+def _build_alb_referer_function(context: RenderContext) -> cloudfront.Function:
+    return cloudfront.Function(
+        _REFERER_FUNCTION_LOGICAL_ID,
+        Name=Sub("${ProjectName}-${EnvironmentName}-referer"),
+        AutoPublish=True,
+        FunctionCode=_referer_function_code(context.alb_cloudfront.allowed_referers),
+        FunctionConfig=cloudfront.FunctionConfig(
+            Comment="Reject requests referred by sites outside allowed_referers",
+            Runtime="cloudfront-js-2.0",
+        ),
+    )
+
+
+def _referer_function_associations(
+    context: RenderContext,
+) -> list[cloudfront.FunctionAssociation]:
+    if not context.alb_cloudfront.allowed_referers:
+        return []
+    return [
+        cloudfront.FunctionAssociation(
+            EventType="viewer-request",
+            FunctionARN=GetAtt(_REFERER_FUNCTION_LOGICAL_ID, "FunctionMetadata.FunctionARN"),
+        )
+    ]
+
+
 def _build_alb_cloudfront(context: RenderContext) -> cloudfront.Distribution:
     alb_cloudfront = context.alb_cloudfront
     distribution_config = cloudfront.DistributionConfig(
@@ -390,6 +453,12 @@ def _build_alb_cloudfront(context: RenderContext) -> cloudfront.Distribution:
             _build_alb_cached_behavior(behavior)
             for behavior in alb_cloudfront.cached_behaviors
         ]
+    if function_associations := _referer_function_associations(context):
+        distribution_config.DefaultCacheBehavior.FunctionAssociations = (
+            function_associations
+        )
+        for cache_behavior in distribution_config.CacheBehaviors:
+            cache_behavior.FunctionAssociations = function_associations
     return cloudfront.Distribution(
         "AlbCloudFront",
         DistributionConfig=distribution_config,
@@ -1561,6 +1630,8 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
     if context.has_alb_cloudfront:
         for policy in _build_alb_cached_behavior_policies(context):
             root.add_resource(policy)
+        if context.alb_cloudfront.allowed_referers:
+            root.add_resource(_build_alb_referer_function(context))
         root.add_resource(_build_alb_cloudfront(context))
 
     for service in context.services_ctx:
