@@ -435,6 +435,10 @@ def _build_service_template(
         )
     if service.has_rds:
         template.add_parameter(Parameter("RdsSecretArn", Type="String"))
+        if context.is_preview:
+            template.add_parameter(
+                Parameter("RdsSecurityGroupId", Type="String")
+            )
     if service.svc.enable_service_discovery:
         template.add_parameter(Parameter("CloudMapNamespaceId", Type="String"))
     for secret in service.secret_params:
@@ -481,6 +485,24 @@ def _build_service_template(
             Tags=tags,
         )
     )
+    # In a preview, the database ingress is created here rather than in the root
+    # stack. Authorising from the root requires GetAtt on this stack's
+    # TaskSecurityGroupId output, so the root cannot create the rule until this
+    # stack completes — and this stack cannot complete while its service waits
+    # for a database it has no route to. Owning the rule here inverts that: the
+    # service depends on its own ingress, which is created first.
+    rds_task_ingress = None
+    if service.has_rds and context.is_preview:
+        rds_task_ingress = template.add_resource(
+            ec2.SecurityGroupIngress(
+                "RdsIngressFromTasks",
+                GroupId=Ref("RdsSecurityGroupId"),
+                IpProtocol="tcp",
+                FromPort=5432,
+                ToPort=5432,
+                SourceSecurityGroupId=Ref(task_security_group),
+            )
+        )
     if service.has_alb_target:
         template.add_resource(
             ec2.SecurityGroupIngress(
@@ -1005,9 +1027,12 @@ def _build_service_template(
             )
             listener_dependencies.append(path_listener_rule.title)
 
+    service_dependencies = [task_definition.title, *listener_dependencies]
+    if rds_task_ingress is not None:
+        service_dependencies.append(rds_task_ingress.title)
     ecs_service = ecs.Service(
         "EcsService",
-        DependsOn=[task_definition.title, *listener_dependencies],
+        DependsOn=service_dependencies,
         ServiceName=Sub(
             f"${{ProjectName}}-${{EnvironmentName}}-{service.name}"
         ),
@@ -1593,6 +1618,10 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
         )
         if service.has_rds:
             service_parameters["RdsSecretArn"] = Ref("RdsCredentialsSecret")
+            if context.is_preview and rds_security_group is not None:
+                service_parameters["RdsSecurityGroupId"] = Ref(
+                    rds_security_group
+                )
         if service.svc.enable_service_discovery:
             service_parameters["CloudMapNamespaceId"] = If(
                 "HasExistingCloudMapNamespace",
@@ -1661,7 +1690,11 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
             service_stack.DependsOn = dependencies
         root.add_resource(service_stack)
 
-    if rds_security_group is not None:
+    # Named environments keep the rule in the root stack. The layout below has
+    # the deadlock described in _build_service_template, but those stacks are
+    # already deployed and moving a resource between stacks deletes and
+    # recreates it underneath running services.
+    if rds_security_group is not None and not context.is_preview:
         for service in context.services_ctx:
             if service.has_rds:
                 root.add_resource(

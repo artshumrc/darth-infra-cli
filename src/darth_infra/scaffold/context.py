@@ -187,6 +187,9 @@ class RenderContext:
     secrets: tuple[SecretRenderContext, ...]
     tag_parameters: tuple[TagParameter, ...]
     tags: dict[str, str]
+    # Preview stacks wire RDS ingress inside each service stack instead of the
+    # root stack; see _build_service_template.
+    is_preview: bool = False
 
 
 def _pascalize(value: str) -> str:
@@ -593,6 +596,7 @@ def derive_render_context(config: ProjectConfig) -> RenderContext:
         services_ctx=tuple(services),
         environments=tuple(config.environments),
         has_rds=config.rds is not None,
+        is_preview=config.active_preview is not None,
         has_s3=bool(config.s3_buckets),
         has_cloudfront=any(
             bucket.cloudfront and bucket.mode.value != "existing"

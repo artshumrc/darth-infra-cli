@@ -30,6 +30,8 @@ from darth_infra.config.models import (
 )
 from darth_infra.scaffold.builders import build_project_templates
 
+from builders_harness import template_to_dict
+
 
 def _config() -> ProjectConfig:
     return ProjectConfig(
@@ -244,6 +246,82 @@ def test_preview_build_parameters_include_dns_and_tags() -> None:
     assert params["DefaultListenerPriority"] == "30000"
     assert params["ExtraTagEphemeralCleanupId"] == "demo-pr-123"
     assert params["ExtraTagHuitAssetid"] == ""
+
+
+def _config_with_rds() -> ProjectConfig:
+    config = _config()
+    config.rds = RdsConfig(database_name="app", expose_to=["web"])
+    return config
+
+
+def test_preview_service_stack_owns_its_database_ingress() -> None:
+    """The rule must live with the service, or the stacks deadlock.
+
+    Authorising from the root stack needs GetAtt on the service stack's
+    TaskSecurityGroupId output, so the root waits for the service stack, which
+    waits for a service that cannot reach its database.
+    """
+    config = _config_with_rds()
+    resolved = resolve_environment_config(config, "pr-1", preview_from="prod")
+
+    templates = build_project_templates(resolved)
+    root = template_to_dict(templates["templates/generated/root.yaml"])
+    service = template_to_dict(templates["templates/generated/services/web.yaml"])
+
+    assert "RdsIngressFromWeb" not in root["Resources"]
+    ingress = service["Resources"]["RdsIngressFromTasks"]
+    assert ingress["Properties"]["GroupId"] == {"Ref": "RdsSecurityGroupId"}
+    assert ingress["Properties"]["SourceSecurityGroupId"] == {
+        "Ref": "TaskSecurityGroup"
+    }
+    assert "RdsIngressFromTasks" in service["Resources"]["EcsService"]["DependsOn"]
+    assert root["Resources"]["ServiceWeb"]["Properties"]["Parameters"][
+        "RdsSecurityGroupId"
+    ] == {"Ref": "RdsSecurityGroup"}
+
+
+def test_named_environment_keeps_database_ingress_in_the_root_stack() -> None:
+    """Moving it would delete and recreate the rule under a running service."""
+    templates = build_project_templates(_config_with_rds())
+    root = template_to_dict(templates["templates/generated/root.yaml"])
+    service = template_to_dict(templates["templates/generated/services/web.yaml"])
+
+    assert "RdsIngressFromWeb" in root["Resources"]
+    assert "RdsIngressFromTasks" not in service["Resources"]
+    assert "RdsSecurityGroupId" not in service.get("Parameters", {})
+
+
+def test_preview_does_not_inherit_the_base_environment_listener_priority() -> None:
+    """The base environment's priority names its own rule, not the preview's.
+
+    Inheriting it is both meaningless and fatal: the value sits outside
+    `preview_environments.listener_priority_*` and fails the range check before
+    anything deploys.
+    """
+    config = _config()
+    config.alb.default_listener_priority = 49987
+    config.alb.path_rules = [
+        AlbPathRule(
+            name="api",
+            path_pattern="/api/*",
+            target_service="web",
+            priority=49988,
+        )
+    ]
+
+    resolved = resolve_environment_config(config, "pr-1", preview_from="prod")
+
+    assert resolved.alb.default_listener_priority is None
+    assert [rule.priority for rule in resolved.alb.path_rules] == [None]
+
+
+def test_named_environment_keeps_its_configured_listener_priority() -> None:
+    config = _config()
+    config.alb.default_listener_priority = 49987
+
+    resolved = resolve_environment_config(config, "prod")
+
+    assert resolved.alb.default_listener_priority == 49987
 
 
 def test_listener_priority_resolution_allocates_preview_range(monkeypatch) -> None:

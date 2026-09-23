@@ -120,6 +120,13 @@ def resolve_environment_config(
     _resolve_preview_s3_fallback_buckets(resolved, preview_from)
     resolved._validate_preview_overlay_bucket_collisions()
     _apply_environment_overrides(resolved, preview_from)
+    # A listener priority configured for the base environment names *that*
+    # environment's rule. A preview allocates its own from
+    # preview_environments.listener_priority_start/end, so inheriting the base
+    # value would both be meaningless and fail the range check before deploy.
+    resolved.alb.default_listener_priority = None
+    for path_rule in resolved.alb.path_rules:
+        path_rule.priority = None
     _render_service_environment_templates(resolved, env_name, number, domain)
     # A preview environment has no external secrets of its own, so `{env}`
     # names the base environment's, matching the S3 fallback overlay.
