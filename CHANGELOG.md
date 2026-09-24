@@ -1,5 +1,22 @@
 # darth-infra
 
+## 0.13.0
+
+### Minor Changes
+
+- [`9b8369b`](https://github.com/artshumrc/darth-infra-cli/commit/9b8369be67c3e3c735050185be4af7d3b8cbe20a) Thanks [@d-flood](https://github.com/d-flood)! - Limit which sites can use a CloudFront distribution by `Referer`.
+
+  - Add `[cloudfront].allowed_referers`, a list of hostnames that each also allow their subdomains. Setting it renders a CloudFront Function on viewer-request for the default and every cached behavior, returning `403` when the `Referer` names any other host. Requests without a `Referer` pass, because browsers omit it for direct navigation and under strict referrer policies.
+  - The check runs at the edge, so it covers cached responses as well as requests that reach the origin.
+
+  Leaving the list empty renders exactly as before.
+
+### Patch Changes
+
+- [`ac32806`](https://github.com/artshumrc/darth-infra-cli/commit/ac328061fda0bd3f21e219716bca123086eec205) Thanks [@d-flood](https://github.com/d-flood)! - Allow `[rds].engine_version` to be raised across a PostgreSQL major version.
+
+  The RDS instance now renders `AllowMajorVersionUpgrade: true`. Without it CloudFormation rejects any `EngineVersion` change that crosses a major version, so bumping `engine_version` from e.g. `"15"` to `"16"` failed the stack update. The property is inert unless the rendered `EngineVersion` actually changes.
+
 ## 0.12.1
 
 ### Patch Changes
