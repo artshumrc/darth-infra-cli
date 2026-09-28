@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.14.1
+
+### Patch Changes
+
+- [`ffa5165`](https://github.com/artshumrc/darth-infra-cli/commit/ffa5165b291706dd16a3048e1689a45ae31320ee) Thanks [@d-flood](https://github.com/d-flood)! - Upload the packaged root template to S3 and deploy it by URL, so root templates over CloudFormation's 51,200-byte inline limit deploy.
+
 ## 0.14.0
 
 ### Minor Changes
