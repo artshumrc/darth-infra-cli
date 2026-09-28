@@ -638,6 +638,14 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "Number of days to keep automated backups.",
     ),
     FieldEntry(
+        "rds.monthly_s3_backup", _S.DATABASE, _P.ADVANCED, _C.BOOLEAN,
+        "Write a monthly pg_dump of prod's database to a retained S3 bucket.",
+    ),
+    FieldEntry(
+        "rds.backup_alert_email", _S.DATABASE, _P.ADVANCED, _C.TEXT,
+        "Address emailed when the monthly backup fails; empty disables.",
+    ),
+    FieldEntry(
         "rds.initial_snapshot_identifier", _S.DATABASE, _P.ADVANCED, _C.TEXT,
         "Snapshot to restore prod from on its first deploy only.",
         example="legacy-prod-final-2026-08-14",

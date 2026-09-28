@@ -382,9 +382,19 @@
         "backup_retention_days": {
           "type": "integer",
           "description": "Number of days to keep automated backups.",
-          "default": 7,
+          "default": 35,
           "minimum": 0,
           "maximum": 35
+        },
+        "monthly_s3_backup": {
+          "type": "boolean",
+          "description": "Write a monthly pg_dump of prod's database to a retained S3 bucket, kept indefinitely outside the RDS snapshot quota.",
+          "default": true
+        },
+        "backup_alert_email": {
+          "type": "string",
+          "description": "Address emailed when the monthly backup fails. Empty disables the alert.",
+          "default": "artshum-rc@fas.harvard.edu"
         },
         "initial_snapshot_identifier": {
           "type": [

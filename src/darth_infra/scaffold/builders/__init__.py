@@ -30,16 +30,20 @@ from troposphere import (
     cloudformation,
     cloudfront,
     ec2,
+    cloudwatch,
     ecr,
     ecs,
     elasticloadbalancingv2,
+    events,
     iam,
     logs,
     rds,
     route53,
     s3,
+    scheduler,
     secretsmanager,
     servicediscovery,
+    sns,
 )
 
 from ...config.models import ProjectConfig
@@ -1150,6 +1154,376 @@ def _build_service_template(
     return template
 
 
+_RDS_BACKUP_SCRIPT = """\
+set -euo pipefail
+apk add --no-cache aws-cli >/dev/null
+aws configure set default.s3.multipart_chunksize 64MB
+pg_dump --format=custom \\
+  | aws s3 cp - "s3://${BACKUP_BUCKET}/${PGDATABASE}/$(date -u +%Y-%m-%d).dump" \\
+    --storage-class GLACIER_IR
+"""
+
+
+def _add_rds_monthly_backup(
+    root: Template,
+    context: RenderContext,
+    cluster: ecs.Cluster,
+    rds_secret: secretsmanager.Secret,
+    rds_security_group: ec2.SecurityGroup,
+) -> None:
+    tags = Tags(
+        *_builtin_tags(
+            context,
+            (
+                ("Project", Ref("ProjectName")),
+                ("Environment", Ref("EnvironmentName")),
+                ("Purpose", "rds-backup"),
+            ),
+        ),
+        *_configured_tags(context),
+    )
+    family = Sub("${ProjectName}-${EnvironmentName}-rds-backup")
+    bucket = root.add_resource(
+        s3.Bucket(
+            "RdsBackupBucket",
+            Condition="IsProd",
+            DeletionPolicy="Retain",
+            UpdateReplacePolicy="Retain",
+            BucketName=Sub("${ProjectName}-${EnvironmentName}-db-backups"),
+            PublicAccessBlockConfiguration=s3.PublicAccessBlockConfiguration(
+                BlockPublicAcls=True,
+                BlockPublicPolicy=True,
+                IgnorePublicAcls=True,
+                RestrictPublicBuckets=True,
+            ),
+            VersioningConfiguration=s3.VersioningConfiguration(
+                Status="Enabled"
+            ),
+            Tags=tags,
+        )
+    )
+    log_group = root.add_resource(
+        logs.LogGroup(
+            "RdsBackupLogGroup",
+            Condition="IsProd",
+            LogGroupName=Sub("/ecs/${ProjectName}-${EnvironmentName}-rds-backup"),
+            RetentionInDays=365,
+            Tags=tags,
+        )
+    )
+    security_group = root.add_resource(
+        ec2.SecurityGroup(
+            "RdsBackupSecurityGroup",
+            Condition="IsProd",
+            GroupDescription=Sub("${ProjectName}-${EnvironmentName} rds backup"),
+            VpcId=Ref("VpcId"),
+            Tags=tags,
+        )
+    )
+    root.add_resource(
+        ec2.SecurityGroupIngress(
+            "RdsIngressFromBackup",
+            Condition="IsProd",
+            GroupId=Ref(rds_security_group),
+            IpProtocol="tcp",
+            FromPort=5432,
+            ToPort=5432,
+            SourceSecurityGroupId=Ref(security_group),
+        )
+    )
+    execution_role = root.add_resource(
+        iam.Role(
+            "RdsBackupExecutionRole",
+            Condition="IsProd",
+            AssumeRolePolicyDocument=_task_assume_role_policy(),
+            ManagedPolicyArns=[
+                "arn:aws:iam::aws:policy/service-role/"
+                "AmazonECSTaskExecutionRolePolicy"
+            ],
+            Policies=[
+                iam.Policy(
+                    PolicyName="ReadRdsSecret",
+                    PolicyDocument={
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": ["secretsmanager:GetSecretValue"],
+                                "Resource": Ref(rds_secret),
+                            }
+                        ],
+                    },
+                )
+            ],
+            Tags=tags,
+        )
+    )
+    task_role = root.add_resource(
+        iam.Role(
+            "RdsBackupTaskRole",
+            Condition="IsProd",
+            AssumeRolePolicyDocument=_task_assume_role_policy(),
+            Policies=[
+                iam.Policy(
+                    PolicyName="WriteBackups",
+                    PolicyDocument={
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": [
+                                    "s3:PutObject",
+                                    "s3:AbortMultipartUpload",
+                                ],
+                                "Resource": Sub("${RdsBackupBucket.Arn}/*"),
+                            }
+                        ],
+                    },
+                )
+            ],
+            Tags=tags,
+        )
+    )
+    engine_major = context.rds.engine_version.split(".")[0]
+    task_definition = root.add_resource(
+        ecs.TaskDefinition(
+            "RdsBackupTaskDefinition",
+            Condition="IsProd",
+            Family=family,
+            NetworkMode="awsvpc",
+            RequiresCompatibilities=["FARGATE"],
+            Cpu="512",
+            Memory="1024",
+            ExecutionRoleArn=GetAtt(execution_role, "Arn"),
+            TaskRoleArn=GetAtt(task_role, "Arn"),
+            ContainerDefinitions=[
+                ecs.ContainerDefinition(
+                    Name="pg-dump",
+                    Image=(
+                        "public.ecr.aws/docker/library/postgres:"
+                        f"{engine_major}-alpine"
+                    ),
+                    Essential=True,
+                    EntryPoint=["sh", "-c"],
+                    Command=[_RDS_BACKUP_SCRIPT],
+                    Environment=[
+                        ecs.Environment(
+                            Name="BACKUP_BUCKET", Value=Ref(bucket)
+                        ),
+                        ecs.Environment(
+                            Name="AWS_DEFAULT_REGION", Value=Ref("AWS::Region")
+                        ),
+                    ],
+                    Secrets=[
+                        ecs.Secret(
+                            Name=name,
+                            ValueFrom=Sub(
+                                f"${{RdsCredentialsSecret}}:{json_key}::"
+                            ),
+                        )
+                        for name, json_key in (
+                            ("PGHOST", "host"),
+                            ("PGPORT", "port"),
+                            ("PGDATABASE", "dbname"),
+                            ("PGUSER", "username"),
+                            ("PGPASSWORD", "password"),
+                        )
+                    ],
+                    LogConfiguration=ecs.LogConfiguration(
+                        LogDriver="awslogs",
+                        Options={
+                            "awslogs-group": Ref(log_group),
+                            "awslogs-region": Ref("AWS::Region"),
+                            "awslogs-stream-prefix": "rds-backup",
+                        },
+                    ),
+                )
+            ],
+            Tags=tags,
+        )
+    )
+    scheduler_role = root.add_resource(
+        iam.Role(
+            "RdsBackupSchedulerRole",
+            Condition="IsProd",
+            AssumeRolePolicyDocument={
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {"Service": "scheduler.amazonaws.com"},
+                        "Action": "sts:AssumeRole",
+                    }
+                ],
+            },
+            Policies=[
+                iam.Policy(
+                    PolicyName="RunBackupTask",
+                    PolicyDocument={
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {
+                                "Effect": "Allow",
+                                "Action": "ecs:RunTask",
+                                "Resource": Ref(task_definition),
+                            },
+                            {
+                                "Effect": "Allow",
+                                "Action": "iam:PassRole",
+                                "Resource": [
+                                    GetAtt(execution_role, "Arn"),
+                                    GetAtt(task_role, "Arn"),
+                                ],
+                            },
+                        ],
+                    },
+                )
+            ],
+            Tags=tags,
+        )
+    )
+    schedule_group = root.add_resource(
+        scheduler.ScheduleGroup(
+            "RdsBackupScheduleGroup",
+            Condition="IsProd",
+            Name=family,
+            Tags=tags,
+        )
+    )
+    root.add_resource(
+        scheduler.Schedule(
+            "RdsBackupSchedule",
+            Condition="IsProd",
+            Name=family,
+            GroupName=Ref(schedule_group),
+            Description="Monthly pg_dump of the database to S3",
+            ScheduleExpression="cron(0 5 1 * ? *)",
+            FlexibleTimeWindow=scheduler.FlexibleTimeWindow(Mode="OFF"),
+            Target=scheduler.Target(
+                Arn=GetAtt(cluster, "Arn"),
+                RoleArn=GetAtt(scheduler_role, "Arn"),
+                EcsParameters=scheduler.EcsParameters(
+                    TaskDefinitionArn=Ref(task_definition),
+                    LaunchType="FARGATE",
+                    NetworkConfiguration=scheduler.NetworkConfiguration(
+                        AwsvpcConfiguration=scheduler.AwsVpcConfiguration(
+                            Subnets=Ref("PrivateSubnetIds"),
+                            SecurityGroups=[Ref(security_group)],
+                            AssignPublicIp="DISABLED",
+                        )
+                    ),
+                ),
+            ),
+        )
+    )
+
+    if not context.rds.backup_alert_email:
+        return
+    topic = root.add_resource(
+        sns.Topic(
+            "RdsBackupAlertTopic",
+            Condition="IsProd",
+            Subscription=[
+                sns.Subscription(
+                    Protocol="email", Endpoint=context.rds.backup_alert_email
+                )
+            ],
+            Tags=tags,
+        )
+    )
+    alert_rule = root.add_resource(
+        events.Rule(
+            "RdsBackupFailureRule",
+            Condition="IsProd",
+            Description="Monthly RDS backup task failed",
+            EventPattern={
+                "source": ["aws.ecs"],
+                "detail-type": ["ECS Task State Change"],
+                "detail": {
+                    "clusterArn": [GetAtt(cluster, "Arn")],
+                    "group": [Sub("family:${ProjectName}-${EnvironmentName}-rds-backup")],
+                    "lastStatus": ["STOPPED"],
+                    "$or": [
+                        {"containers": {"exitCode": [{"anything-but": 0}]}},
+                        {"stopCode": ["TaskFailedToStart"]},
+                    ],
+                },
+            },
+            Targets=[
+                events.Target(
+                    Id="Email",
+                    Arn=Ref(topic),
+                    InputTransformer=events.InputTransformer(
+                        InputPathsMap={
+                            "reason": "$.detail.stoppedReason",
+                            "task": "$.detail.taskArn",
+                        },
+                        InputTemplate=Sub(
+                            '"Monthly RDS backup for ${ProjectName} failed: '
+                            '<reason> (<task>)"'
+                        ),
+                    ),
+                )
+            ],
+        )
+    )
+    invocation_alarm = root.add_resource(
+        cloudwatch.Alarm(
+            "RdsBackupInvocationAlarm",
+            Condition="IsProd",
+            AlarmDescription="Scheduler could not launch the monthly RDS backup task",
+            Namespace="AWS/Scheduler",
+            MetricName="TargetErrorCount",
+            Dimensions=[
+                cloudwatch.MetricDimension(
+                    Name="ScheduleGroup", Value=Ref(schedule_group)
+                )
+            ],
+            Statistic="Sum",
+            Period=300,
+            EvaluationPeriods=1,
+            Threshold=0,
+            ComparisonOperator="GreaterThanThreshold",
+            TreatMissingData="notBreaching",
+            AlarmActions=[Ref(topic)],
+        )
+    )
+    root.add_resource(
+        sns.TopicPolicy(
+            "RdsBackupAlertTopicPolicy",
+            Condition="IsProd",
+            Topics=[Ref(topic)],
+            PolicyDocument={
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {"Service": "events.amazonaws.com"},
+                        "Action": "sns:Publish",
+                        "Resource": Ref(topic),
+                        "Condition": {
+                            "ArnEquals": {
+                                "aws:SourceArn": GetAtt(alert_rule, "Arn")
+                            }
+                        },
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Principal": {"Service": "cloudwatch.amazonaws.com"},
+                        "Action": "sns:Publish",
+                        "Resource": Ref(topic),
+                        "Condition": {
+                            "ArnEquals": {
+                                "aws:SourceArn": GetAtt(invocation_alarm, "Arn")
+                            }
+                        },
+                    },
+                ],
+            },
+        )
+    )
+
+
 def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
     """Build generated project templates without performing I/O."""
     context = derive_render_context(config)
@@ -1535,6 +1909,10 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
                 TargetType="AWS::RDS::DBInstance",
             )
         )
+        if context.rds.monthly_s3_backup and not context.is_preview:
+            _add_rds_monthly_backup(
+                root, context, cluster, rds_secret, rds_security_group
+            )
 
     dedicated_alb = root.add_resource(
         elasticloadbalancingv2.LoadBalancer(

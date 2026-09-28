@@ -246,6 +246,10 @@ class RdsConfig:
         expose_to: Service names that receive DB connection env vars.
         engine_version: PostgreSQL major version.
         backup_retention_days: Number of days to keep automated backups.
+        monthly_s3_backup: Write a monthly ``pg_dump`` of prod's database to a
+            retained S3 bucket, kept indefinitely outside the snapshot quota.
+        backup_alert_email: Address emailed when the monthly backup fails.
+            Empty disables the alert.
         initial_snapshot_identifier: RDS snapshot to restore prod from on its
             first deploy, for adopting a database this CLI did not create. Read
             only when the prod stack does not yet exist; afterwards the deployed
@@ -261,7 +265,9 @@ class RdsConfig:
     instance_type: str = "db.t4g.micro"
     allocated_storage_gb: int = 20
     engine_version: str = "15"
-    backup_retention_days: int = 7
+    backup_retention_days: int = 35
+    monthly_s3_backup: bool = True
+    backup_alert_email: str = "artshum-rc@fas.harvard.edu"
     initial_snapshot_identifier: str | None = None
     initial_snapshot_credentials_secret: str | None = None
 
@@ -633,6 +639,7 @@ class ProjectConfig:
                     "initial_snapshot_identifier"
                 )
             self.rds.initial_snapshot_identifier = snapshot or None
+            self.rds.backup_alert_email = self.rds.backup_alert_email.strip()
             self.rds.initial_snapshot_credentials_secret = snapshot_secret or None
 
         for env_name, override in self.environment_overrides.items():

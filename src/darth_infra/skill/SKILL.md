@@ -177,6 +177,10 @@ Constraints that matter:
 An existing RDS instance cannot be adopted *in place*; a snapshot restore is the
 supported path.
 
+`[rds]` defaults to 35 days of automated backups plus a monthly prod `pg_dump` to a
+retained `<project>-prod-db-backups` bucket, with failures emailed to
+`backup_alert_email`. Set `monthly_s3_backup = false` to opt out.
+
 ## Editing an already-deployed project
 
 Some edits force AWS to replace a resource and lose its data. Before changing any of

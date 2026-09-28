@@ -208,7 +208,11 @@ def _parse_rds(raw: dict[str, Any]) -> RdsConfig:
         allocated_storage_gb=raw.get("allocated_storage_gb", 20),
         expose_to=raw.get("expose_to", []),
         engine_version=raw.get("engine_version", "15"),
-        backup_retention_days=raw.get("backup_retention_days", 7),
+        backup_retention_days=raw.get("backup_retention_days", 35),
+        monthly_s3_backup=raw.get("monthly_s3_backup", True),
+        backup_alert_email=raw.get(
+            "backup_alert_email", "artshum-rc@fas.harvard.edu"
+        ),
         initial_snapshot_identifier=raw.get("initial_snapshot_identifier"),
         initial_snapshot_credentials_secret=raw.get(
             "initial_snapshot_credentials_secret"
@@ -505,6 +509,11 @@ def dump_config(config: ProjectConfig) -> str:
         lines.append(f"expose_to = [{expose_list}]")
         lines.append(f'engine_version = "{config.rds.engine_version}"')
         lines.append(f"backup_retention_days = {config.rds.backup_retention_days}")
+        monthly = "true" if config.rds.monthly_s3_backup else "false"
+        lines.append(f"monthly_s3_backup = {monthly}")
+        lines.append(
+            f'backup_alert_email = "{_toml_escape(config.rds.backup_alert_email)}"'
+        )
         if config.rds.initial_snapshot_identifier:
             lines.append(
                 "initial_snapshot_identifier = "

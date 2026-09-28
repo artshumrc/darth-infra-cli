@@ -3,7 +3,7 @@
 RDS is a single optional resource, not a repeatable collection, so this section
 is a singleton editor (like Network) rather than a master-detail one. It covers
 every persisted RDS field — database name, instance type, allocated storage, and
-exposed services as common fields, plus engine version and backup retention as
+exposed services as common fields, plus engine version and backup settings as
 Advanced fields that auto-expand when configured or invalid — editing the
 document draft directly.
 
@@ -39,6 +39,7 @@ from ...config.reference_impact import (
 from ..field_registry import registry_entry
 from .collection import ConfirmScreen, ImpactConfirmScreen
 from .widgets import (
+    BooleanField,
     EditableField,
     IntegerField,
     MultiSelectField,
@@ -65,6 +66,8 @@ _RDS_ENV_VARS = (
 _ADVANCED_PATHS = (
     "rds.engine_version",
     "rds.backup_retention_days",
+    "rds.monthly_s3_backup",
+    "rds.backup_alert_email",
     "rds.initial_snapshot_identifier",
     "rds.initial_snapshot_credentials_secret",
 )
@@ -204,7 +207,21 @@ class DatabaseSection(VerticalScroll):
                 document=self.document,
                 label="Backup retention (days)",
                 help=_help("rds.backup_retention_days"),
-                default_display="7",
+                default_display="35",
+            ),
+            BooleanField(
+                field_path="rds.monthly_s3_backup",
+                document=self.document,
+                label="Monthly pg_dump to S3 (prod)",
+                help=_help("rds.monthly_s3_backup"),
+                default_display="true",
+            ),
+            TextField(
+                field_path="rds.backup_alert_email",
+                document=self.document,
+                label="Backup failure alert email",
+                help=_help("rds.backup_alert_email"),
+                default_display="artshum-rc@fas.harvard.edu",
             ),
             TextField(
                 field_path="rds.initial_snapshot_identifier",

@@ -277,7 +277,9 @@ instance_type = "db.t4g.micro" # a bare "t4g.micro" is normalized to "db.t4g.mic
 allocated_storage_gb = 20      # must be ≥ 20
 expose_to = ["web"]            # services that receive POSTGRES_* env vars
 engine_version = "15"
-backup_retention_days = 7
+backup_retention_days = 35     # automated backups + point-in-time restore, max 35
+monthly_s3_backup = true       # prod only; see Backups below
+backup_alert_email = "artshum-rc@fas.harvard.edu"  # "" disables the failure email
 
 # Adopting a database this CLI did not create — see below. Both or neither.
 initial_snapshot_identifier = "legacy-prod-final-2026-08-14"
@@ -286,6 +288,40 @@ initial_snapshot_credentials_secret = "legacy-prod-credentials"
 
 The master username is derived from `database_name`. Credentials are stored in a
 generated Secrets Manager secret named `<project>-<env>-rds-credentials`.
+
+#### Backups
+
+Prod's database is backed up in two tiers, neither of which counts against the RDS
+manual-snapshot quota:
+
+- **Daily, for 35 days** — RDS automated backups with point-in-time restore.
+- **Monthly, indefinitely** — on the 1st at 05:00 UTC a Fargate task runs
+  `pg_dump --format=custom` and streams it to
+  `s3://<project>-prod-db-backups/<dbname>/YYYY-MM-DD.dump` in Glacier Instant
+  Retrieval. The bucket is versioned, retained if the stack is deleted, and tagged
+  `Purpose=rds-backup` alongside `Project`. A failed run, or a failed launch by
+  EventBridge Scheduler, emails `backup_alert_email`; AWS sends a subscription
+  confirmation to that address after the first deploy, and no alert is delivered
+  until it is confirmed.
+
+The task needs outbound access from the private subnets to `public.ecr.aws`, the
+Alpine package mirror, S3, and Secrets Manager. Set `monthly_s3_backup = false` to
+opt out. Non-prod and preview environments have neither the task nor the bucket.
+
+To restore a monthly dump, create a fresh database and restore into it rather than
+over the live one:
+
+```bash
+aws s3 ls s3://myapp-prod-db-backups/myapp/
+aws s3 cp s3://myapp-prod-db-backups/myapp/2026-09-01.dump .
+pg_restore --no-owner --dbname "postgresql://USER:PASSWORD@HOST:5432/myapp_restore" \
+  2026-09-01.dump
+```
+
+Credentials and host are in the `<project>-prod-rds-credentials` secret. A dump
+older than the current application is behind its migrations; the application image
+from that month is not retained, so running the restored data may mean rebuilding
+the matching commit.
 
 #### Adopting an existing database
 
@@ -952,6 +988,8 @@ The deploying principal needs, at minimum, permission to:
 - **Secrets Manager**: create, describe, and read the project's secrets.
 - **S3**: manage project buckets and the `darth-infra-artifacts-*` bucket.
 - **RDS**: manage instances and read snapshots (if `[rds]` is configured).
+- **EventBridge Scheduler**, **EventBridge**, **SNS**: manage the monthly backup
+  schedule and failure alert (if `rds.monthly_s3_backup` is on).
 - **CloudFront**, **Route 53**, **Cloud Map**, **CloudWatch Logs**, **STS
   GetCallerIdentity** as your configuration requires.
 
