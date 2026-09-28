@@ -162,6 +162,7 @@ def deploy(
                 env_name,
                 packaged_template,
                 lookups,
+                bucket=bucket,
                 no_execute=no_execute,
                 changeset_name=changeset_name,
             )
@@ -234,6 +235,7 @@ def _prepare_images_for_deploy(config, project_dir, env_name: str) -> None:
             env_name,
             packaged_template,
             lookups,
+            bucket=bucket,
             no_execute=False,
             changeset_name=None,
         )

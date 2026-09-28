@@ -28,6 +28,7 @@ class _ListResourcesPaginator:
 class _FakeCloudFormation:
     def __init__(self) -> None:
         self.execute_kwargs: dict[str, object] | None = None
+        self.create_kwargs: dict[str, object] | None = None
 
     def describe_stacks(self, *, StackName: str) -> dict[str, object]:
         assert StackName == "demo-ecs-pr-123"
@@ -37,7 +38,8 @@ class _FakeCloudFormation:
         assert name == "list_stack_resources"
         return _ListResourcesPaginator()
 
-    def create_change_set(self, **_: object) -> dict[str, str]:
+    def create_change_set(self, **kwargs: object) -> dict[str, str]:
+        self.create_kwargs = kwargs
         return {"Id": "change-set-arn"}
 
     def describe_change_set(self, *, ChangeSetName: str) -> dict[str, object]:
@@ -46,6 +48,14 @@ class _FakeCloudFormation:
 
     def execute_change_set(self, **kwargs: object) -> None:
         self.execute_kwargs = kwargs
+
+
+class _FakeS3:
+    def __init__(self) -> None:
+        self.put_kwargs: dict[str, object] | None = None
+
+    def put_object(self, **kwargs: object) -> None:
+        self.put_kwargs = kwargs
 
 
 def _lookups() -> ResolvedLookupData:
@@ -87,10 +97,13 @@ def test_preview_update_from_create_failed_executes_with_disable_rollback(
         tags={},
     )
     fake_cf = _FakeCloudFormation()
+    fake_s3 = _FakeS3()
 
     def fake_client(service: str, **_: object) -> object:
         if service == "cloudformation":
             return fake_cf
+        if service == "s3":
+            return fake_s3
         return object()
 
     monkeypatch.setattr("darth_infra.cli.cfn.boto3.client", fake_client)
@@ -101,6 +114,7 @@ def test_preview_update_from_create_failed_executes_with_disable_rollback(
         "pr-123",
         template_path,
         _lookups(),
+        bucket="artifacts",
         no_execute=False,
         changeset_name="retry-pr-123",
     )
@@ -108,3 +122,9 @@ def test_preview_update_from_create_failed_executes_with_disable_rollback(
     assert rc == 0
     assert fake_cf.execute_kwargs is not None
     assert fake_cf.execute_kwargs["DisableRollback"] is True
+    assert fake_s3.put_kwargs is not None
+    assert fake_cf.create_kwargs is not None
+    assert "TemplateBody" not in fake_cf.create_kwargs
+    assert fake_cf.create_kwargs["TemplateURL"] == (
+        f"https://s3.us-east-1.amazonaws.com/artifacts/{fake_s3.put_kwargs['Key']}"
+    )

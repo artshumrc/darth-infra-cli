@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -578,6 +579,7 @@ def deploy_changeset(
     template_path: Path,
     lookups: ResolvedLookupData,
     *,
+    bucket: str,
     no_execute: bool,
     changeset_name: str | None,
 ) -> int:
@@ -591,7 +593,14 @@ def deploy_changeset(
     cf = boto3.client("cloudformation", region_name=config.aws_region)
     stack_name = f"{config.project_name}-ecs-{env_name}"
 
-    template_body = template_path.read_text()
+    template_bytes = template_path.read_bytes()
+    template_key = f"{stack_name}/{hashlib.md5(template_bytes).hexdigest()}.template"
+    boto3.client("s3", region_name=config.aws_region).put_object(
+        Bucket=bucket, Key=template_key, Body=template_bytes
+    )
+    template_url = (
+        f"https://s3.{config.aws_region}.amazonaws.com/{bucket}/{template_key}"
+    )
     parameters = _build_parameters(config, env_name, lookups)
     change_set_type = "UPDATE"
     existing_status: str | None = None
@@ -638,7 +647,7 @@ def deploy_changeset(
         "ChangeSetName": cs_name,
         "ChangeSetType": change_set_type,
         "Description": f"darth-infra deploy {env_name}",
-        "TemplateBody": template_body,
+        "TemplateURL": template_url,
         "Capabilities": [
             "CAPABILITY_IAM",
             "CAPABILITY_NAMED_IAM",
