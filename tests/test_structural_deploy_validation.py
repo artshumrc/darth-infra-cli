@@ -91,8 +91,6 @@ def _generate_config() -> ProjectConfig:
     )
 
 
-# --- passing on correct fixtures -------------------------------------------
-
 
 def test_accepts_expected_secret_wiring() -> None:
     templates = build_project_templates(_config())
@@ -110,8 +108,6 @@ def test_accepts_generated_secret_wiring() -> None:
     templates = build_project_templates(config)
     validate_built_deploy_templates(templates, config, "prod", _lookups())
 
-
-# --- raising on missing SES policy -----------------------------------------
 
 
 def test_rejects_missing_ses_policy() -> None:
@@ -148,8 +144,6 @@ def test_rejects_incomplete_ses_action_list() -> None:
     with pytest.raises(RuntimeError, match="SES task-role policy"):
         validate_built_deploy_templates(templates, config, "prod", _lookups())
 
-
-# --- raising on missing RDS secret wiring ----------------------------------
 
 
 def test_rejects_missing_rds_secret_from_task_definition() -> None:
@@ -199,8 +193,6 @@ def test_rejects_missing_root_rds_secret_arn_wiring() -> None:
         validate_built_deploy_templates(templates, config, "prod", _lookups())
 
 
-# --- raising on missing non-RDS secret wiring ------------------------------
-
 
 def test_rejects_missing_execution_role_secret_access() -> None:
     config = _config()
@@ -230,8 +222,6 @@ def test_rejects_missing_external_secret_arn_resolution() -> None:
     with pytest.raises(RuntimeError, match="did not resolve to an ARN"):
         validate_built_deploy_templates(templates, config, "prod", lookups)
 
-
-# --- missing template files ------------------------------------------------
 
 
 def test_rejects_missing_root_template() -> None:

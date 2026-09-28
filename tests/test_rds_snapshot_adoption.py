@@ -110,8 +110,6 @@ def _patch_clients(
     monkeypatch.setattr("darth_infra.cli.cfn.boto3.client", fake_client)
 
 
-# -- prod first deploy -----------------------------------------------------
-
 
 def test_prod_first_deploy_restores_from_configured_snapshot(monkeypatch) -> None:
     _patch_clients(monkeypatch)
@@ -149,8 +147,6 @@ def test_prod_first_deploy_accepts_an_automated_snapshot_identifier(monkeypatch)
 
     assert _resolve_rds_snapshot(config, "prod") == automated
 
-
-# -- stickiness ------------------------------------------------------------
 
 
 def test_deployed_snapshot_identifier_wins_over_configuration(monkeypatch) -> None:
@@ -250,8 +246,6 @@ def test_non_prod_first_deploy_seeds_from_latest_prod_snapshot(monkeypatch) -> N
     assert _resolve_rds_snapshot(_config(), "dev") == "newest"
 
 
-# -- source credentials ----------------------------------------------------
-
 
 def test_prod_source_secret_resolves_a_configured_name_to_an_arn(monkeypatch) -> None:
     _patch_clients(monkeypatch)
@@ -347,8 +341,6 @@ def test_preview_still_resolves_prod_credentials(monkeypatch) -> None:
 
     assert resolved == _LEGACY_SECRET_ARN
 
-
-# -- configuration surface -------------------------------------------------
 
 
 def test_snapshot_identifier_requires_credentials_secret() -> None:

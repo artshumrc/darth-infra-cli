@@ -80,9 +80,6 @@ async def _ctrl_s(app, pilot) -> None:
     await pilot.pause()
 
 
-# -- saving from any section ------------------------------------------------
-
-
 def test_existing_project_saves_from_project_section(tmp_path: Path) -> None:
     path = _write(tmp_path)
 
@@ -145,13 +142,11 @@ def test_save_clears_diff_and_risk(tmp_path: Path) -> None:
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            # A deployment-sensitive change: region identity.
             app.query_one("#input-project-aws-region", Input).value = "eu-west-1"
             await pilot.pause()
             assert app._document.semantic_changes()
             await _ctrl_s(app, pilot)
 
-            # After the save the diff is gone and the risk warning has cleared.
             assert app._document.toml_patch() == ""
             assert app._document.semantic_changes() == []
             await pilot.click(f"#{nav_button_id(Section.REVIEW)}")
@@ -180,9 +175,6 @@ def test_no_autosave_or_recovery_file_is_created(tmp_path: Path) -> None:
     _run(scenario())
 
 
-# -- first-time creation ----------------------------------------------------
-
-
 CREATE = """\
 [project]
 name = "brandnew"
@@ -202,7 +194,6 @@ def test_first_time_creation_defers_to_review_then_scaffolds(tmp_path: Path) -> 
     toml_path = out / "darth-infra.toml"
 
     async def scenario() -> None:
-        # A create-mode document whose file does not exist yet.
         app = ConfigEditorApp(document=ProjectDocument(toml_path, CREATE), mode="create")
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
@@ -221,7 +212,6 @@ def test_first_time_creation_defers_to_review_then_scaffolds(tmp_path: Path) -> 
 
     _run(scenario())
 
-    # Canonical project output was produced by the existing scaffold.
     assert toml_path.is_file()
     assert (out / "templates" / "generated" / "root.yaml").is_file()
     reloaded = load_config(toml_path)
@@ -252,9 +242,6 @@ def test_first_time_creation_cancel_writes_nothing(tmp_path: Path) -> None:
     assert not (out / "templates").exists()
 
 
-# -- quit -------------------------------------------------------------------
-
-
 def test_quit_with_no_changes_exits_immediately(tmp_path: Path) -> None:
     path = _write(tmp_path)
 
@@ -281,12 +268,10 @@ def test_quit_valid_dirty_offers_save_discard_cancel(tmp_path: Path) -> None:
             await pilot.press("ctrl+q")
             await pilot.pause()
             assert isinstance(app.screen, QuitDecisionScreen)
-            # All three choices are offered for a valid dirty draft.
             assert app.screen.query_one("#quit-save")
             assert app.screen.query_one("#quit-discard")
             assert app.screen.query_one("#quit-cancel")
 
-            # Cancel keeps the editor open with the draft intact.
             await pilot.click("#quit-cancel")
             await pilot.pause()
             assert app.is_running
@@ -331,7 +316,6 @@ def test_quit_discard_exits_without_writing(tmp_path: Path) -> None:
             assert not app.is_running
 
     _run(scenario())
-    # The draft was discarded; the file on disk is unchanged.
     assert load_config(path).project_name == "demo"
 
 
@@ -370,7 +354,6 @@ def test_quit_invalid_dirty_offers_return_or_discard_never_save(
             assert app._document.record_count("services") == 2
 
     _run(scenario())
-    # Nothing was written by the invalid-quit attempt.
     assert len(load_config(path).services) == 1
 
 

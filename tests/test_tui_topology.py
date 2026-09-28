@@ -134,10 +134,8 @@ def test_review_topology_renders_and_identifies_as_configuration(
             await pilot.pause()
             topo = app.query_one("#review-topology")
             rendered = " ".join(str(s.render()) for s in topo.query(Static))
-            # It shows configured routes/dependencies...
             assert "web" in rendered
             assert "ALB" in rendered
-            # ...and clearly identifies itself as configuration, not AWS state.
             assert "not deployed AWS state" in rendered
 
     _run(scenario())
@@ -197,7 +195,6 @@ def test_dangling_topology_relationship_navigates_to_owning_editor(
             dangling.first().press()
             await pilot.pause()
             await pilot.pause()
-            # It navigates to the owning editor (Services owns s3_access).
             assert app.current_section is Section.SERVICES
 
     _run(scenario())

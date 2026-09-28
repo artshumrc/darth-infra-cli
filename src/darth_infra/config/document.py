@@ -290,7 +290,6 @@ class ProjectDocument:
         # Lazily built effective config; ``_MISSING`` means "not yet computed".
         self._config_cache: Any = _MISSING
 
-    # -- construction ------------------------------------------------------
 
     @classmethod
     def load(cls, path: Path | str) -> ProjectDocument:
@@ -298,7 +297,6 @@ class ProjectDocument:
         path = Path(path)
         return cls(path, path.read_text())
 
-    # -- identity ----------------------------------------------------------
 
     @property
     def path(self) -> Path:
@@ -310,7 +308,6 @@ class ProjectDocument:
         """Content-based revision of the last loaded or saved document text."""
         return self._revision
 
-    # -- effective model ---------------------------------------------------
 
     @property
     def config(self) -> ProjectConfig:
@@ -331,7 +328,6 @@ class ProjectDocument:
             return ValidationResult(ok=False, error=str(exc))
         return ValidationResult(ok=True)
 
-    # -- field inspection --------------------------------------------------
 
     def value(self, field_path: str) -> Any:
         """Return the effective value at ``field_path``.
@@ -381,7 +377,6 @@ class ProjectDocument:
             obj = child
         return True
 
-    # -- editing -----------------------------------------------------------
 
     def set(self, field_path: str, value: Any) -> None:
         """Persist ``value`` at ``field_path`` explicitly, editing in place."""
@@ -411,7 +406,6 @@ class ProjectDocument:
             del container[last]
             self._invalidate()
 
-    # -- repeated collections ----------------------------------------------
 
     def record_count(self, collection_path: str) -> int:
         """Return the number of records in the array-of-tables at ``collection_path``.
@@ -487,7 +481,6 @@ class ProjectDocument:
             del aot[index]
             self._invalidate()
 
-    # -- reversion ---------------------------------------------------------
 
     def revert_field(self, field_path: str) -> None:
         """Restore one field to the session baseline's value and presence.
@@ -531,7 +524,6 @@ class ProjectDocument:
             del parent[last]
             self._invalidate()
 
-    # -- transactions ------------------------------------------------------
 
     @contextmanager
     def transaction(self) -> Iterator[DraftTransaction]:
@@ -556,7 +548,6 @@ class ProjectDocument:
         self._doc = tomlkit.parse(text)
         self._invalidate()
 
-    # -- semantic diff -----------------------------------------------------
 
     def semantic_changes(self) -> list[SemanticChange]:
         """Classify the draft's changes against the session baseline.
@@ -567,7 +558,6 @@ class ProjectDocument:
         """
         return diff_documents(self._baseline_text, self.to_toml())
 
-    # -- three-way merge ---------------------------------------------------
 
     def merge_with_disk(
         self, resolutions: dict[str, str] | None = None
@@ -614,7 +604,6 @@ class ProjectDocument:
         self._revision = result.disk_revision
         self._invalidate()
 
-    # -- output ------------------------------------------------------------
 
     def to_toml(self) -> str:
         """Return the current draft serialized to TOML text (without saving)."""
@@ -667,7 +656,6 @@ class ProjectDocument:
         self._revision = _hash(text)
         return self._revision
 
-    # -- internals ---------------------------------------------------------
 
     def _invalidate(self) -> None:
         self._config_cache = _MISSING
@@ -806,9 +794,6 @@ class DraftTransaction:
         self._document._restore_text(self._snapshot)
 
 
-# ---------------------------------------------------------------------------
-# Semantic diff and three-way merge (pure, text-in / structured-out).
-# ---------------------------------------------------------------------------
 
 
 def diff_documents(baseline_text: str, draft_text: str) -> list[SemanticChange]:
@@ -952,7 +937,6 @@ def three_way_merge(
     )
 
 
-# -- flattening a document to identity-keyed leaves --------------------------
 
 
 def _flatten(plain: Any) -> _DocModel:
@@ -1005,7 +989,6 @@ def _identity_string(
     return ",".join(parts)
 
 
-# -- semantic path parsing and navigation -----------------------------------
 
 
 def _semantic_tokens(sem_path: str) -> list[Any]:
@@ -1061,7 +1044,6 @@ def _matches(element: dict[str, Any], selector: dict[str, Any]) -> bool:
     return all(str(element.get(key)) == value for key, value in selector.items())
 
 
-# -- record roll-up helpers -------------------------------------------------
 
 
 def _is_ancestor(ancestor: str, path: str) -> bool:
@@ -1085,7 +1067,6 @@ def _under_any(path: str, records: set[str]) -> bool:
     return any(path == record or _is_ancestor(record, path) for record in records)
 
 
-# -- value comparison and effective-default resolution ----------------------
 
 
 def _eq(left: Any, right: Any) -> bool:
@@ -1148,7 +1129,6 @@ def _find_model_record(collection: Any, selector: dict[str, Any]) -> Any:
     return None
 
 
-# -- applying draft changes onto the disk-based merged document --------------
 
 
 def _apply_draft_wins(
@@ -1248,7 +1228,6 @@ def _apply_leaf(
     parent[key] = copy.deepcopy(draft_node) if draft_node is not _MISSING else value
 
 
-# -- shared low-level accessors ---------------------------------------------
 
 
 def _resolve_node(container: Any, segments: list[str | int]) -> Any:

@@ -108,7 +108,6 @@ def deployment_sensitive_changes(
         path = change.path
         op = change.operation
 
-        # -- services (per-record identity) --------------------------------
         if _SERVICE_RECORD_RE.match(path):
             label = _record_label(path)
             if op is ChangeOperation.ADDED:
@@ -132,7 +131,6 @@ def deployment_sensitive_changes(
             )
             continue
 
-        # -- buckets (per-record identity / mode) --------------------------
         if _BUCKET_RECORD_RE.match(path):
             label = _record_label(path)
             if op is ChangeOperation.ADDED:
@@ -161,7 +159,6 @@ def deployment_sensitive_changes(
             )
             continue
 
-        # -- managed RDS (singleton) ---------------------------------------
         if path == "rds.database_name" or path.startswith("rds.") or path == "rds":
             if op is ChangeOperation.ADDED and path.startswith("rds."):
                 rds = rds or DeployRisk(
@@ -179,7 +176,6 @@ def deployment_sensitive_changes(
                 )
             continue
 
-        # -- ALB mode (singleton) ------------------------------------------
         if path == "alb.mode":
             alb_mode = DeployRisk(
                 CATEGORY_ALB_MODE,
@@ -189,7 +185,6 @@ def deployment_sensitive_changes(
             )
             continue
 
-        # -- environment identity (singleton) ------------------------------
         if path == "project.environments":
             environment = DeployRisk(
                 CATEGORY_ENVIRONMENT,
@@ -199,7 +194,6 @@ def deployment_sensitive_changes(
             )
             continue
 
-        # -- network identity (singleton) ----------------------------------
         if path in _NETWORK_PATHS:
             network = DeployRisk(
                 CATEGORY_NETWORK,

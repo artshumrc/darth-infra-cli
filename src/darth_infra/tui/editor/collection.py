@@ -145,7 +145,6 @@ class MasterDetailSection(VerticalScroll):
         self._visible: list[int] = []
         self._detail: Any = None
 
-    # -- composition -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static(self.section_title, classes="section-title")
@@ -176,7 +175,6 @@ class MasterDetailSection(VerticalScroll):
         else:
             self._update_status()
 
-    # -- record hooks (subclass responsibility) ----------------------------
 
     def item_count(self) -> int:
         raise NotImplementedError
@@ -248,7 +246,6 @@ class MasterDetailSection(VerticalScroll):
     def mark_modified(self, index: int) -> None:  # pragma: no cover - overridden
         """Note that the record at ``index`` has unsaved changes."""
 
-    # -- list rendering ----------------------------------------------------
 
     def _matches_search(self, index: int) -> bool:
         if not self._search:
@@ -297,10 +294,8 @@ class MasterDetailSection(VerticalScroll):
                 f"{self.item_label(self._selected)}"
             )
 
-    # -- selection ---------------------------------------------------------
 
     async def _select(self, index: int, *, focus_detail: bool = True) -> None:
-        # Persist the currently open record before switching away from it.
         if self._detail is not None:
             self.commit_detail()
         self._selected = index
@@ -328,7 +323,6 @@ class MasterDetailSection(VerticalScroll):
         if target != self._selected:
             await self._select(target)
 
-    # -- actions -----------------------------------------------------------
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
@@ -433,7 +427,6 @@ class MasterDetailSection(VerticalScroll):
         self._refresh_list()
         await self._select(next_index, focus_detail=False)
 
-    # -- search ------------------------------------------------------------
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "md-search":
@@ -442,7 +435,6 @@ class MasterDetailSection(VerticalScroll):
         self._search = event.value.strip()
         self._refresh_list()
 
-    # -- save hooks --------------------------------------------------------
 
     def validate_all(self) -> list:
         """Commit and validate the open record for a save attempt.
@@ -516,7 +508,6 @@ class NestedCollectionEditor(Vertical):
         self._selected: int | None = None
         self._detail: Any = None
 
-    # -- composition -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static(self._title, classes="nested-title")
@@ -540,7 +531,6 @@ class NestedCollectionEditor(Vertical):
         else:
             self._update_status()
 
-    # -- record access -----------------------------------------------------
 
     def _count(self) -> int:
         return self.document.record_count(self.collection_path)
@@ -554,7 +544,6 @@ class NestedCollectionEditor(Vertical):
     def _base_path(self, index: int) -> str:
         return f"{self.collection_path}[{index}]"
 
-    # -- list rendering ----------------------------------------------------
 
     def _state(self, index: int) -> str:
         raw = self._raw(index)
@@ -588,7 +577,6 @@ class NestedCollectionEditor(Vertical):
             plural = self.noun if count == 1 else f"{self.noun}s"
             status.update(f"{count} {plural}.")
 
-    # -- selection ---------------------------------------------------------
 
     async def _select(self, index: int | None, *, focus_detail: bool = True) -> None:
         if self._detail is not None:
@@ -634,7 +622,6 @@ class NestedCollectionEditor(Vertical):
         if row != self._selected:
             await self._select(row)
 
-    # -- actions -----------------------------------------------------------
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
@@ -705,7 +692,6 @@ class NestedCollectionEditor(Vertical):
             await self._select(min(index, remaining - 1), focus_detail=False)
         self.post_message(self.Changed())
 
-    # -- owner hooks -------------------------------------------------------
 
     def commit_all(self) -> None:
         """Flush the open record's edits into the draft."""
@@ -719,7 +705,6 @@ class NestedCollectionEditor(Vertical):
         """Recompute list markers after an external change to the draft."""
         self._refresh_list()
 
-    # -- events ------------------------------------------------------------
 
     def on_editable_field_changed(self, event: Any) -> None:
         # Field change events from the nested detail are committed and surfaced

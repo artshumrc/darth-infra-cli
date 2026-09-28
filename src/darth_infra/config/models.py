@@ -593,7 +593,6 @@ class ProjectConfig:
                     f"but has ebs_volumes configured (EBS is EC2-only)"
                 )
 
-            # Auto-detect architecture from instance type when not set
             if (
                 svc.launch_type == LaunchType.EC2
                 and svc.ec2_instance_type

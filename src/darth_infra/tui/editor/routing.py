@@ -131,7 +131,6 @@ class RoutingSection(VerticalScroll):
         # locally valid saves never depend on it.
         self._discovery = discovery or OfflineAwsDiscovery()
 
-    # -- composition -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static("Routing", classes="section-title")
@@ -181,7 +180,6 @@ class RoutingSection(VerticalScroll):
 
         yield self._path_rules_editor()
 
-        # -- CloudFront ----------------------------------------------------
         yield Static("CloudFront", classes="section-title")
         yield BooleanField(
             field_path="cloudfront.enabled",
@@ -202,7 +200,6 @@ class RoutingSection(VerticalScroll):
 
         yield Button("Save & Continue", id="save-continue", variant="primary")
 
-    # -- CloudFront composition -------------------------------------------
 
     def _cloudfront_advanced_widgets(self) -> list[EditableField]:
         return [
@@ -364,7 +361,6 @@ class RoutingSection(VerticalScroll):
         self._apply_cloudfront_visibility()
         self._show_section_error(None)
 
-    # -- eligibility / context ---------------------------------------------
 
     def _all_service_names(self) -> list[str]:
         """Every configured service name (CloudFront connections accept any).
@@ -430,7 +426,6 @@ class RoutingSection(VerticalScroll):
         except Exception:
             return self.document.raw_value(path)
 
-    # -- field access ------------------------------------------------------
 
     def _scalar_fields(self) -> list[EditableField]:
         """The section's own scalar fields, excluding nested path-rule fields."""
@@ -467,7 +462,6 @@ class RoutingSection(VerticalScroll):
     def _nested_editors(self) -> list[NestedCollectionEditor]:
         return list(self.query(NestedCollectionEditor))
 
-    # -- CloudFront connection row validity -------------------------------
 
     def _connection_label(self, raw: dict[str, Any], index: int) -> str:
         env_key = str(raw.get("env_key") or "").strip()
@@ -497,7 +491,6 @@ class RoutingSection(VerticalScroll):
                 return True
         return False
 
-    # -- path-rule row validity -------------------------------------------
 
     def _default_priority(self) -> int | None:
         value = self.document.raw_value("alb.default_listener_priority")
@@ -550,7 +543,6 @@ class RoutingSection(VerticalScroll):
         editor = self._path_rules_ed()
         return editor is not None and editor.has_error()
 
-    # -- advanced panel ----------------------------------------------------
 
     def _advanced_configured_count(self) -> int:
         count = 0
@@ -583,7 +575,6 @@ class RoutingSection(VerticalScroll):
         if self._advanced_should_expand():
             panel.collapsed = False
 
-    # -- CloudFront panel visibility + advanced ---------------------------
 
     def _cf_enabled_current(self) -> bool:
         field = self._field("cloudfront.enabled")
@@ -651,7 +642,6 @@ class RoutingSection(VerticalScroll):
         if self._cf_advanced_should_expand():
             panel.collapsed = False
 
-    # -- validation --------------------------------------------------------
 
     def _commit_all(self) -> None:
         for field in self._scalar_fields():
@@ -695,7 +685,6 @@ class RoutingSection(VerticalScroll):
                 errors.setdefault("alb.default_target_service", error)
             elif "default_listener_priority" in lowered:
                 errors.setdefault("alb.default_listener_priority", error)
-            # -- CloudFront cross-field errors ----------------------------
             elif "cloudfront.enabled requires alb.domain" in lowered:
                 errors.setdefault("alb.domain", error)
             elif "origin_https_only" in lowered:
@@ -768,7 +757,6 @@ class RoutingSection(VerticalScroll):
             banner.update("")
             banner.display = False
 
-    # -- events ------------------------------------------------------------
 
     def on_editable_field_changed(self, event: EditableField.Changed) -> None:
         event.stop()

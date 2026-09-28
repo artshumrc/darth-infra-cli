@@ -62,7 +62,6 @@ _RDS_ENV_VARS = (
     "POSTGRES_PASSWORD",
 )
 
-# Advanced (collapsible) paths owned by this section.
 _ADVANCED_PATHS = (
     "rds.engine_version",
     "rds.backup_retention_days",
@@ -94,7 +93,6 @@ class DatabaseSection(VerticalScroll):
         self.document = document
         self._enabled = self._rds_present()
 
-    # -- state -------------------------------------------------------------
 
     def _rds_present(self) -> bool:
         try:
@@ -118,13 +116,11 @@ class DatabaseSection(VerticalScroll):
                 names.append(name)
         return names
 
-    # -- composition -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static("Database", classes="section-title")
         yield Static("", id="section-error", classes="field-error")
 
-        # Disabled state: an empty state and the enable action.
         yield Static(
             "No database configured. RDS PostgreSQL is optional.",
             id="rds-empty",
@@ -134,7 +130,6 @@ class DatabaseSection(VerticalScroll):
             "Enable RDS PostgreSQL", id="rds-enable", variant="success"
         )
 
-        # Enabled state: the full field set.
         yield TextField(
             field_path="rds.database_name",
             document=self.document,
@@ -244,7 +239,6 @@ class DatabaseSection(VerticalScroll):
         self._apply_enabled_visibility()
         self._show_section_error(None)
 
-    # -- field access ------------------------------------------------------
 
     def _editable_fields(self) -> list[EditableField]:
         return list(self.query(EditableField))
@@ -255,7 +249,6 @@ class DatabaseSection(VerticalScroll):
                 return field
         return None
 
-    # -- enable / disable visibility ---------------------------------------
 
     # Widgets shown only when a database is configured.
     _ENABLED_ONLY = (
@@ -276,7 +269,6 @@ class DatabaseSection(VerticalScroll):
         for selector in self._DISABLED_ONLY:
             self.query_one(selector).display = not self._enabled
 
-    # -- environment override display --------------------------------------
 
     def _env_override_text(self) -> str:
         try:
@@ -299,7 +291,6 @@ class DatabaseSection(VerticalScroll):
             + ". Edit these in the Environments section."
         )
 
-    # -- advanced panel ----------------------------------------------------
 
     def _advanced_configured_count(self) -> int:
         count = 0
@@ -332,7 +323,6 @@ class DatabaseSection(VerticalScroll):
         if self._advanced_should_expand():
             panel.collapsed = False
 
-    # -- validation --------------------------------------------------------
 
     def _commit_all(self) -> None:
         if not self._enabled:
@@ -417,7 +407,6 @@ class DatabaseSection(VerticalScroll):
             banner.update("")
             banner.display = False
 
-    # -- enable / remove ---------------------------------------------------
 
     def _enable(self) -> None:
         self._enabled = True
@@ -489,7 +478,6 @@ class DatabaseSection(VerticalScroll):
         self._show_section_error(None)
         self.app.notify("Database removed from the draft.", severity="information")
 
-    # -- events ------------------------------------------------------------
 
     def on_editable_field_changed(self, event: EditableField.Changed) -> None:
         event.stop()

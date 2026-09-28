@@ -163,9 +163,6 @@ async def _add_valid_behavior(app, pilot, *, index: int = 0) -> None:
     await pilot.pause()
 
 
-# -- enable gate + panel visibility ------------------------------------------
-
-
 def test_panel_hidden_until_enabled(tmp_path: Path) -> None:
     path = _write(tmp_path, ROUTED)
 
@@ -173,12 +170,10 @@ def test_panel_hidden_until_enabled(tmp_path: Path) -> None:
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 40)) as pilot:
             await _goto_routing(app, pilot)
-            # No CloudFront config and disabled: the panel is hidden.
             assert _panel(app).display is False
 
             app.query_one("#input-cloudfront-enabled", Checkbox).value = True
             await pilot.pause()
-            # Enabling reveals the panel.
             assert _panel(app).display is True
 
     _run(scenario())
@@ -212,14 +207,10 @@ def test_existing_config_survives_navigation_away_and_back(tmp_path: Path) -> No
             await pilot.pause()
             await _goto_routing(app, pilot)
             assert _panel(app).display is True
-            # The draft still holds the original CloudFront configuration.
             assert app._document.record_count("cloudfront.cached_behaviors") == 1
             assert app._document.is_explicit("cloudfront.comment") is True
 
     _run(scenario())
-
-
-# -- no-op save --------------------------------------------------------------
 
 
 def test_existing_cloudfront_survives_noop_save_unchanged(tmp_path: Path) -> None:
@@ -244,9 +235,6 @@ def test_existing_cloudfront_survives_noop_save_unchanged(tmp_path: Path) -> Non
     behavior = cfg.cloudfront.cached_behaviors[0]
     assert behavior.query_string_allowlist == ["v", "page"]
     assert behavior.cookie_allowlist == ["session"]
-
-
-# -- scalar round-tripping ---------------------------------------------------
 
 
 def test_enable_and_edit_scalar_fields_round_trip(tmp_path: Path) -> None:
@@ -283,9 +271,6 @@ def test_enable_and_edit_scalar_fields_round_trip(tmp_path: Path) -> None:
     assert cfg.cloudfront.price_class == "PriceClass_All"
     assert cfg.cloudfront.comment == "edge cache"
     assert len(cfg.cloudfront.cached_behaviors) == 1
-
-
-# -- certificate: manual entry + discovery -----------------------------------
 
 
 def test_certificate_manual_entry_offline(tmp_path: Path) -> None:
@@ -359,13 +344,9 @@ def test_certificate_discovery_fills_the_field(tmp_path: Path) -> None:
                 app.query_one("#input-cloudfront-certificate-arn", Input).value
                 == _CERT
             )
-            # The discovery request was issued through the injected adapter.
             assert fake.requests[-1].kind is DiscoveryKind.CERTIFICATE
 
     _run(scenario())
-
-
-# -- service connections -----------------------------------------------------
 
 
 def test_connection_add_edit_duplicate_delete(tmp_path: Path) -> None:
@@ -379,7 +360,6 @@ def test_connection_add_edit_duplicate_delete(tmp_path: Path) -> None:
             await pilot.pause()
             await _add_valid_behavior(app, pilot)
 
-            # Add a connection.
             app.query_one("#nestedadd-cloudfront-connections", Button).press()
             await pilot.pause()
             app.query_one(
@@ -390,7 +370,6 @@ def test_connection_add_edit_duplicate_delete(tmp_path: Path) -> None:
             ).value = "CDN_URL"
             await pilot.pause()
 
-            # Duplicate it, then give the copy a distinct env key.
             app.query_one("#nesteddup-cloudfront-connections", Button).press()
             await pilot.pause()
             app.query_one(
@@ -419,11 +398,9 @@ def test_connection_service_cascade_on_service_delete(tmp_path: Path) -> None:
             await pilot.click(f"#{nav_button_id(Section.SERVICES)}")
             await pilot.pause()
 
-            # Select the 'api' service (index 1) and delete it.
             app._section_widget._selected = 1  # noqa: SLF001
             app.query_one("#md-delete", Button).press()
             await pilot.pause()
-            # Deleting a referenced service lists the CloudFront connection.
             assert isinstance(app.screen, ImpactConfirmScreen)
             body = " ".join(_rendered(s) for s in app.screen.query(Static))
             assert "CloudFront connection" in body
@@ -436,11 +413,7 @@ def test_connection_service_cascade_on_service_delete(tmp_path: Path) -> None:
 
     cfg = load_config(path)
     assert [s.name for s in cfg.services] == ["web"]
-    # The dangling CloudFront connection was cleaned up atomically.
     assert cfg.cloudfront.connections == []
-
-
-# -- cached behaviors: full round-trip + conditional allowlists --------------
 
 
 def test_cached_behavior_round_trips_every_field(tmp_path: Path) -> None:
@@ -467,7 +440,6 @@ def test_cached_behavior_round_trips_every_field(tmp_path: Path) -> None:
             app.query_one(f"#input-{_cf('max-ttl-seconds')}", Input).value = "500"
             await pilot.pause()
 
-            # Allowlist modes reveal their allowlist inputs.
             app.query_one(f"#input-{_cf('query-strings')}", Select).value = "allowlist"
             await pilot.pause()
             assert app.query_one(f"#field-{_cf('query-string-allowlist')}").display
@@ -538,14 +510,12 @@ def test_switching_mode_away_from_allowlist_confirms_removal(tmp_path: Path) -> 
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 40)) as pilot:
             await _goto_routing(app, pilot)
-            # Switch query strings away from allowlist -> confirm removal.
             app.query_one(f"#input-{_cf('query-strings')}", Select).value = "all"
             await pilot.pause()
             assert isinstance(app.screen, ConfirmScreen)
             await pilot.click("#confirm-yes")
             await pilot.pause()
 
-            # The hidden allowlist value is removed and its field hidden.
             assert (
                 app._document.is_explicit(
                     "cloudfront.cached_behaviors[0].query_string_allowlist"
@@ -564,7 +534,6 @@ def test_switching_mode_away_from_allowlist_confirms_removal(tmp_path: Path) -> 
     behavior = load_config(path).cloudfront.cached_behaviors[0]
     assert behavior.query_strings.value == "all"
     assert behavior.query_string_allowlist == []
-    # The cookie allowlist was untouched.
     assert behavior.cookie_allowlist == ["session"]
 
 
@@ -583,7 +552,6 @@ def test_cancel_mode_switch_preserves_hidden_allowlist(tmp_path: Path) -> None:
             await pilot.pause()
             await pilot.pause()
 
-            # Cancelling keeps the allowlist values and returns to allowlist mode.
             # Read raw presence (never validating) since the confirm interval left
             # the draft transiently invalid before the mode was restored.
             assert (
@@ -597,9 +565,6 @@ def test_cancel_mode_switch_preserves_hidden_allowlist(tmp_path: Path) -> None:
             ) == ["v", "page"]
 
     _run(scenario())
-
-
-# -- cross-field validation prevents save ------------------------------------
 
 
 def test_invalid_ttl_order_prevents_save(tmp_path: Path) -> None:
@@ -622,7 +587,6 @@ def test_invalid_ttl_order_prevents_save(tmp_path: Path) -> None:
             await pilot.pause()
 
             await _ctrl_s(app, pilot)
-            # The behavior row is marked invalid and nothing is written.
             assert app.query_one("#section-error", Static).display is True
             assert load_config(path).cloudfront.enabled is False
 

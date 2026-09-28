@@ -667,7 +667,6 @@ class ConfigEditorApp(App[None]):
         self.current_section: Section = Section.PROJECT
         self._section_widget: Any = None
 
-    # -- composition -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static(
@@ -698,7 +697,6 @@ class ConfigEditorApp(App[None]):
         await self._show_section(Section.PROJECT)
         self._apply_min_size(self.size.width, self.size.height)
 
-    # -- navigation --------------------------------------------------------
 
     async def _show_section(self, section: Section) -> None:
         self.current_section = section
@@ -791,7 +789,6 @@ class ConfigEditorApp(App[None]):
             self._navigate_to_control(event.section, event.path), exclusive=True
         )
 
-    # -- responsive --------------------------------------------------------
 
     def on_resize(self, event: events.Resize) -> None:
         self._apply_min_size(event.size.width, event.size.height)
@@ -801,7 +798,6 @@ class ConfigEditorApp(App[None]):
         self.query_one("#too-small", Static).display = too_small
         self.query_one("#editor-main", Horizontal).display = not too_small
 
-    # -- save orchestration ------------------------------------------------
 
     def action_save(self) -> None:
         """Ctrl+S: validate and save the draft from any section.
@@ -1040,7 +1036,6 @@ class ConfigEditorApp(App[None]):
         if on_success is not None:
             on_success()
 
-    # -- first-time creation ----------------------------------------------
 
     def _initiate_create(self, on_success: Callable[[], None] | None) -> None:
         """First-time creation: route to Review, which owns the create confirm."""
@@ -1088,7 +1083,6 @@ class ConfigEditorApp(App[None]):
         if on_success is not None:
             on_success()
 
-    # -- quit --------------------------------------------------------------
 
     def action_quit(self) -> None:
         """Ctrl+Q: quit, offering to save or preserve unsaved work.
@@ -1156,7 +1150,6 @@ class ConfigEditorApp(App[None]):
         except Exception:
             pass
 
-    # -- reversion ---------------------------------------------------------
 
     def action_revert_all(self) -> None:
         """Restore the entire draft to the last saved/loaded configuration.
@@ -1206,7 +1199,6 @@ class ConfigEditorApp(App[None]):
         """Rebuild the current section so its controls reflect a reversion."""
         await self._show_section(self.current_section)
 
-    # -- command palette ---------------------------------------------------
 
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         yield from super().get_system_commands(screen)
@@ -1282,7 +1274,6 @@ class ConfigEditorApp(App[None]):
         if len(self.screen_stack) > 1:
             self.pop_screen()
 
-    # -- helpers -----------------------------------------------------------
 
     @staticmethod
     def _owning_field(widget: Any) -> EditableField | None:

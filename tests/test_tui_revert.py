@@ -70,12 +70,10 @@ def test_reset_field_restores_focused_field_to_baseline(tmp_path: Path) -> None:
             await pilot.pause()
             assert app._document.value("project.name") == "changed"
 
-            # Reset the focused field to its saved value.
             app.action_reset_field()
             await pilot.pause()
             await pilot.pause()
             assert app._document.value("project.name") == "demo"
-            # The rebuilt control shows the restored value; other edits are safe.
             assert app.query_one("#input-project-name", Input).value == "demo"
 
     _run(scenario())
@@ -112,17 +110,14 @@ def test_revert_section_restores_only_that_section(tmp_path: Path) -> None:
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            # Edit a Project field and a Database field.
             app.query_one("#input-project-name", Input).value = "renamed"
             await pilot.pause()
             app._document.set("rds.database_name", "other")
 
-            # Revert only the Project section.
             app.action_revert_section()
             await pilot.pause()
             await pilot.pause()
 
-            # Project is restored; the Database edit is untouched.
             assert app._document.value("project.name") == "demo"
             assert app._document.value("rds.database_name") == "other"
 
@@ -147,8 +142,6 @@ def test_revert_all_restores_the_whole_draft(tmp_path: Path) -> None:
             await pilot.pause()
             await pilot.pause()
 
-            # Every change is gone and the draft matches the loaded document
-            # exactly, comments and all.
             assert app._document.toml_patch() == ""
             assert app._document.to_toml() == original
             assert app.query_one("#input-project-name", Input).value == "demo"
@@ -167,19 +160,15 @@ def test_revert_all_restores_a_cascading_deletion(tmp_path: Path) -> None:
             await pilot.click(f"#{nav_button_id(Section.SERVICES)}")
             await pilot.pause()
             await pilot.pause()
-            # Delete the referenced 'web' service and its cascade (its RDS
-            # exposure) as one confirmed transaction.
             await pilot.click("#md-delete")
             await pilot.pause()
             await pilot.click("#impact-confirm")
             await pilot.pause()
             await pilot.pause()
 
-            # The cascade removed the service and cleaned up the reference.
             assert app._document.record_count("services") == 1
             assert app._document.value("rds.expose_to") == ["worker"]
 
-            # A whole-session revert restores the entire cascade at once.
             app.action_revert_all()
             await pilot.pause()
             await pilot.pause()

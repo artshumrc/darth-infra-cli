@@ -154,9 +154,6 @@ async def _select_row(app, pilot, row: int) -> None:
     await pilot.pause()
 
 
-# -- master-detail add / search / edit / duplicate / delete ------------------
-
-
 def test_add_search_edit_and_save_bucket(tmp_path: Path) -> None:
     path = _write(tmp_path, ONE_SERVICE)
 
@@ -219,7 +216,6 @@ def test_duplicate_copies_fields_but_requires_unique_name(tmp_path: Path) -> Non
             await pilot.pause()
             section = app._section_widget
             assert section.item_count() == 2
-            # The copy carries the mode-specific seed field but starts unnamed.
             assert app.query_one("#input-s3-buckets-1-name", Input).value == ""
             assert (
                 app.query_one(
@@ -228,7 +224,6 @@ def test_duplicate_copies_fields_but_requires_unique_name(tmp_path: Path) -> Non
                 == "old-media"
             )
 
-            # Invalid (unnamed) duplicate blocks the save.
             await _ctrl_s(app, pilot)
             assert len(load_config(path).s3_buckets) == 1
 
@@ -241,9 +236,6 @@ def test_duplicate_copies_fields_but_requires_unique_name(tmp_path: Path) -> Non
     buckets = load_config(path).s3_buckets
     assert [b.name for b in buckets] == ["media", "media2"]
     assert buckets[1].seed_source_bucket_name == "old-media"
-
-
-# -- full field coverage -----------------------------------------------------
 
 
 def test_every_bucket_and_connection_field_saves_and_reloads(tmp_path: Path) -> None:
@@ -268,7 +260,6 @@ def test_every_bucket_and_connection_field_saves_and_reloads(tmp_path: Path) -> 
             ).value = "MEDIA_FALLBACK"
             await pilot.pause()
 
-            # Add a service connection with every connection field set.
             app.query_one("#nestedadd-s3-buckets-0-connections", Button).press()
             await pilot.pause()
             app.query_one(
@@ -311,8 +302,6 @@ def test_existing_mode_field_saves_and_advanced_autoexpands(tmp_path: Path) -> N
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 40)) as pilot:
             await _goto_storage(app, pilot)
-            # The existing-bucket field is visible in existing mode and holds
-            # the loaded value.
             field = app.query_one("#field-s3-buckets-0-existing-bucket-name")
             assert field.display is True
             assert (
@@ -321,16 +310,12 @@ def test_existing_mode_field_saves_and_advanced_autoexpands(tmp_path: Path) -> N
                 ).value
                 == "legacy-assets"
             )
-            # The seed fields are hidden in existing mode.
             assert (
                 app.query_one("#field-s3-buckets-0-seed-source-bucket-name").display
                 is False
             )
 
     _run(scenario())
-
-
-# -- mode-specific value survival + no-op save -------------------------------
 
 
 def test_noop_save_preserves_mode_specific_values(tmp_path: Path) -> None:
@@ -340,7 +325,6 @@ def test_noop_save_preserves_mode_specific_values(tmp_path: Path) -> None:
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 40)) as pilot:
             await _goto_storage(app, pilot)
-            # Save without touching anything.
             await _ctrl_s(app, pilot)
 
     _run(scenario())
@@ -348,13 +332,9 @@ def test_noop_save_preserves_mode_specific_values(tmp_path: Path) -> None:
     bucket = load_config(path).s3_buckets[0]
     assert bucket.mode.value == "existing"
     assert bucket.existing_bucket_name == "legacy-assets"
-    # Comments and the mode-specific value survive verbatim.
     text = path.read_text()
     assert "# Static assets bucket" in text
     assert "must survive a no-op save" in text
-
-
-# -- explicit mode change with confirmation ----------------------------------
 
 
 def test_mode_change_cancel_preserves_incompatible_value(tmp_path: Path) -> None:
@@ -369,7 +349,6 @@ def test_mode_change_cancel_preserves_incompatible_value(tmp_path: Path) -> None
             await pilot.pause()
             assert isinstance(app.screen, ConfirmScreen)
 
-            # Cancel: the mode and the existing bucket name are both preserved.
             await pilot.click("#confirm-no")
             await pilot.pause()
             assert (
@@ -384,7 +363,6 @@ def test_mode_change_cancel_preserves_incompatible_value(tmp_path: Path) -> None
 
     _run(scenario())
 
-    # Nothing was saved; the file is unchanged.
     assert load_config(path).s3_buckets[0].existing_bucket_name == "legacy-assets"
 
 
@@ -401,7 +379,6 @@ def test_mode_change_confirm_clears_incompatible_value(tmp_path: Path) -> None:
 
             await pilot.click("#confirm-yes")
             await pilot.pause()
-            # The incompatible field is cleared and hidden; mode is now managed.
             assert app.query_one("#input-s3-buckets-0-mode", Select).value == "managed"
             assert (
                 app.query_one("#field-s3-buckets-0-existing-bucket-name").display
@@ -416,9 +393,6 @@ def test_mode_change_confirm_clears_incompatible_value(tmp_path: Path) -> None:
     assert bucket.existing_bucket_name is None
 
 
-# -- deletion impact + cascade + revert --------------------------------------
-
-
 def test_bucket_delete_lists_impact_and_cleans_up_atomically(tmp_path: Path) -> None:
     path = _write(tmp_path, BUCKET_WITH_REFS)
 
@@ -428,8 +402,6 @@ def test_bucket_delete_lists_impact_and_cleans_up_atomically(tmp_path: Path) -> 
             await _goto_storage(app, pilot)
             await pilot.click("#md-delete")
             await pilot.pause()
-            # The complete impact is shown: the bucket connection and the
-            # service s3_access grant that named the bucket.
             assert isinstance(app.screen, ImpactConfirmScreen)
             items = " ".join(_rendered(s) for s in app.screen.query(".impact-item"))
             assert "MEDIA_BUCKET" in items
@@ -446,7 +418,6 @@ def test_bucket_delete_lists_impact_and_cleans_up_atomically(tmp_path: Path) -> 
 
     config = load_config(path)
     assert config.s3_buckets == []
-    # The external s3_access grant naming the bucket is cleaned up too.
     assert config.services[0].s3_access == []
 
 
@@ -464,7 +435,6 @@ def test_bucket_delete_is_reversible_before_save(tmp_path: Path) -> None:
             await pilot.pause()
             assert app._document.config.s3_buckets == []
 
-            # Reverting restores the bucket and the cleaned s3_access grant.
             app._document.revert_all()
             config = app._document.config
             assert [b.name for b in config.s3_buckets] == ["media"]
@@ -500,11 +470,7 @@ def test_service_delete_impact_includes_bucket_connection(tmp_path: Path) -> Non
 
     config = load_config(path)
     assert [s.name for s in config.services] == ["worker"]
-    # The bucket survives, but its connection to the deleted service is gone.
     assert config.s3_buckets[0].connections == []
-
-
-# -- deployment-sensitive public read ----------------------------------------
 
 
 def test_public_read_shows_warning_and_still_saves(tmp_path: Path) -> None:
@@ -521,7 +487,6 @@ def test_public_read_shows_warning_and_still_saves(tmp_path: Path) -> None:
             warning = app.query_one("#bucket-sensitive-0", Static)
             assert warning.display is False
 
-            # Enabling public read surfaces the deployment-sensitive warning.
             app.query_one("#input-s3-buckets-0-public-read", Checkbox).value = True
             await pilot.pause()
             assert warning.display is True

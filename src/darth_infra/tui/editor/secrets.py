@@ -303,7 +303,6 @@ class SecretDetail(Vertical):
             value = None
         return str(value) if value else "generate"
 
-    # -- services (for bindings) -------------------------------------------
 
     def _services(self) -> list[tuple[int, str]]:
         services: list[tuple[int, str]] = []
@@ -327,7 +326,6 @@ class SecretDetail(Vertical):
             return str(field.current_value() or "")
         return self._original_name
 
-    # -- composition -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static("", id="secret-detail-error", classes="field-error")
@@ -410,7 +408,6 @@ class SecretDetail(Vertical):
         self._apply_conditionals()
         self._show_banner(None)
 
-    # -- field access ------------------------------------------------------
 
     def _fields(self) -> list[EditableField]:
         return list(self.query(EditableField))
@@ -430,7 +427,6 @@ class SecretDetail(Vertical):
             if inputs:
                 inputs.first().focus()
 
-    # -- conditional presentation ------------------------------------------
 
     def _current_source(self) -> str:
         field = self._field("source")
@@ -458,7 +454,6 @@ class SecretDetail(Vertical):
         except Exception:
             pass
 
-    # -- source change with confirmation -----------------------------------
 
     def _field_has_value(self, name: str) -> bool:
         field = self._field(name)
@@ -547,7 +542,6 @@ class SecretDetail(Vertical):
         field.mark_committed()
         field.refresh_badge()
 
-    # -- advanced panel ----------------------------------------------------
 
     def _advanced_configured_count(self) -> int:
         count = 0
@@ -580,7 +574,6 @@ class SecretDetail(Vertical):
         if self._advanced_should_expand():
             panel.collapsed = False
 
-    # -- validation --------------------------------------------------------
 
     def commit_all(self) -> None:
         for field in self._fields():
@@ -680,7 +673,6 @@ class SecretDetail(Vertical):
             banner.update("")
             banner.display = False
 
-    # -- events ------------------------------------------------------------
 
     def on_editable_field_changed(self, event: EditableField.Changed) -> None:
         event.stop()
@@ -709,7 +701,6 @@ class SecretsSection(MasterDetailSection):
         self._discovery = discovery or OfflineAwsDiscovery()
         self._modified: set[int] = set()
 
-    # -- record metadata ---------------------------------------------------
 
     def item_count(self) -> int:
         return self.document.record_count(_COLLECTION)
@@ -733,7 +724,6 @@ class SecretsSection(MasterDetailSection):
     def build_detail(self, index: int) -> SecretDetail:
         return SecretDetail(self.document, index, self._discovery)
 
-    # -- add / duplicate / delete ------------------------------------------
 
     def create_record(self) -> int:
         return self.document.add_record(_COLLECTION, {"name": ""})
@@ -781,7 +771,6 @@ class SecretsSection(MasterDetailSection):
             return []
         return [ref.description for ref in secret_removal_references(config, name)]
 
-    # -- modified tracking -------------------------------------------------
 
     def after_save(self) -> None:
         self._modified.clear()

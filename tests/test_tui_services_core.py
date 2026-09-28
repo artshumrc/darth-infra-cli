@@ -133,17 +133,13 @@ def test_add_service_creates_draft_requiring_unique_name(tmp_path: Path) -> None
 
             await pilot.click("#md-add")
             await pilot.pause()
-            # A new draft service exists and is selected with an empty name.
             assert section.item_count() == 2
             assert app.query_one("#input-services-1-name", Input).value == ""
 
-            # It is invalid until named, so Ctrl+S refuses to save.
             await _ctrl_s(app, pilot)
             assert app.query_one("#error-services-1-name", Static).display is True
-            # Nothing was written: the file still holds a single service.
             assert len(load_config(path).services) == 1
 
-            # Naming it uniquely makes the save succeed.
             app.query_one("#input-services-1-name", Input).value = "worker"
             await pilot.pause()
             await _ctrl_s(app, pilot)
@@ -182,13 +178,11 @@ def test_select_switches_detail_and_keeps_edits(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
             await _goto_services(app, pilot)
-            # Edit the first service, then switch to the second and back.
             app.query_one("#input-services-0-cpu", Input).value = "1024"
             await pilot.pause()
             await _select_row(app, pilot, 1)
             assert app.query_one("#input-services-1-name", Input).value == "worker"
             await _select_row(app, pilot, 0)
-            # The earlier edit was committed to the draft, not lost.
             assert app.query_one("#input-services-0-cpu", Input).value == "1024"
             await _ctrl_s(app, pilot)
             assert load_config(path).services[0].cpu == 1024
@@ -267,7 +261,6 @@ def test_launch_type_ec2_saves_instance_type(tmp_path: Path) -> None:
             await _goto_services(app, pilot)
             app.query_one("#input-services-0-launch-type", Select).value = "ec2"
             await pilot.pause()
-            # The EC2 instance type field becomes visible once EC2 is chosen.
             ec2_field = app.query_one("#field-services-0-ec2-instance-type")
             assert ec2_field.display is True
             app.query_one(
@@ -324,7 +317,6 @@ def test_duplicate_copies_fields_but_no_incoming_references(tmp_path: Path) -> N
             assert app.query_one("#input-services-1-cpu", Input).value == "512"
 
             await _ctrl_s(app, pilot)
-            # Still one service on disk: the invalid duplicate blocked the save.
             assert len(load_config(path).services) == 1
 
             app.query_one("#input-services-1-name", Input).value = "web2"
@@ -336,7 +328,6 @@ def test_duplicate_copies_fields_but_no_incoming_references(tmp_path: Path) -> N
             web2 = config.services[1]
             assert web2.cpu == 512
             assert web2.environment_variables == {"FOO": "bar"}
-            # The incoming ALB reference was not duplicated onto the copy.
             assert config.alb.default_target_service == "web"
 
     _run(scenario())
@@ -378,14 +369,11 @@ def test_referenced_service_delete_cascades(tmp_path: Path) -> None:
 
             await pilot.click("#md-delete")
             await pilot.pause()
-            # The impact list is shown (not the plain confirm dialog).
             assert isinstance(app.screen, ImpactConfirmScreen)
             await pilot.click("#impact-confirm")
             await pilot.pause()
             await pilot.pause()
 
-            # The service and its referencing path rule are gone together, and
-            # the draft still saves with no dangling reference.
             section = app._section_widget
             assert section.item_count() == 1
             await _ctrl_s(app, pilot)
@@ -435,7 +423,6 @@ def test_environment_variables_are_visible_and_persist(tmp_path: Path) -> None:
             app.query_one(f"#kvval-{slug}", Input).value = "info"
             app.query_one(f"#kvadd-{slug}", Button).press()
             await pilot.pause()
-            # The name and value are shown in plain text (not masked).
             list_view = app.query_one(f"#list-{slug}", ListView)
             rows = [_rendered(s) for s in list_view.query(Static)]
             assert any("LOG_LEVEL = info" in row for row in rows)
@@ -463,7 +450,6 @@ def test_worker_hides_health_and_external_image_hides_build(tmp_path: Path) -> N
             await pilot.pause()
             assert app.query_one("#field-services-0-health-check-path").display is False
 
-            # Providing an external image hides the Docker build fields.
             assert app.query_one("#field-services-0-dockerfile").display is True
             app.query_one("#input-services-0-image", Input).value = "redis:7-alpine"
             await pilot.pause()
@@ -480,7 +466,6 @@ def test_master_detail_keyboard_operable_at_both_sizes(tmp_path: Path) -> None:
         async with app.run_test(size=size) as pilot:
             await pilot.pause()
             await _goto_services(app, pilot)
-            # The list, search, actions, and detail name input are all reachable.
             for selector in ("#md-search", "#md-add", "#md-list"):
                 assert app.query_one(selector).display is True
             name = app.query_one("#input-services-0-name", Input)

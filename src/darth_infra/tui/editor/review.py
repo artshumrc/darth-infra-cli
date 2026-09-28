@@ -272,7 +272,6 @@ class ReviewSection(VerticalScroll):
         # keyed by the button id so a press resolves to a concrete control.
         self._nav_targets: dict[str, tuple[str, str | None]] = {}
 
-    # -- composition -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static("Review", classes="section-title")
@@ -295,7 +294,6 @@ class ReviewSection(VerticalScroll):
     def on_mount(self) -> None:
         self.run_worker(self._render_all(), exclusive=True)
 
-    # -- public API used by the shell --------------------------------------
 
     def refresh_views(self) -> None:
         """Recompute every view from the current draft (after save or revert)."""
@@ -318,7 +316,6 @@ class ReviewSection(VerticalScroll):
         """
         return complete_validation_problems(self.document)
 
-    # -- rendering ---------------------------------------------------------
 
     async def _render_all(self) -> None:
         self._nav_targets = {}
@@ -505,12 +502,10 @@ class ReviewSection(VerticalScroll):
             compact=True,
         )
 
-    # -- helpers -----------------------------------------------------------
 
     def _safe_topology(self) -> Topology:
         return safe_topology(self.document)
 
-    # -- events ------------------------------------------------------------
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""

@@ -97,7 +97,6 @@ def test_changes_grouped_by_section_with_distinct_labels(tmp_path: Path) -> None
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
             doc = app._document
-            # A representative edit in several canonical sections.
             doc.set("project.name", "demo2")  # changed (Project)
             doc.set("project.tags.team", "platform")  # added (Project)
             doc.reset("project.tags.owner")  # removed (Project map entry)
@@ -106,11 +105,9 @@ def test_changes_grouped_by_section_with_distinct_labels(tmp_path: Path) -> None
             await _goto_review(app, pilot)
 
             text = _changes_text(app)
-            # Grouped under canonical section headers.
             assert "Project" in text
             assert "Database" in text
             assert "Services" in text
-            # Distinct visible labels for each operation kind.
             assert "[changed]" in text
             assert "[added]" in text
             assert "[removed]" in text
@@ -181,7 +178,6 @@ def test_changes_cover_representative_edits_in_every_section(tmp_path: Path) -> 
             ):
                 assert label in text, f"{label} section missing from Changes"
 
-            # The exact TOML view is present alongside the semantic view.
             assert str(
                 app.query_one("#review-toml-body", Static).render()
             ) == app._document.toml_patch()
@@ -220,7 +216,6 @@ def test_unchanged_fields_are_omitted_from_changes(tmp_path: Path) -> None:
 
             text = _changes_text(app)
             assert "project.name" in text
-            # Fields that did not change are not listed.
             assert "aws_region" not in text
             assert "vpc_name" not in text
 
@@ -245,7 +240,6 @@ def test_validation_problem_navigates_to_first_responsible_control(
             problems = app.query_one("#review-problems")
             assert problems.display is True
 
-            # Saving is blocked and navigates to the owning control (Services).
             await pilot.click("#review-save")
             await pilot.pause()
             await pilot.pause()
@@ -263,7 +257,6 @@ def test_review_available_and_reachable(tmp_path: Path) -> None:
             await pilot.pause()
             await _goto_review(app, pilot)
             assert app.current_section is Section.REVIEW
-            # The Review section renders its three views, not a placeholder.
             assert app.query_one("#review-tabs")
             assert not app.query(".placeholder-message")
 

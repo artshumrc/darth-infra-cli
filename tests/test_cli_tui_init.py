@@ -88,7 +88,6 @@ def test_tui_errors_actionably_when_no_config(
 
     assert result.exit_code != 0
     assert "darth-infra init" in result.output
-    # It never fell through to launching the editor.
     assert captured_apps == []
 
 
@@ -130,7 +129,6 @@ def test_non_interactive_init_scaffolds_without_launching_textual(
     )
 
     assert result.exit_code == 0, result.output
-    # The editor was never constructed for a non-interactive scaffold.
     assert captured_apps == []
     assert (out / CONFIG_FILENAME).is_file()
     assert (out / "templates" / "generated" / "root.yaml").is_file()

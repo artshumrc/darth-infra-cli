@@ -234,7 +234,6 @@ class EnvironmentsSection(VerticalScroll):
         self._selected_env: str | None = None
         self._detail: EnvironmentOverrideDetail | None = None
 
-    # -- environment / resource facts --------------------------------------
 
     def _environments(self) -> list[str]:
         try:
@@ -274,7 +273,6 @@ class EnvironmentsSection(VerticalScroll):
                 names.append(name)
         return names
 
-    # -- composition -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static("Environments", classes="section-title")
@@ -384,7 +382,6 @@ class EnvironmentsSection(VerticalScroll):
             field.refresh_badge()
         self._show_section_error(None)
 
-    # -- environment master list -------------------------------------------
 
     def _refresh_env_list(self) -> None:
         for env in self._environments():
@@ -410,7 +407,6 @@ class EnvironmentsSection(VerticalScroll):
         return False
 
     async def _select_env(self, env: str, *, focus_detail: bool = True) -> None:
-        # Persist the currently open environment's edits before switching away.
         if self._detail is not None:
             for field in self._detail.fields():
                 field.commit()
@@ -438,7 +434,6 @@ class EnvironmentsSection(VerticalScroll):
                 return env
         return None
 
-    # -- field access ------------------------------------------------------
 
     def _preview_fields(self) -> list[EditableField]:
         try:
@@ -459,7 +454,6 @@ class EnvironmentsSection(VerticalScroll):
                 return field
         return None
 
-    # -- preview panel -----------------------------------------------------
 
     def _preview_configured_count(self) -> int:
         count = 0
@@ -498,7 +492,6 @@ class EnvironmentsSection(VerticalScroll):
         if self._preview_should_expand():
             panel.collapsed = False
 
-    # -- validation --------------------------------------------------------
 
     def _commit_all(self) -> None:
         for field in self._all_fields():
@@ -601,7 +594,6 @@ class EnvironmentsSection(VerticalScroll):
             banner.update("")
             banner.display = False
 
-    # -- events ------------------------------------------------------------
 
     def on_editable_field_changed(self, event: EditableField.Changed) -> None:
         event.stop()

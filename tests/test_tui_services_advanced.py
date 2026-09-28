@@ -256,14 +256,12 @@ def test_ulimit_add_edit_duplicate_delete(tmp_path: Path) -> None:
             assert nested._count() == 2
             assert nested.has_error() is True  # duplicate ulimit name
 
-            # Rename the copy to a distinct ulimit and it becomes valid.
             app.query_one(
                 "#input-services-0-ulimits-1-name", Select
             ).value = "memlock"
             await pilot.pause()
             assert nested.has_error() is False
 
-            # Delete the second row with confirmation.
             app.query_one("#nesteddel-services-0-ulimits", Button).press()
             await pilot.pause()
             await pilot.click("#confirm-yes")
@@ -303,7 +301,6 @@ def test_ebs_editor_is_ec2_only_and_round_trips(tmp_path: Path) -> None:
             assert vols[0].size_gb == 40
             assert vols[0].mount_path == "/data"
 
-            # Switching to Fargate hides the EC2-only EBS panel.
             app.query_one("#input-services-0-launch-type", Select).value = "fargate"
             await pilot.pause()
             assert ebs.display is False
@@ -359,10 +356,8 @@ def test_duplicate_copies_nested_but_not_incoming_references(tmp_path: Path) -> 
             config = load_config(path)
             assert [s.name for s in config.services] == ["web", "web2"]
             web2 = config.services[1]
-            # Service-owned nested settings copied.
             assert [u.name for u in web2.ulimits] == ["nofile"]
             assert [v.name for v in web2.ebs_volumes] == ["data"]
-            # Incoming ALB references were not duplicated onto the copy.
             assert config.alb.default_target_service == "web"
             assert [r.target_service for r in config.alb.path_rules] == ["web"]
 
@@ -377,10 +372,7 @@ def test_referenced_service_cascade_via_pilot(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             await _goto_services(app, pilot)
-            # "web" is the ALB default target and a path-rule target: deleting it
-            # would leave the domain without a target, so add a second service to
-            # take over the default target first is not needed here — instead we
-            # confirm the impact list lists the references.
+            # "web" is the ALB default and a path-rule target; the impact list names both.
             await pilot.click("#md-delete")
             await pilot.pause()
             assert isinstance(app.screen, ImpactConfirmScreen)
@@ -403,7 +395,6 @@ def test_worker_hides_ec2_only_advanced_fields(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
             await _goto_services(app, pilot)
-            # Fargate: architecture, user-data, and EBS panels are unavailable.
             assert app.query_one("#field-services-0-architecture").display is False
             assert (
                 app.query_one("#field-services-0-user-data-script").display is False

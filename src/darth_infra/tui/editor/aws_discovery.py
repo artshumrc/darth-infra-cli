@@ -264,7 +264,6 @@ class BotoAwsDiscovery:
         self._client_factory = client_factory
         self._clients: dict[str, Any] = {}
 
-    # -- client access -----------------------------------------------------
 
     def _client(self, service: str) -> Any:
         if service not in self._clients:
@@ -278,7 +277,6 @@ class BotoAwsDiscovery:
                 )
         return self._clients[service]
 
-    # -- discovery ---------------------------------------------------------
 
     def discover(self, request: DiscoveryRequest) -> DiscoveryResult:
         try:
@@ -496,7 +494,6 @@ class BotoAwsDiscovery:
         records.sort(key=lambda r: r.label)
         return DiscoveryResult.of(records)
 
-    # -- verification ------------------------------------------------------
 
     def verify(self, request: DiscoveryRequest, target: str) -> VerificationOutcome:
         if not target:

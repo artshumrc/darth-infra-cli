@@ -54,7 +54,7 @@ ProjectTemplates: TypeAlias = dict[str, Template]
 
 class _LegacySecurityGroupEgress(ec2.SecurityGroupEgress):
     def validate(self) -> None:
-        # Jinja emitted numeric -1, which troposphere's string-only validator rejects.
+        # troposphere's string-only validator rejects numeric -1.
         return
 
 

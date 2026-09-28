@@ -114,9 +114,6 @@ async def _select_env(app: ConfigEditorApp, pilot, env: str) -> None:
     await pilot.pause()
 
 
-# -- per-environment overrides -----------------------------------------------
-
-
 def test_edits_every_supported_override_per_environment(tmp_path: Path) -> None:
     path = _write(tmp_path, BASE)
 
@@ -125,8 +122,6 @@ def test_edits_every_supported_override_per_environment(tmp_path: Path) -> None:
         async with app.run_test(size=(140, 45)) as pilot:
             await _goto_environments(app, pilot)
 
-            # prod is selected first. Add an environment tag and a per-service
-            # EC2 instance override for prod.
             app.query_one(
                 "#input-environments-prod-instance-type-override", Input
             ).value = "db.r6g.large"
@@ -135,7 +130,6 @@ def test_edits_every_supported_override_per_environment(tmp_path: Path) -> None:
             app.query_one("#kvadd-environments-prod-tags", Button).press()
             await pilot.pause()
 
-            # Per-service EC2 override keyed by an existing service (a dropdown).
             app.query_one(
                 "#kvkey-environments-prod-ec2-instance-type-override", Select
             ).value = "web"
@@ -145,7 +139,6 @@ def test_edits_every_supported_override_per_environment(tmp_path: Path) -> None:
             app.query_one("#kvadd-environments-prod-ec2-instance-type-override", Button).press()
             await pilot.pause()
 
-            # Switch to staging and give it a different override.
             await _select_env(app, pilot, "staging")
             app.query_one("#kvkey-environments-staging-tags", Input).value = "tier"
             app.query_one("#kvval-environments-staging-tags", Input).value = "beta"
@@ -172,7 +165,7 @@ def test_inherited_values_visible_and_reset_removes_key(tmp_path: Path) -> None:
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(140, 45)) as pilot:
             await _goto_environments(app, pilot)
-            await _select_env(app, pilot, "staging")  # staging has the override
+            await _select_env(app, pilot, "staging")
 
             field = app.query_one(
                 "#field-environments-staging-instance-type-override"
@@ -187,7 +180,6 @@ def test_inherited_values_visible_and_reset_removes_key(tmp_path: Path) -> None:
             )
             assert "Inherited: db.t4g.micro" in help_text
 
-            # Reset to inherited removes the persisted override key.
             await pilot.click("#reset-environments-staging-instance-type-override")
             await pilot.pause()
             badge = _rendered(field.query_one(".field-badge", Static))
@@ -199,9 +191,7 @@ def test_inherited_values_visible_and_reset_removes_key(tmp_path: Path) -> None:
     _run(scenario())
 
     config = load_config(path)
-    # The override key is gone; the environment inherits the base instance type.
     assert config.environment_overrides["staging"].instance_type_override is None
-    # The unrelated environment tag on staging is preserved.
     assert config.environment_overrides["staging"].tags == {"huit_assetid": "12057"}
 
 
@@ -221,9 +211,6 @@ def test_no_rds_hides_instance_type_override(tmp_path: Path) -> None:
             assert app.query_one("#env-no-rds").display is True
 
     _run(scenario())
-
-
-# -- preview environments ----------------------------------------------------
 
 
 def test_every_preview_field_saves_and_reloads(tmp_path: Path) -> None:
@@ -326,7 +313,6 @@ def test_invalid_base_environment_blocks_save_at_field(tmp_path: Path) -> None:
 
     _run(scenario())
 
-    # Nothing invalid was written.
     assert load_config(path).preview_environments.enabled is False
 
 
@@ -382,9 +368,6 @@ def test_priority_range_ordering_blocks_save(tmp_path: Path) -> None:
     assert load_config(path).preview_environments.enabled is False
 
 
-# -- no-op preservation & confidentiality ------------------------------------
-
-
 def test_noop_save_preserves_document(tmp_path: Path) -> None:
     path = _write(tmp_path, BASE)
 
@@ -399,12 +382,8 @@ def test_noop_save_preserves_document(tmp_path: Path) -> None:
 
     text = path.read_text()
     assert "# Hand-formatted project; comments must survive a no-op save." in text
-    # No spurious [environments.*] or [preview_environments] tables were added.
     assert "[environments" not in text
     assert "[preview_environments]" not in text
-
-
-# -- runtime active-preview data is not editable -----------------------------
 
 
 def test_active_preview_has_no_editable_control() -> None:

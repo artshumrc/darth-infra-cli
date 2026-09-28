@@ -63,7 +63,6 @@ def status(env_name: str, preview_from: str | None) -> None:
 
     console.print(table)
 
-    # RDS status
     if config.rds:
         console.print()
         rds_client = boto3.client("rds", region_name=config.aws_region)

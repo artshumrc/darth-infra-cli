@@ -132,7 +132,6 @@ class BucketDetail(Vertical):
             value = None
         return str(value) if value else "managed"
 
-    # -- service names -----------------------------------------------------
 
     def _service_names(self) -> list[str]:
         names: list[str] = []
@@ -150,7 +149,6 @@ class BucketDetail(Vertical):
                 names.append(name)
         return names
 
-    # -- composition -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static("", id="bucket-detail-error", classes="field-error")
@@ -249,7 +247,6 @@ class BucketDetail(Vertical):
             ),
         ]
 
-    # -- connections nested collection -------------------------------------
 
     def _connections_editor(self) -> NestedCollectionEditor:
         service_names = self._service_names()
@@ -338,7 +335,6 @@ class BucketDetail(Vertical):
         self._apply_conditionals()
         self._show_banner(None)
 
-    # -- field access ------------------------------------------------------
 
     def _fields(self) -> list[EditableField]:
         """Every scalar field this detail owns, excluding nested-connection rows."""
@@ -370,7 +366,6 @@ class BucketDetail(Vertical):
             if inputs:
                 inputs.first().focus()
 
-    # -- conditional presentation ------------------------------------------
 
     def _current_mode(self) -> str:
         field = self._field("mode")
@@ -403,7 +398,6 @@ class BucketDetail(Vertical):
             return
         warning.display = show
 
-    # -- mode change with confirmation -------------------------------------
 
     def _field_has_value(self, name: str) -> bool:
         field = self._field(name)
@@ -503,7 +497,6 @@ class BucketDetail(Vertical):
         field.mark_committed()
         field.refresh_badge()
 
-    # -- advanced panel ----------------------------------------------------
 
     def _advanced_configured_count(self) -> int:
         count = 0
@@ -536,7 +529,6 @@ class BucketDetail(Vertical):
         if self._advanced_should_expand():
             panel.collapsed = False
 
-    # -- validation --------------------------------------------------------
 
     def commit_all(self) -> None:
         for field in self._fields():
@@ -645,7 +637,6 @@ class BucketDetail(Vertical):
             banner.update("")
             banner.display = False
 
-    # -- events ------------------------------------------------------------
 
     def on_editable_field_changed(self, event: EditableField.Changed) -> None:
         event.stop()
@@ -735,7 +726,6 @@ class StorageSection(MasterDetailSection):
         super().__init__(document)
         self._modified: set[int] = set()
 
-    # -- record metadata ---------------------------------------------------
 
     def item_count(self) -> int:
         return self.document.record_count(_COLLECTION)
@@ -759,7 +749,6 @@ class StorageSection(MasterDetailSection):
     def build_detail(self, index: int) -> BucketDetail:
         return BucketDetail(self.document, index)
 
-    # -- add / duplicate / delete ------------------------------------------
 
     def create_record(self) -> int:
         return self.document.add_record(_COLLECTION, {"name": ""})
@@ -807,7 +796,6 @@ class StorageSection(MasterDetailSection):
             return []
         return [ref.description for ref in bucket_removal_references(config, name)]
 
-    # -- modified tracking -------------------------------------------------
 
     def after_save(self) -> None:
         self._modified.clear()

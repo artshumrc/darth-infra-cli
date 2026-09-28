@@ -37,9 +37,7 @@ SECTION_LABELS: dict[Section, str] = {
     Section.REVIEW: "Review",
 }
 
-# Sections with a functional editor. At cutover this is every canonical
-# destination; the set is retained so navigation can still distinguish an
-# available editor from an unavailable one if that distinction ever returns.
+# Kept so navigation can distinguish available from unavailable editors.
 IMPLEMENTED_SECTIONS: frozenset[Section] = frozenset(
     {
         Section.PROJECT,

@@ -79,9 +79,6 @@ def _change_for(changes, path):
     raise AssertionError(f"no semantic change at {path!r}; got {[c.path for c in changes]}")
 
 
-# ---------------------------------------------------------------------------
-# Semantic change classification
-# ---------------------------------------------------------------------------
 
 
 def test_setting_an_omitted_field_reports_added(config_path: Path) -> None:
@@ -179,9 +176,6 @@ desired_count = 2  # two tasks for HA
     assert diff_documents(BASE, reordered) == []
 
 
-# ---------------------------------------------------------------------------
-# Reversion (field / section / whole session)
-# ---------------------------------------------------------------------------
 
 
 def test_revert_field_restores_value_and_attached_comment(config_path: Path) -> None:
@@ -236,9 +230,6 @@ def test_revert_all_restores_the_whole_session_baseline(config_path: Path) -> No
     assert doc.semantic_changes() == []
 
 
-# ---------------------------------------------------------------------------
-# Draft transactions (cascading edits as one reversible unit)
-# ---------------------------------------------------------------------------
 
 
 def test_transaction_groups_edits_and_reverts_them_together(config_path: Path) -> None:
@@ -292,16 +283,12 @@ def test_transaction_preserves_edits_made_before_it(config_path: Path) -> None:
     assert doc.value("services[0].cpu") == 256
 
 
-# ---------------------------------------------------------------------------
-# Three-way merge
-# ---------------------------------------------------------------------------
 
 
 def test_disjoint_disk_and_draft_edits_merge_preserving_both_comments(
     config_path: Path,
 ) -> None:
     doc = ProjectDocument.load(config_path)
-    # Draft edits the web service CPU.
     doc.set("services[0].cpu", 512)
 
     # Someone else edits the region on disk and adds a comment there.
@@ -320,7 +307,6 @@ def test_disjoint_disk_and_draft_edits_merge_preserving_both_comments(
     assert new_revision
 
     reloaded = load_config(config_path)
-    # Both disjoint edits are present.
     assert reloaded.services[0].cpu == 512
     assert reloaded.aws_region == "eu-west-1"
 

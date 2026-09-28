@@ -65,7 +65,6 @@ class ProjectSection(VerticalScroll):
         super().__init__(id="section-content", classes="section-content")
         self._document = document
 
-    # -- composition -------------------------------------------------------
 
     class SaveContinueRequested(Message):
         """Posted when the section's Save & Continue action is pressed."""
@@ -138,12 +137,10 @@ class ProjectSection(VerticalScroll):
         )
 
     def on_mount(self) -> None:
-        # Reflect initial explicit/default state on every badge.
         for field in self._editable_fields():
             field.refresh_badge()
         self._show_section_error(None)
 
-    # -- field access ------------------------------------------------------
 
     def _editable_fields(self) -> list[EditableField]:
         return list(self.query(EditableField))
@@ -152,7 +149,6 @@ class ProjectSection(VerticalScroll):
         panel = self.query_one("#advanced-project", Collapsible)
         return list(panel.query(EditableField))
 
-    # -- advanced panel ----------------------------------------------------
 
     def _advanced_configured_count(self) -> int:
         """Number of configured advanced fields, computed from the document.
@@ -198,7 +194,6 @@ class ProjectSection(VerticalScroll):
         if self._advanced_should_expand():
             panel.collapsed = False
 
-    # -- validation --------------------------------------------------------
 
     def _commit_all(self) -> None:
         for field in self._editable_fields():
@@ -283,7 +278,6 @@ class ProjectSection(VerticalScroll):
         self._refresh_advanced()
         return invalid
 
-    # -- event handlers ----------------------------------------------------
 
     def on_editable_field_blurred(self, event: EditableField.Blurred) -> None:
         event.stop()

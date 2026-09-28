@@ -41,7 +41,6 @@ def exec_cmd(service: str, env_name: str, shell_cmd: str) -> None:
 
     ecs = boto3.client("ecs", region_name=config.aws_region)
 
-    # Find a running task
     tasks = ecs.list_tasks(
         cluster=cluster,
         serviceName=service_name,

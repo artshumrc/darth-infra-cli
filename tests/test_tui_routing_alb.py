@@ -115,9 +115,6 @@ async def _expand_advanced(app) -> None:
     app.query_one("#advanced-routing", Collapsible).collapsed = False
 
 
-# -- round-tripping ----------------------------------------------------------
-
-
 def test_edits_and_round_trips_domain_target_priority_and_path_rules(
     tmp_path: Path,
 ) -> None:
@@ -135,7 +132,6 @@ def test_edits_and_round_trips_domain_target_priority_and_path_rules(
             ).value = "web"
             await pilot.pause()
 
-            # Override the default rule priority.
             await _expand_advanced(app)
             await pilot.pause()
             app.query_one("#mode-alb-default-listener-priority", Button).press()
@@ -145,7 +141,6 @@ def test_edits_and_round_trips_domain_target_priority_and_path_rules(
             ).value = "100"
             await pilot.pause()
 
-            # Add a complete path rule with its own preferred priority.
             app.query_one("#nestedadd-alb-path-rules", Button).press()
             await pilot.pause()
             app.query_one(
@@ -183,9 +178,6 @@ def test_edits_and_round_trips_domain_target_priority_and_path_rules(
     assert rule.priority == 200
 
 
-# -- Automatic / Override priorities -----------------------------------------
-
-
 def test_automatic_priority_omits_the_toml_key(tmp_path: Path) -> None:
     path = _write(tmp_path, TWO_SERVICES)
 
@@ -199,7 +191,6 @@ def test_automatic_priority_omits_the_toml_key(tmp_path: Path) -> None:
                 "#input-alb-default-target-service", Select
             ).value = "web"
             await pilot.pause()
-            # A path rule left on Automatic priority.
             app.query_one("#nestedadd-alb-path-rules", Button).press()
             await pilot.pause()
             app.query_one(
@@ -318,9 +309,6 @@ def test_cancel_return_to_automatic_keeps_the_value(tmp_path: Path) -> None:
     _run(scenario())
 
 
-# -- no priority allocator ---------------------------------------------------
-
-
 def test_routing_editor_introduces_no_priority_allocator() -> None:
     # Priorities are preferred overrides only; deploy-time allocation stays
     # authoritative. The routing editor must not look up or allocate one.
@@ -356,9 +344,6 @@ def test_no_priority_fetch_button_is_reachable(tmp_path: Path) -> None:
             assert not any("next available" in label for label in labels)
 
     _run(scenario())
-
-
-# -- shared/dedicated no-op save ---------------------------------------------
 
 
 def test_shared_configuration_survives_noop_save_unchanged(tmp_path: Path) -> None:
@@ -405,9 +390,6 @@ def test_dedicated_configuration_survives_noop_save_unchanged(
     )
 
 
-# -- validation: prevent save and focus --------------------------------------
-
-
 def test_missing_domain_prevents_save_and_focuses_domain(tmp_path: Path) -> None:
     path = _write(tmp_path, TWO_SERVICES)
 
@@ -415,7 +397,6 @@ def test_missing_domain_prevents_save_and_focuses_domain(tmp_path: Path) -> None
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 40)) as pilot:
             await _goto_routing(app, pilot)
-            # A target with no domain is invalid.
             app.query_one(
                 "#input-alb-default-target-service", Select
             ).value = "web"
@@ -425,7 +406,6 @@ def test_missing_domain_prevents_save_and_focuses_domain(tmp_path: Path) -> None
 
             assert app.query_one("#error-alb-domain", Static).display is True
             assert app.focused is app.query_one("#input-alb-domain", Input)
-            # Nothing written: the file still has no routing.
             assert load_config(path).alb.domain is None
 
     _run(scenario())
@@ -473,7 +453,6 @@ def test_duplicate_priority_prevents_save(tmp_path: Path) -> None:
 
             await pilot.press("ctrl+s")
             await pilot.pause()
-            # The collision blocks the save: no path rule is written.
             assert load_config(path).alb.path_rules == []
 
     _run(scenario())
@@ -520,7 +499,6 @@ def test_colliding_rule_identities_prevent_save(tmp_path: Path) -> None:
 
             await pilot.press("ctrl+s")
             await pilot.pause()
-            # The normalized-name collision blocks the save.
             assert load_config(path).alb.path_rules == []
 
     _run(scenario())
@@ -535,7 +513,6 @@ def test_path_rule_target_lists_only_eligible_services(tmp_path: Path) -> None:
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 40)) as pilot:
             await _goto_routing(app, pilot)
-            # Default target options exclude the port-less worker.
             select = app.query_one("#input-alb-default-target-service", Select)
             values = [value for _label, value in select._options]  # noqa: SLF001
             assert "web" in values

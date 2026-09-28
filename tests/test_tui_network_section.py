@@ -108,9 +108,6 @@ async def _expand_advanced(app) -> None:
     app.query_one("#advanced-network", Collapsible).collapsed = False
 
 
-# -- round-tripping ----------------------------------------------------------
-
-
 def test_shared_project_round_trips_without_mode_conversion(tmp_path: Path) -> None:
     path = _write(tmp_path, SHARED)
 
@@ -173,9 +170,6 @@ def test_dedicated_hides_shared_selector_and_shows_certificate(
     _run(scenario())
 
 
-# -- offline editing ---------------------------------------------------------
-
-
 def test_offline_adapter_still_saves(tmp_path: Path) -> None:
     path = _write(tmp_path, SHARED)
 
@@ -194,9 +188,6 @@ def test_offline_adapter_still_saves(tmp_path: Path) -> None:
     _run(scenario())
 
     assert load_config(path).vpc_name == "offline-vpc"
-
-
-# -- discovery states --------------------------------------------------------
 
 
 def test_discovery_shows_loading_then_results(tmp_path: Path) -> None:
@@ -303,9 +294,6 @@ def test_discovery_does_not_replace_a_manual_value(tmp_path: Path) -> None:
     _run(scenario())
 
 
-# -- parent-scoped dependent lookups -----------------------------------------
-
-
 def test_vpc_choice_scopes_subnet_discovery(tmp_path: Path) -> None:
     path = _write(tmp_path, SHARED)
     fake = FakeAwsDiscovery(
@@ -385,9 +373,6 @@ def test_alb_choice_scopes_listener_discovery(tmp_path: Path) -> None:
     _run(scenario())
 
 
-# -- Automatic/Override ------------------------------------------------------
-
-
 def test_explicit_override_loads_in_override_mode(tmp_path: Path) -> None:
     path = _write(tmp_path, DEDICATED)  # has explicit vpc_id
 
@@ -448,9 +433,6 @@ def test_cancel_return_to_automatic_keeps_the_value(tmp_path: Path) -> None:
     _run(scenario())
 
 
-# -- verification ------------------------------------------------------------
-
-
 def test_verification_reports_verified(tmp_path: Path) -> None:
     path = _write(tmp_path, SHARED)
     fake = FakeAwsDiscovery(
@@ -491,7 +473,6 @@ def test_failed_verification_is_visible_and_does_not_block_save(
 
     _run(scenario())
 
-    # The document still saved (it is valid); mode preserved.
     assert load_config(path).alb.mode.value == "shared"
 
 
@@ -508,9 +489,6 @@ def test_verify_status_starts_not_checked(tmp_path: Path) -> None:
     _run(scenario())
 
 
-# -- no listener-priority allocation -----------------------------------------
-
-
 def test_network_section_introduces_no_listener_priority_lookup() -> None:
     # Priorities are owned by Routing and deploy-time resolution; the Network
     # section and its adapter must not look up or allocate a listener priority.
@@ -518,7 +496,6 @@ def test_network_section_introduces_no_listener_priority_lookup() -> None:
     from darth_infra.tui.editor import network as network_module
     from darth_infra.tui.editor.aws_discovery import DiscoveryKind
 
-    # No discovery/verification kind is about listener priorities.
     assert not any("priorit" in kind.value for kind in DiscoveryKind)
 
     for module in (network_module, adapter_module):

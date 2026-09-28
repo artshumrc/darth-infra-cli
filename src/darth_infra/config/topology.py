@@ -150,13 +150,11 @@ def derive_topology(document: Any) -> Topology:
     bucket_set = set(bucket_names)
     secret_set = set(secret_names)
 
-    # CloudFront -> ALB (the distribution sits in front of ALB routing).
     if cloudfront_enabled and has_alb:
         topology.edges.append(
             TopologyEdge("CloudFront", "ALB", "distribution origin")
         )
 
-    # CloudFront -> service connections (a CloudFront URL env var per service).
     for index in range(document.record_count("cloudfront.connections")):
         conn = document.raw_record("cloudfront.connections", index)
         service = str(conn.get("service", ""))
@@ -178,7 +176,6 @@ def derive_topology(document: Any) -> Topology:
             )
         )
 
-    # ALB default target and path rules -> services.
     if alb_default:
         default = str(alb_default)
         topology.edges.append(
@@ -216,7 +213,6 @@ def derive_topology(document: Any) -> Topology:
             )
         )
 
-    # RDS -> exposed services.
     if database_name:
         expose_to = document.raw_value("rds.expose_to") or []
         for service in expose_to:
@@ -234,7 +230,6 @@ def derive_topology(document: Any) -> Topology:
                 )
             )
 
-    # Buckets <-> services: bucket connections and service s3_access grants.
     for b_index in range(document.record_count("s3_buckets")):
         bucket = document.raw_record("s3_buckets", b_index)
         bucket_name = str(bucket.get("name", ""))
@@ -262,7 +257,6 @@ def derive_topology(document: Any) -> Topology:
                 )
             )
 
-    # Services -> buckets (s3_access) and secrets (secret bindings).
     for s_index in range(document.record_count("services")):
         service = document.raw_record("services", s_index)
         service_name = str(service.get("name", ""))

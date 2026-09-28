@@ -53,7 +53,6 @@ def test_disjoint_external_edit_merges_and_saves(tmp_path: Path) -> None:
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            # Draft edits the service CPU.
             app._document.set("services[0].cpu", 512)
             # Someone else edits an unrelated field on disk, with a comment.
             path.write_text(
@@ -75,7 +74,6 @@ def test_disjoint_external_edit_merges_and_saves(tmp_path: Path) -> None:
     _run(scenario())
 
     reloaded = load_config(path)
-    # Both edits are present.
     assert reloaded.services[0].cpu == 512
     assert reloaded.project_name == "demo-ext"
     # Neither document's unrelated formatting was lost.

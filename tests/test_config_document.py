@@ -79,17 +79,14 @@ def test_single_edit_preserves_comments_ordering_and_formatting(
     doc.save()
 
     saved = config_path.read_text()
-    # Comments survive verbatim.
     assert "# darth-infra config for the demo project." in saved
     assert "# The main web service" in saved
     assert "# Extra tags for every resource" in saved
-    # Ordering of unrelated keys is untouched.
     assert saved.index('name = "demo"') < saved.index("aws_region")
     assert saved.index('[[services]]') < saved.index("desired_count")
     # Only the edited line differs from the original.
     changes = _changed_lines(original, saved)
     assert changes == ["- desired_count = 2", "+ desired_count = 3"]
-    # And the change round-trips through the canonical loader.
     assert load_config(config_path).services[0].desired_count == 3
 
 
@@ -251,7 +248,6 @@ def test_add_record_appends_minimal_record_and_returns_index(
     # Only the provided key is explicit; every other field stays omitted.
     assert doc.is_explicit("services[1].name") is True
     assert doc.is_explicit("services[1].cpu") is False
-    # The new record round-trips through the loader.
     assert [s.name for s in load_config_via_save(doc, config_path)] == ["web", "worker"]
 
 
@@ -279,7 +275,6 @@ def test_raw_record_returns_only_explicit_keys(config_path: Path) -> None:
     assert raw["cpu"] == 256
     # An omitted default is absent from the raw record.
     assert "health_check_timeout_seconds" not in raw
-    # It is a detached copy.
     raw["name"] = "mutated"
     assert doc.value("services[0].name") == "web"
 

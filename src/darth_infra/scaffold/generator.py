@@ -48,7 +48,6 @@ def generate_project(
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Prose (README) is not part of the troposphere migration and stays Jinja.
     jinja_env = Environment(
         loader=FileSystemLoader(str(TEMPLATES_DIR)),
         keep_trailing_newline=True,
@@ -66,7 +65,6 @@ def generate_project(
     if write_config:
         toml_path.write_text(dump_config(config))
 
-    # Copy the JSON schema for editor support
     schema_src = Path(__file__).resolve().parent.parent / "darth-infra.schema.json"
     if schema_src.exists():
         schema_dest = output_dir / "darth-infra.schema.json"
@@ -80,7 +78,7 @@ def generate_project(
     services_dir.mkdir(parents=True, exist_ok=True)
     custom_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build → serialize → write. Output paths are the frozen public contract.
+    # Output paths are the frozen public contract.
     templates = build_project_templates(config)
     for relative_path, template in templates.items():
         output_path = output_dir / relative_path
@@ -92,7 +90,6 @@ def generate_project(
     if not custom_overrides.exists():
         custom_overrides.write_text(_render_overrides_placeholder(config))
 
-    # Copy user data scripts for EC2 services
     for svc in config.services:
         if svc.user_data_script:
             src_script = (Path.cwd() / svc.user_data_script).resolve()

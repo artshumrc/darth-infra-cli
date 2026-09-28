@@ -127,9 +127,6 @@ def _make_app(path: Path, discovery=None) -> ConfigEditorApp:
     return ConfigEditorApp(**kwargs)
 
 
-# -- master-detail add / search / edit / duplicate / delete ------------------
-
-
 def test_add_edit_and_save_generate_secret(tmp_path: Path) -> None:
     path = _write(tmp_path, ONE_SERVICE)
 
@@ -182,9 +179,6 @@ def test_search_filters_the_secret_list(tmp_path: Path) -> None:
     _run(scenario())
 
 
-# -- full field coverage -----------------------------------------------------
-
-
 def test_generate_secret_length_and_binding_save_and_reload(tmp_path: Path) -> None:
     path = _write(tmp_path, ONE_SERVICE)
 
@@ -199,10 +193,8 @@ def test_generate_secret_length_and_binding_save_and_reload(tmp_path: Path) -> N
             # length + generate_once live in the Advanced panel.
             app.query_one("#input-secrets-0-length", Input).value = "64"
             await pilot.pause()
-            # generate_once checkbox is present and defaults to true.
             assert app.query_one("#input-secrets-0-generate-once").value is True
 
-            # Bind the secret to the "web" service via the reverse selector.
             app.query_one("#input-secrets-0-bindings", SelectionList).select("0")
             await pilot.pause()
 
@@ -217,7 +209,6 @@ def test_generate_secret_length_and_binding_save_and_reload(tmp_path: Path) -> N
     assert secret.source is SecretSource.GENERATE
     assert secret.length == 64
     assert secret.generate_once is True
-    # The reverse binding landed on the service's own secrets list.
     assert config.services[0].secrets == ["DJANGO_SECRET_KEY"]
 
 
@@ -234,7 +225,6 @@ def test_existing_source_name_and_binding_save_and_reload(tmp_path: Path) -> Non
             app.query_one("#input-secrets-0-name", Input).value = "API_KEY"
             app.query_one("#input-secrets-0-source", Select).value = "existing"
             await pilot.pause()
-            # The existing-secret field is now visible.
             assert app.query_one("#field-secrets-0-existing-secret-name").display is True
             app.query_one(
                 "#input-secrets-0-existing-secret-name", Input
@@ -302,7 +292,6 @@ def test_env_source_hides_value_shows_note_and_persists_no_name(tmp_path: Path) 
             app.query_one("#input-secrets-0-name", Input).value = "SENTRY_DSN"
             app.query_one("#input-secrets-0-source", Select).value = "env"
             await pilot.pause()
-            # No value is collected; an explanatory note is shown instead.
             assert (
                 app.query_one("#field-secrets-0-existing-secret-name").display is False
             )
@@ -358,9 +347,6 @@ def test_all_four_sources_can_be_added(tmp_path: Path) -> None:
     ]
 
 
-# -- no-op save preserves the existing declaration ---------------------------
-
-
 def test_noop_save_preserves_existing_secret(tmp_path: Path) -> None:
     path = _write(tmp_path, EXISTING_SECRET)
 
@@ -381,9 +367,6 @@ def test_noop_save_preserves_existing_secret(tmp_path: Path) -> None:
     assert "must survive a no-op save" in text
 
 
-# -- duplicate ---------------------------------------------------------------
-
-
 def test_duplicate_copies_source_but_requires_unique_name(tmp_path: Path) -> None:
     path = _write(tmp_path, EXISTING_SECRET)
 
@@ -396,7 +379,6 @@ def test_duplicate_copies_source_but_requires_unique_name(tmp_path: Path) -> Non
             await pilot.pause()
             section = app._section_widget
             assert section.item_count() == 2
-            # The copy carries the source metadata but starts unnamed.
             assert app.query_one("#input-secrets-1-name", Input).value == ""
             assert (
                 app.query_one(
@@ -405,7 +387,6 @@ def test_duplicate_copies_source_but_requires_unique_name(tmp_path: Path) -> Non
                 == "prod/api-key"
             )
 
-            # Invalid (unnamed) duplicate blocks the save.
             await pilot.press("ctrl+s")
             await pilot.pause()
             assert len(load_config(path).secrets) == 1
@@ -421,9 +402,6 @@ def test_duplicate_copies_source_but_requires_unique_name(tmp_path: Path) -> Non
     assert [s.name for s in secrets] == ["API_KEY", "API_KEY_2"]
     assert secrets[1].source is SecretSource.EXISTING
     assert secrets[1].existing_secret_name == "prod/api-key"
-
-
-# -- source change with confirmation -----------------------------------------
 
 
 def test_source_change_cancel_preserves_incompatible_value(tmp_path: Path) -> None:
@@ -482,9 +460,6 @@ def test_source_change_confirm_clears_incompatible_value(tmp_path: Path) -> None
     assert secret.existing_secret_name is None
 
 
-# -- deletion impact + cascade + revert --------------------------------------
-
-
 def test_secret_delete_lists_binding_impact_and_cleans_up(tmp_path: Path) -> None:
     path = _write(tmp_path, BOUND_SECRET)
 
@@ -494,7 +469,6 @@ def test_secret_delete_lists_binding_impact_and_cleans_up(tmp_path: Path) -> Non
             await _goto_secrets(app, pilot)
             await pilot.click("#md-delete")
             await pilot.pause()
-            # The complete impact lists every service binding to the secret.
             assert isinstance(app.screen, ImpactConfirmScreen)
             items = " ".join(_rendered(s) for s in app.screen.query(".impact-item"))
             assert "service 'web'" in items
@@ -512,7 +486,6 @@ def test_secret_delete_lists_binding_impact_and_cleans_up(tmp_path: Path) -> Non
 
     config = load_config(path)
     assert config.secrets == []
-    # Every binding that named the secret is cleaned up too.
     assert config.services[0].secrets == []
     assert config.services[1].secrets == []
 
@@ -531,7 +504,6 @@ def test_secret_delete_is_reversible_before_save(tmp_path: Path) -> None:
             await pilot.pause()
             assert app._document.config.secrets == []
 
-            # Reverting restores the secret and both cleaned bindings.
             app._document.revert_all()
             config = app._document.config
             assert [s.name for s in config.secrets] == ["API_KEY"]
@@ -539,9 +511,6 @@ def test_secret_delete_is_reversible_before_save(tmp_path: Path) -> None:
             assert config.services[1].secrets == ["API_KEY"]
 
     _run(scenario())
-
-
-# -- AWS discovery states + offline manual entry -----------------------------
 
 
 def test_existing_secret_discovery_results_fill_field(tmp_path: Path) -> None:
@@ -576,7 +545,6 @@ def test_existing_secret_discovery_results_fill_field(tmp_path: Path) -> None:
             status = app.query_one("#discstatus-secrets-0-existing-secret-name", Static)
             assert "found" in _rendered(status).lower()
 
-            # Selecting a discovered record fills the field.
             app.query_one(
                 "#select-secrets-0-existing-secret-name", Select
             ).value = "prod/api-key"
@@ -587,7 +555,6 @@ def test_existing_secret_discovery_results_fill_field(tmp_path: Path) -> None:
                 ).value
                 == "prod/api-key"
             )
-            # A SECRET discovery request was issued.
             assert any(r.kind is DiscoveryKind.SECRET for r in fake.requests)
 
     _run(scenario())

@@ -83,13 +83,11 @@ class NetworkSection(VerticalScroll):
         self._selected_vpc_id: str | None = None
         self._selected_alb_arn: str | None = None
 
-    # -- composition -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static("Network", classes="section-title")
         yield Static("", id="section-error", classes="field-error")
 
-        # -- VPC (lookup + override) --------------------------------------
         yield AwsReferenceField(
             field_path="project.vpc_name",
             document=self.document,
@@ -104,7 +102,6 @@ class NetworkSection(VerticalScroll):
             context_provider=self.discovery_context,
         )
 
-        # -- ALB identity: mode + shared selector -------------------------
         yield SelectField(
             field_path="alb.mode",
             document=self.document,
@@ -128,7 +125,6 @@ class NetworkSection(VerticalScroll):
             context_provider=self.discovery_context,
         )
 
-        # -- Advanced overrides -------------------------------------------
         yield Collapsible(
             *self._advanced_widgets(),
             title=self._advanced_title(),
@@ -222,7 +218,6 @@ class NetworkSection(VerticalScroll):
         self._apply_mode_visibility()
         self._show_section_error(None)
 
-    # -- field access ------------------------------------------------------
 
     def _editable_fields(self) -> list[EditableField]:
         return list(self.query(EditableField))
@@ -236,7 +231,6 @@ class NetworkSection(VerticalScroll):
         except Exception:
             return None
 
-    # -- discovery context -------------------------------------------------
 
     def discovery_context(self, kind: DiscoveryKind | None) -> dict[str, Any]:
         """Return the parent identifiers a dependent lookup needs.
@@ -279,7 +273,6 @@ class NetworkSection(VerticalScroll):
         elif path == "alb.shared_alb_name":
             self._selected_alb_arn = context.get("arn") or None
 
-    # -- conditional presentation -----------------------------------------
 
     def _mode(self) -> str:
         field = self._field("alb.mode")
@@ -297,7 +290,6 @@ class NetworkSection(VerticalScroll):
             if field is not None:
                 field.display = not shared
 
-    # -- advanced panel ----------------------------------------------------
 
     def _advanced_configured_count(self) -> int:
         count = 0
@@ -338,7 +330,6 @@ class NetworkSection(VerticalScroll):
         if self._advanced_should_expand():
             panel.collapsed = False
 
-    # -- validation --------------------------------------------------------
 
     def _commit_visible(self) -> None:
         # Only commit fields relevant to the current mode so switching modes
@@ -411,7 +402,6 @@ class NetworkSection(VerticalScroll):
             banner.update("")
             banner.display = False
 
-    # -- events ------------------------------------------------------------
 
     def on_editable_field_changed(self, event: EditableField.Changed) -> None:
         event.stop()

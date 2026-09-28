@@ -133,8 +133,6 @@ def _capture_notices(app) -> list[str]:
     return notices
 
 
-# -- enable + edit every base field ------------------------------------------
-
 
 def test_enable_shows_fields_and_edits_every_base_field(tmp_path: Path) -> None:
     path = _write(tmp_path, NO_RDS)
@@ -200,8 +198,6 @@ def test_instance_type_normalization_is_model_behavior(tmp_path: Path) -> None:
     assert load_config(path).rds.instance_type == "db.t4g.micro"
 
 
-# -- document-preserving no-op save ------------------------------------------
-
 
 def test_advanced_autoexpands_when_configured(tmp_path: Path) -> None:
     path = _write(tmp_path, WITH_RDS)
@@ -226,7 +222,6 @@ def test_noop_save_preserves_engine_version_and_retention(tmp_path: Path) -> Non
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 40)) as pilot:
             await _goto_database(app, pilot)
-            # Save without touching anything.
             await _ctrl_s(app, pilot)
 
     _run(scenario())
@@ -239,8 +234,6 @@ def test_noop_save_preserves_engine_version_and_retention(tmp_path: Path) -> Non
     assert "# The application database" in text
     assert "# pinned major version" in text
 
-
-# -- service exposure --------------------------------------------------------
 
 
 def test_exposure_updates_without_duplicate_bindings(tmp_path: Path) -> None:
@@ -281,8 +274,6 @@ def test_expose_selector_empty_state_without_services(tmp_path: Path) -> None:
 
     _run(scenario())
 
-
-# -- removal -----------------------------------------------------------------
 
 
 def test_remove_presents_complete_impact_and_can_cancel(tmp_path: Path) -> None:
@@ -395,8 +386,6 @@ def test_revert_restores_rds_and_cleaned_references(tmp_path: Path) -> None:
 
     _run(scenario())
 
-
-# -- secret-value confidentiality --------------------------------------------
 
 
 def test_env_vars_shown_by_name_only_no_values(tmp_path: Path) -> None:

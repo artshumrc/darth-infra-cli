@@ -30,7 +30,6 @@ CONTROL_ROOM_THEME = Theme(
     success="#4ade80",
     warning="#fbbf24",
     error="#f87171",
-    # Deep slate surfaces.
     foreground="#e2e8f0",
     background="#0f172a",
     surface="#1e293b",

@@ -243,14 +243,10 @@ def uncovered_editable_paths(
     return set(enumerate_schema_paths(schema).editable) - set(covered)
 
 
-# ---------------------------------------------------------------------------
-# The registry.
-#
 # One entry per editable leaf or editable map/list container in the persisted
 # schema. Kept grouped by section for readability. cli_version_floor is
 # deliberately absent: it is CLI-maintained metadata marked read-only in the
 # schema and displayed for inspection only.
-# ---------------------------------------------------------------------------
 
 _S = Section
 _P = Placement
@@ -258,7 +254,6 @@ _C = Control
 
 
 FIELD_REGISTRY: tuple[FieldEntry, ...] = (
-    # -- Project -----------------------------------------------------------
     FieldEntry(
         "project.name", _S.PROJECT, _P.COMMON, _C.TEXT,
         "Short project name used as a prefix for all AWS resources.",
@@ -274,7 +269,6 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "Extra tags applied to all AWS resources.",
         example="team = platform",
     ),
-    # -- Network -----------------------------------------------------------
     FieldEntry(
         "project.vpc_name", _S.NETWORK, _P.COMMON, _C.TEXT,
         "Name tag of the existing VPC to deploy into.",
@@ -295,7 +289,6 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "Explicit public subnet IDs for a dedicated ALB; discovered when empty.",
         example="subnet-0ccc, subnet-0ddd",
     ),
-    # -- Services ----------------------------------------------------------
     FieldEntry(
         "service_discovery.namespace_template", _S.SERVICES, _P.ADVANCED, _C.TEXT,
         "Cloud Map private DNS namespace template for inter-service discovery.",
@@ -468,7 +461,6 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "Filesystem to format the volume with.",
         example="ext4",
     ),
-    # -- Routing (ALB + CloudFront) ---------------------------------------
     FieldEntry(
         "alb.mode", _S.ROUTING, _P.COMMON, _C.SELECT,
         "Shared looks up an existing ALB by name; dedicated provisions a new one.",
@@ -610,7 +602,6 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "cloudfront.cached_behaviors[].forward_authorization_header", _S.ROUTING, _P.ADVANCED, _C.BOOLEAN,
         "Forward the Authorization header for this behavior.",
     ),
-    # -- Database (RDS) ----------------------------------------------------
     FieldEntry(
         "rds.database_name", _S.DATABASE, _P.COMMON, _C.TEXT,
         "Name of the initial database.",
@@ -654,7 +645,6 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "rds.initial_snapshot_credentials_secret", _S.DATABASE, _P.ADVANCED, _C.TEXT,
         "Secrets Manager name/ARN with the snapshot source's username and password.",
     ),
-    # -- Storage (S3) ------------------------------------------------------
     FieldEntry(
         "s3_buckets[].name", _S.STORAGE, _P.COMMON, _C.TEXT,
         "Logical bucket name; actual bucket is {project}-{env}-{name}.",
@@ -712,7 +702,6 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "s3_buckets[].connections[].read_only", _S.STORAGE, _P.ADVANCED, _C.BOOLEAN,
         "Grant read-only access instead of read/write.",
     ),
-    # -- Secrets -----------------------------------------------------------
     FieldEntry(
         "secrets[].name", _S.SECRETS, _P.COMMON, _C.TEXT,
         "Environment variable name for the secret.",
@@ -734,7 +723,6 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "secrets[].generate_once", _S.SECRETS, _P.ADVANCED, _C.BOOLEAN,
         "Generated values are created once per environment and reused.",
     ),
-    # -- Environments (env list, per-env overrides, previews) --------------
     FieldEntry(
         "project.environments", _S.ENVIRONMENTS, _P.COMMON, _C.STRING_LIST,
         "Environment names; prod must be included and is placed first.",

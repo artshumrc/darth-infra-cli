@@ -134,7 +134,6 @@ class ServiceDetail(Vertical):
     def _path(self, field: str) -> str:
         return f"{_COLLECTION}[{self.index}].{field}"
 
-    # -- composition -------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         yield Static("", id="service-detail-error", classes="field-error")
@@ -341,7 +340,6 @@ class ServiceDetail(Vertical):
             self._ebs_editor(),
         ]
 
-    # -- nested collections ------------------------------------------------
 
     def _ulimits_editor(self) -> NestedCollectionEditor:
         def build(base: str) -> list[EditableField]:
@@ -457,7 +455,6 @@ class ServiceDetail(Vertical):
         self._apply_conditionals()
         self._show_banner(None)
 
-    # -- field access ------------------------------------------------------
 
     def _fields(self) -> list[EditableField]:
         """Every editable field this detail owns, excluding nested-collection rows.
@@ -493,7 +490,6 @@ class ServiceDetail(Vertical):
             if inputs:
                 inputs.first().focus()
 
-    # -- conditional presentation -----------------------------------------
 
     def _apply_conditionals(self) -> None:
         image_field = self._field("image")
@@ -529,7 +525,6 @@ class ServiceDetail(Vertical):
         except Exception:
             return None
 
-    # -- advanced panel ----------------------------------------------------
 
     def _advanced_configured_count(self) -> int:
         count = 0
@@ -570,7 +565,6 @@ class ServiceDetail(Vertical):
         if self._advanced_should_expand():
             panel.collapsed = False
 
-    # -- validation --------------------------------------------------------
 
     def commit_all(self) -> None:
         for field in self._fields():
@@ -676,7 +670,6 @@ class ServiceDetail(Vertical):
             banner.update("")
             banner.display = False
 
-    # -- events ------------------------------------------------------------
 
     def on_editable_field_changed(self, event: EditableField.Changed) -> None:
         event.stop()
@@ -748,7 +741,6 @@ class ServicesSection(MasterDetailSection):
         super().__init__(document)
         self._modified: set[int] = set()
 
-    # -- composition (adds the section-owned global namespace field) --------
 
     def compose(self) -> ComposeResult:
         yield from super().compose()
@@ -783,7 +775,6 @@ class ServicesSection(MasterDetailSection):
         except Exception:
             return None
 
-    # -- record metadata ---------------------------------------------------
 
     def item_count(self) -> int:
         return self.document.record_count(_COLLECTION)
@@ -807,7 +798,6 @@ class ServicesSection(MasterDetailSection):
     def build_detail(self, index: int) -> ServiceDetail:
         return ServiceDetail(self.document, index)
 
-    # -- add / duplicate / delete ------------------------------------------
 
     def create_record(self) -> int:
         return self.document.add_record(_COLLECTION, {"name": ""})
@@ -855,7 +845,6 @@ class ServicesSection(MasterDetailSection):
             return []
         return [ref.description for ref in external_service_references(config, name)]
 
-    # -- section-level validation / save -----------------------------------
 
     def validate_all(self) -> list:
         invalid = super().validate_all()
@@ -872,7 +861,6 @@ class ServicesSection(MasterDetailSection):
             ns.refresh_badge()
         super().after_save()
 
-    # -- modified tracking -------------------------------------------------
 
     def on_service_detail_draft_changed(
         self, event: ServiceDetail.DraftChanged

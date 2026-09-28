@@ -134,7 +134,6 @@ class EditableField(Vertical):
         # reporting "dirty" before it has a comparable baseline.
         self._loaded_key: Any = object()
 
-    # -- composition -------------------------------------------------------
 
     def compose(self):
         with Horizontal(classes="field-label-row"):
@@ -157,7 +156,6 @@ class EditableField(Vertical):
         # edited one (write the new value).
         self._loaded_key = self._current_key()
 
-    # -- values (subclass responsibility) ----------------------------------
 
     def current_value(self) -> Any:  # pragma: no cover - overridden
         raise NotImplementedError
@@ -209,7 +207,6 @@ class EditableField(Vertical):
         """
         return None
 
-    # -- help / badges -----------------------------------------------------
 
     def _help_text(self) -> str:
         parts = [self.help]
@@ -244,7 +241,6 @@ class EditableField(Vertical):
         badge.set_class(text == BADGE_EXPLICIT, "badge-explicit")
         badge.set_class(text == BADGE_DEFAULT, "badge-default")
 
-    # -- error presentation ------------------------------------------------
 
     def show_error(self, message: str) -> None:
         self.error = message
@@ -260,7 +256,6 @@ class EditableField(Vertical):
         widget.display = False
         self.remove_class("field-invalid")
 
-    # -- event wiring ------------------------------------------------------
 
     def on_descendant_blur(self, _event: events.DescendantBlur) -> None:
         self.touched = True
@@ -844,7 +839,6 @@ class AwsBackedField(EditableField):
         self._automatic = optional and not self._is_explicit_safe()
         self._records_by_value: dict[str, ResourceRecord] = {}
 
-    # -- helpers -----------------------------------------------------------
 
     def _is_explicit_safe(self) -> bool:
         try:
@@ -861,7 +855,6 @@ class AwsBackedField(EditableField):
     def _raw_control_value(self) -> str:  # pragma: no cover - overridden
         return ""
 
-    # -- automatic/override toggle -----------------------------------------
 
     def _apply_mode_visibility(self) -> None:
         if not self.optional:
@@ -912,7 +905,6 @@ class AwsBackedField(EditableField):
     def _focus_control(self) -> None:  # pragma: no cover - overridden
         return
 
-    # -- badges ------------------------------------------------------------
 
     def _badge_text(self) -> str:
         if self.optional and self._automatic:
@@ -927,7 +919,6 @@ class AwsBackedField(EditableField):
             return
         badge.set_class(self.optional and self._automatic, "badge-automatic")
 
-    # -- discovery ---------------------------------------------------------
 
     def _build_request(self) -> DiscoveryRequest:
         ctx: dict[str, Any] = {}
@@ -1015,7 +1006,6 @@ class AwsBackedField(EditableField):
             return
         self._on_record_selected(str(value))
 
-    # -- verification ------------------------------------------------------
 
     def _verify_target(self) -> str:  # pragma: no cover - overridden
         return ""
@@ -1059,7 +1049,6 @@ class AwsBackedField(EditableField):
         if self._verifiable:
             self._set_verify_status(VerificationStatus.NOT_CHECKED, VERIFY_NOT_CHECKED)
 
-    # -- shared composition fragments --------------------------------------
 
     def _compose_mode_toggle(self):
         if self.optional:

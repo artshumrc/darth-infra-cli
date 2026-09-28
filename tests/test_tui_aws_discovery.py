@@ -22,9 +22,6 @@ from darth_infra.tui.editor.aws_discovery import (
 )
 
 
-# -- result state distinctions ----------------------------------------------
-
-
 def test_discovery_result_distinguishes_success_empty_and_failure() -> None:
     success = DiscoveryResult.of([ResourceRecord("v", "V")])
     empty = DiscoveryResult.of([])
@@ -34,9 +31,6 @@ def test_discovery_result_distinguishes_success_empty_and_failure() -> None:
     assert empty.ok and empty.empty
     assert not failure.ok and failure.failure is not None
     assert failure.failure.message == "boom"
-
-
-# -- fake adapter ------------------------------------------------------------
 
 
 def test_fake_returns_configured_results_per_kind_and_records_requests() -> None:
@@ -84,9 +78,6 @@ def test_fake_satisfies_adapter_protocol() -> None:
     assert isinstance(BotoAwsDiscovery("us-east-1"), AwsDiscovery)
 
 
-# -- offline adapter ---------------------------------------------------------
-
-
 def test_offline_adapter_fails_every_lookup_without_raising() -> None:
     offline = OfflineAwsDiscovery()
     result = offline.discover(DiscoveryRequest(DiscoveryKind.VPC_NAME))
@@ -95,9 +86,6 @@ def test_offline_adapter_fails_every_lookup_without_raising() -> None:
 
     outcome = offline.verify(DiscoveryRequest(DiscoveryKind.VPC_NAME), "x")
     assert outcome.status is VerificationStatus.FAILED
-
-
-# -- boto adapter mapping (fake boto clients) --------------------------------
 
 
 class _FakeEc2:

@@ -46,8 +46,6 @@ def _config(**kwargs) -> ProjectConfig:
     return ProjectConfig(**defaults)
 
 
-# -- service overrides -------------------------------------------------------
-
 
 def test_service_override_replaces_scalars_and_merges_env_vars() -> None:
     config = _config(
@@ -140,8 +138,6 @@ def test_service_override_reaches_the_rendered_task_definition() -> None:
     assert task["Memory"] == "1024"
     assert env["SITE_ID"] == "1"
 
-
-# -- ALB overrides -----------------------------------------------------------
 
 
 def test_alb_override_retargets_the_shared_alb_per_environment() -> None:
@@ -239,8 +235,6 @@ def test_alb_override_can_set_a_per_environment_listener_priority() -> None:
     assert resolve_environment_config(config, "dev").alb.default_listener_priority == 49997
 
 
-# -- existing_secret_name placeholders ---------------------------------------
-
 
 def _secret_config(existing_secret_name: str) -> ProjectConfig:
     return _config(
@@ -288,8 +282,6 @@ def test_unresolvable_placeholder_is_left_for_the_deploy_time_lookup() -> None:
 
     assert resolved.secrets[0].existing_secret_name == "{project}/{region}/DATABASE_URL"
 
-
-# -- entrypoint --------------------------------------------------------------
 
 
 def test_entrypoint_is_emitted_in_exec_form() -> None:
@@ -351,8 +343,6 @@ def test_entrypoint_and_command_coexist() -> None:
     assert container["EntryPoint"] == ["/opt/app/huey.sh"]
     assert container["Command"] == ["sh", "-c", "--workers 2"]
 
-
-# -- round-trip --------------------------------------------------------------
 
 
 def test_every_new_field_survives_load_dump_load(tmp_path: Path) -> None:

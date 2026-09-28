@@ -31,7 +31,6 @@ def destroy(env_name: str, force: bool, preview_from: str | None) -> None:
     config = resolve_environment_config(loaded_config, env_name, preview_from)
 
     if env_name == "prod":
-        # Verify no non-prod envs still exist
         cf = boto3.client("cloudformation", region_name=config.aws_region)
         for other_env in config.environments:
             if other_env == "prod":

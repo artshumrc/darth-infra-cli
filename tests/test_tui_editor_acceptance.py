@@ -139,9 +139,6 @@ async def _activate(app, pilot, widget_id: str) -> None:
     await pilot.pause()
 
 
-# -- completeness -----------------------------------------------------------
-
-
 def test_every_section_is_a_functional_editor() -> None:
     # No canonical destination is a placeholder at cutover.
     assert set(SECTION_ORDER) == IMPLEMENTED_SECTIONS
@@ -190,9 +187,6 @@ def test_all_nine_sections_reachable_at_80x24(tmp_path: Path) -> None:
     _run(scenario())
 
 
-# -- responsive -------------------------------------------------------------
-
-
 def test_minimum_size_message_below_80x24(tmp_path: Path) -> None:
     path = _write(tmp_path, COMPREHENSIVE)
 
@@ -204,9 +198,6 @@ def test_minimum_size_message_below_80x24(tmp_path: Path) -> None:
             assert app.query_one("#editor-main").display is False
 
     _run(scenario())
-
-
-# -- keyboard completeness --------------------------------------------------
 
 
 def test_required_keyboard_commands_work(tmp_path: Path) -> None:
@@ -237,9 +228,6 @@ def test_required_keyboard_commands_work(tmp_path: Path) -> None:
             assert len(app.screen_stack) == depth
 
     _run(scenario())
-
-
-# -- no-op save survival ----------------------------------------------------
 
 
 async def _noop_save(app, pilot) -> None:

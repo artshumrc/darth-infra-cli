@@ -67,9 +67,6 @@ def _run(coro) -> None:
     asyncio.run(coro)
 
 
-# -- pure classification ----------------------------------------------------
-
-
 def test_deployment_sensitive_categories() -> None:
     changes = [
         SemanticChange(
@@ -118,9 +115,6 @@ def test_ordinary_changes_are_not_deployment_sensitive() -> None:
     assert deployment_sensitive_changes(changes) == []
 
 
-# -- Review save confirmation ----------------------------------------------
-
-
 def test_deployment_sensitive_change_requires_one_confirmation(
     tmp_path: Path,
 ) -> None:
@@ -137,21 +131,17 @@ def test_deployment_sensitive_change_requires_one_confirmation(
             await pilot.pause()
             await pilot.pause()
 
-            # Review shows the deployment-sensitive warning inline.
             risks = app.query_one("#review-risks")
             assert risks.display is True
 
-            # Saving opens exactly one confirmation covering the changes.
             await pilot.click("#review-save")
             await pilot.pause()
             assert isinstance(app.screen, RiskConfirmScreen)
 
-            # Cancelling leaves the file unwritten.
             await pilot.click("#risk-cancel")
             await pilot.pause()
             assert load_config(path).aws_region == "us-east-1"
 
-            # Confirming writes the change.
             await pilot.click("#review-save")
             await pilot.pause()
             await pilot.click("#risk-confirm")
@@ -181,7 +171,6 @@ def test_ordinary_change_saves_without_confirmation(tmp_path: Path) -> None:
             await pilot.click("#review-save")
             await pilot.pause()
             await pilot.pause()
-            # No confirmation appeared and the change was written directly.
             assert not isinstance(app.screen, RiskConfirmScreen)
             assert load_config(path).project_name == "demo-renamed"
 
@@ -202,7 +191,6 @@ def test_risk_warning_clears_after_revert(tmp_path: Path) -> None:
             await pilot.pause()
             assert app.query_one("#review-risks").display is True
 
-            # Reverting the draft to the loaded document clears the warning.
             app._document.revert_all()
             review = app._section_widget
             review.refresh_views()
@@ -220,7 +208,6 @@ def test_env_var_values_visible_and_secret_values_absent(tmp_path: Path) -> None
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            # Change an ordinary environment variable value.
             app._document.set(
                 "services[0].environment_variables.LOG_LEVEL", "debug"
             )

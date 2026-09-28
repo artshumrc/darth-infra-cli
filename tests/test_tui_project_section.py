@@ -108,7 +108,7 @@ def test_edit_region_and_environments_through_visible_controls(
             await pilot.pause()
 
             # Region and environment identity are deployment-sensitive, so the
-            # unified save asks for one confirmation before writing (ticket 15).
+            # unified save asks for one confirmation before writing.
             assert isinstance(app.screen, RiskConfirmScreen)
             await pilot.click("#risk-confirm")
             await pilot.pause()
@@ -159,14 +159,12 @@ def test_save_preserves_comments_ordering_and_explicit_default(
     _run(scenario())
 
     saved = path.read_text()
-    # Comments and unrelated ordering survive.
     assert "# darth-infra config for the demo project." in saved
     assert "# The main web service" in saved
     assert "# Extra tags for every resource" in saved
     assert saved.index("aws_region") < saved.index("vpc_name")
     # The service's explicit value equal to its default is still present.
     assert "cpu = 256" in saved
-    # Only the project name line changed.
     diff = [
         line
         for line in _unified(original, saved)
@@ -229,7 +227,6 @@ def test_advanced_panel_collapsed_with_count_when_unconfigured(
             await pilot.pause()
             panel = app.query_one("#advanced-project", Collapsible)
             assert panel.collapsed is True
-            # Configured count is reported on the collapsed heading.
             assert "0 configured" in panel.title
 
     _run(scenario())
@@ -323,7 +320,6 @@ def test_ctrl_s_blocks_save_on_invalid_and_writes_nothing(tmp_path: Path) -> Non
             await pilot.pause()
             await pilot.press("ctrl+s")
             await pilot.pause()
-            # Save was refused; the invalid required field now shows its error.
             assert app.query_one("#error-project-name", Static).display is True
 
     _run(scenario())
@@ -338,11 +334,9 @@ def test_contextual_help_and_f1_expanded_help(tmp_path: Path) -> None:
         app = ConfigEditorApp(document=ProjectDocument.load(path))
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
-            # Contextual help is visible inline for the field.
             help_line = app.query_one("#help-project-name", Static)
             assert "project name" in _rendered(help_line).lower()
 
-            # F1 opens expanded help for the focused field, including its example.
             app.set_focus(app.query_one("#input-project-name", Input))
             await pilot.pause()
             await pilot.press("f1")
@@ -351,7 +345,6 @@ def test_contextual_help_and_f1_expanded_help(tmp_path: Path) -> None:
             body = app.screen.query_one("#field-help-body", Static)
             assert "my-webapp" in _rendered(body)
 
-            # Escape closes the overlay and returns to the editor.
             await pilot.press("escape")
             await pilot.pause()
             assert not isinstance(app.screen, FieldHelpScreen)

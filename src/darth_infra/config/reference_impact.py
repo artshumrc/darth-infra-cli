@@ -228,11 +228,9 @@ def delete_service_with_references(document: "ProjectDocument", name: str) -> No
     """
     config = document.config
 
-    # Scalar reference: clear the ALB default target.
     if getattr(config.alb, "default_target_service", None) == name:
         document.reset("alb.default_target_service")
 
-    # RDS exposure: drop the service from the list (removing the key if empty).
     rds = getattr(config, "rds", None)
     if rds and name in (rds.expose_to or []):
         remaining = [svc for svc in rds.expose_to if svc != name]
@@ -259,7 +257,6 @@ def delete_service_with_references(document: "ProjectDocument", name: str) -> No
             if bucket.connections[c_index].service == name:
                 document.remove_record(f"s3_buckets[{b_index}].connections", c_index)
 
-    # Per-environment EC2 instance overrides keyed by the service name.
     config = document.config
     for env, override in config.environment_overrides.items():
         if name in (override.ec2_instance_type_override or {}):
@@ -360,7 +357,6 @@ def remove_rds_with_references(document: "ProjectDocument") -> None:
     config = document.config
     rds_secret_names = _rds_secret_names(config)
 
-    # Service bindings to RDS-backed secrets (arrays of scalar names).
     if rds_secret_names:
         for svc_index, service in enumerate(config.services):
             remaining = [
@@ -372,7 +368,6 @@ def remove_rds_with_references(document: "ProjectDocument") -> None:
                 else:
                     document.reset(f"services[{svc_index}].secrets")
 
-    # Per-environment RDS instance-type overrides.
     config = document.config
     for env, override in config.environment_overrides.items():
         if override.instance_type_override is not None:
@@ -385,7 +380,6 @@ def remove_rds_with_references(document: "ProjectDocument") -> None:
         if config.secrets[index].name in rds_secret_names:
             document.remove_record("secrets", index)
 
-    # Finally the [rds] table itself.
     document.reset("rds")
 
 
@@ -450,7 +444,6 @@ def remove_bucket_with_references(document: "ProjectDocument", name: str) -> Non
     """
     config = document.config
 
-    # Service s3_access grants naming the bucket (arrays of scalar bucket names).
     for svc_index, service in enumerate(config.services):
         remaining = [b for b in (service.s3_access or []) if b != name]
         if len(remaining) != len(service.s3_access or []):
@@ -515,7 +508,6 @@ def remove_secret_with_references(document: "ProjectDocument", name: str) -> Non
     """
     config = document.config
 
-    # Service secret bindings naming the secret (arrays of scalar secret names).
     for svc_index, service in enumerate(config.services):
         remaining = [s for s in (service.secrets or []) if s != name]
         if len(remaining) != len(service.secrets or []):
@@ -524,7 +516,6 @@ def remove_secret_with_references(document: "ProjectDocument", name: str) -> Non
             else:
                 document.reset(f"services[{svc_index}].secrets")
 
-    # Finally the secret record itself.
     config = document.config
     s_index = _secret_index(config, name)
     if s_index is not None:
