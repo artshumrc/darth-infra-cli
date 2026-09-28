@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.14.0
+
+### Minor Changes
+
+- [`c5f15e2`](https://github.com/artshumrc/darth-infra-cli/commit/c5f15e289422a1b60e74c1986ccc41d370e9ce2a) Thanks [@d-flood](https://github.com/d-flood)! - Back up prod's database to S3 every month with `pg_dump`, keep the files indefinitely, and email `backup_alert_email` when a run fails. Automated backups now default to 35 days, and the monthly backup is on by default, so existing prod stacks gain these resources on their next deploy.
+
 ## 0.13.0
 
 ### Minor Changes
