@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.14.2
+
+### Patch Changes
+
+- [`59b8205`](https://github.com/artshumrc/darth-infra-cli/commit/59b8205e5b6300e9651f5159c1db8cec61a87f23) Thanks [@d-flood](https://github.com/d-flood)! - Give the RDS backup alert topic policy statements unique Sids so SNS accepts the policy.
+
 ## 0.14.1
 
 ### Patch Changes
