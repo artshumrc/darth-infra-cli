@@ -2,6 +2,11 @@
 set -euo pipefail
 
 VERSION=$(node -p "require('./package.json').version")
+if git ls-remote --exit-code --tags origin "v${VERSION}" >/dev/null; then
+  echo "v${VERSION} already published"
+  exit 0
+fi
+
 echo "Publishing version $VERSION"
 
 python -m build
