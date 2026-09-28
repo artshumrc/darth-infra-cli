@@ -122,6 +122,17 @@ def test_backup_root_passes_cfn_lint(tmp_path: Path) -> None:
     assert_template_passes_cfn_lint(root, tmp_path / "root.yaml")
 
 
+def test_alert_topic_policy_statements_have_unique_sids() -> None:
+    root = _root(_config(engine_version="16.4"))
+    statements = root["Resources"]["RdsBackupAlertTopicPolicy"]["Properties"][
+        "PolicyDocument"
+    ]["Statement"]
+    sids = [statement.get("Sid") for statement in statements]
+
+    assert all(sids)
+    assert len(set(sids)) == len(sids)
+
+
 def test_loader_defaults_and_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "darth-infra.toml"
     path.write_text(

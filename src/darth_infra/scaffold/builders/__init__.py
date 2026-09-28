@@ -1497,6 +1497,7 @@ def _add_rds_monthly_backup(
                 "Version": "2012-10-17",
                 "Statement": [
                     {
+                        "Sid": "AllowBackupFailureRule",
                         "Effect": "Allow",
                         "Principal": {"Service": "events.amazonaws.com"},
                         "Action": "sns:Publish",
@@ -1508,6 +1509,7 @@ def _add_rds_monthly_backup(
                         },
                     },
                     {
+                        "Sid": "AllowBackupInvocationAlarm",
                         "Effect": "Allow",
                         "Principal": {"Service": "cloudwatch.amazonaws.com"},
                         "Action": "sns:Publish",
