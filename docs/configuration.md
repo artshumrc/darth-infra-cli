@@ -166,7 +166,7 @@ instance_type = "db.t4g.micro" # a bare "t4g.micro" is normalized to "db.t4g.mic
 allocated_storage_gb = 20      # must be ≥ 20
 expose_to = ["web"]            # services that receive POSTGRES_* env vars
 engine_version = "15"
-backup_retention_days = 35     # automated backups + point-in-time restore, max 35
+backup_retention_days = 35     # automated backups + point-in-time restore, max 35; previews keep none
 monthly_s3_backup = true       # prod only; see Backups below
 backup_alert_email = "artshum-rc@fas.harvard.edu"  # "" disables the failure email
 

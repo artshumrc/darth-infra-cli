@@ -84,7 +84,7 @@ wheels = [
 
 [[package]]
 name = "darth-infra"
-version = "0.13.0"
+version = "0.14.2"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },

@@ -20,9 +20,10 @@ submitted information didn't contain changes"). The backwards-compatibility
 contract for template-generation changes: rendering an unchanged
 `darth-infra.toml` with a new generator version must produce a no-op deploy on
 every existing stack. Textual differences in rendered YAML are permitted;
-resource replacement or modification is not. The one deliberate exception is
-`rds.monthly_s3_backup`: it defaults on, so the first deploy after upgrading adds
-the backup resources to prod.
+resource replacement or modification is not. The deliberate exceptions are
+`rds.monthly_s3_backup`, which defaults on, so the first deploy after upgrading
+adds the backup resources to prod; and RDS hardening, which blocks the RDS
+security group's egress and drops preview databases' automated backups.
 
 **Logical ID** — The CloudFormation resource key (e.g. `EcsCluster`,
 `DedicatedAlb`). Changing a logical ID causes CloudFormation to replace the

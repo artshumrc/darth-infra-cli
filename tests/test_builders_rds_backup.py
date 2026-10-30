@@ -113,7 +113,10 @@ def test_preview_environments_render_no_backup() -> None:
         tags={},
     )
 
-    assert not set(_BACKUP_IDS + _ALERT_IDS) & set(_root(config)["Resources"])
+    resources = _root(config)["Resources"]
+
+    assert not set(_BACKUP_IDS + _ALERT_IDS) & set(resources)
+    assert resources["Database"]["Properties"]["BackupRetentionPeriod"] == 0
 
 
 def test_backup_root_passes_cfn_lint(tmp_path: Path) -> None:
