@@ -2652,6 +2652,14 @@ RDS_ROOT_RESOURCES = {
     "RdsSecurityGroup": {
         "Properties": {
             "GroupDescription": {"Fn::Sub": "${ProjectName}-${EnvironmentName} rds"},
+            "SecurityGroupEgress": [
+                {
+                    "CidrIp": "255.255.255.255/32",
+                    "IpProtocol": "icmp",
+                    "FromPort": 252,
+                    "ToPort": 86,
+                }
+            ],
             "VpcId": {"Ref": "VpcId"},
             "Tags": [
                 {"Key": "Project", "Value": {"Ref": "ProjectName"}},
@@ -2808,6 +2816,9 @@ RDS_ROOT_RESOURCES = {
             "VPCSecurityGroups": [{"Ref": "RdsSecurityGroup"}],
             "DBSubnetGroupName": {"Ref": "RdsSubnetGroup"},
             "PubliclyAccessible": False,
+            "StorageEncrypted": {
+                "Fn::If": ["EncryptRdsStorage", True, {"Ref": "AWS::NoValue"}]
+            },
             "DeletionProtection": {"Fn::If": ["IsProd", True, False]},
             "StorageType": "gp3",
             "Tags": [

@@ -13,6 +13,7 @@ from botocore.exceptions import ClientError
 from darth_infra.cli.cfn import (
     _resolve_rds_snapshot,
     _resolve_rds_source_secret_arn,
+    _resolve_rds_storage_encrypted,
 )
 from darth_infra.config.loader import dump_config, load_config
 from darth_infra.config.models import (
@@ -364,3 +365,36 @@ def test_adoption_keys_survive_a_config_rewrite(tmp_path) -> None:
     assert reloaded.rds is not None
     assert reloaded.rds.initial_snapshot_identifier == _LEGACY_SNAPSHOT
     assert reloaded.rds.initial_snapshot_credentials_secret == "legacy-prod-credentials"
+
+
+def test_new_database_without_snapshot_is_encrypted(monkeypatch) -> None:
+    _patch_clients(monkeypatch)
+
+    assert _resolve_rds_storage_encrypted(_config(), "prod", "") == "true"
+
+
+def test_snapshot_restore_inherits_encryption(monkeypatch) -> None:
+    _patch_clients(monkeypatch)
+
+    assert _resolve_rds_storage_encrypted(_config(), "prod", _LEGACY_SNAPSHOT) == ""
+
+
+def test_live_database_never_acquires_storage_encryption(monkeypatch) -> None:
+    """StorageEncrypted is create-only; setting it on a live database replaces it."""
+    _patch_clients(
+        monkeypatch,
+        cloudformation=_FakeCloudFormation({"RdsSnapshotIdentifier": ""}),
+    )
+
+    assert _resolve_rds_storage_encrypted(_config(), "prod", "") == ""
+
+
+def test_deployed_storage_encryption_is_sticky(monkeypatch) -> None:
+    _patch_clients(
+        monkeypatch,
+        cloudformation=_FakeCloudFormation(
+            {"RdsSnapshotIdentifier": "", "RdsStorageEncrypted": "true"}
+        ),
+    )
+
+    assert _resolve_rds_storage_encrypted(_config(), "prod", "") == "true"

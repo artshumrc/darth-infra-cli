@@ -1590,6 +1590,9 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
             Parameter("RdsSourceSecretArn", Type="String", Default="")
         )
         root.add_parameter(
+            Parameter("RdsStorageEncrypted", Type="String", Default="")
+        )
+        root.add_parameter(
             Parameter(
                 "RdsInstanceType",
                 Type="String",
@@ -1741,6 +1744,9 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
             "HasRdsSnapshot",
             Not(Equals(Ref("RdsSnapshotIdentifier"), "")),
         )
+        root.add_condition(
+            "EncryptRdsStorage", Equals(Ref("RdsStorageEncrypted"), "true")
+        )
     if context.has_service_discovery:
         root.add_condition(
             "HasExistingCloudMapNamespace",
@@ -1830,6 +1836,16 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
             ec2.SecurityGroup(
                 "RdsSecurityGroup",
                 GroupDescription=Sub("${ProjectName}-${EnvironmentName} rds"),
+                # Listing any egress rule drops AWS's default allow-all; this
+                # one matches no traffic.
+                SecurityGroupEgress=[
+                    ec2.SecurityGroupRule(
+                        CidrIp="255.255.255.255/32",
+                        IpProtocol="icmp",
+                        FromPort=252,
+                        ToPort=86,
+                    )
+                ],
                 VpcId=Ref("VpcId"),
                 Tags=_resource_tags(context),
             )
@@ -1883,7 +1899,9 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
                     ),
                 ),
                 AllocatedStorage=str(context.rds.allocated_storage_gb),
-                BackupRetentionPeriod=context.rds.backup_retention_days,
+                BackupRetentionPeriod=(
+                    0 if context.is_preview else context.rds.backup_retention_days
+                ),
                 CopyTagsToSnapshot=True,
                 DBName=If(
                     "HasRdsSnapshot",
@@ -1898,6 +1916,9 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
                 VPCSecurityGroups=[Ref(rds_security_group)],
                 DBSubnetGroupName=Ref(rds_subnet_group),
                 PubliclyAccessible=False,
+                StorageEncrypted=If(
+                    "EncryptRdsStorage", True, Ref("AWS::NoValue")
+                ),
                 DeletionProtection=If("IsProd", True, False),
                 StorageType="gp3",
                 Tags=_resource_tags(context),

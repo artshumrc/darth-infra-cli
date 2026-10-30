@@ -72,6 +72,7 @@ class ResolvedLookupData:
     rds_source_secret_arn: str
     external_secret_arns: dict[str, str]
     existing_service_discovery_namespace_id: str
+    rds_storage_encrypted: str = ""
 
 
 @dataclass
@@ -98,6 +99,7 @@ def resolve_lookup_data(config: ProjectConfig, env_name: str) -> ResolvedLookupD
     )
     snapshot = _resolve_rds_snapshot(config, env_name)
     rds_source_secret_arn = _resolve_rds_source_secret_arn(config, env_name, snapshot)
+    rds_storage_encrypted = _resolve_rds_storage_encrypted(config, env_name, snapshot)
     external_secrets = _resolve_external_secrets(config)
     namespace_id = _resolve_existing_service_discovery_namespace(
         config, env_name, sd, route53, vpc_id
@@ -119,6 +121,7 @@ def resolve_lookup_data(config: ProjectConfig, env_name: str) -> ResolvedLookupD
         rds_source_secret_arn=rds_source_secret_arn,
         external_secret_arns=external_secrets,
         existing_service_discovery_namespace_id=namespace_id,
+        rds_storage_encrypted=rds_storage_encrypted,
     )
 
     _validate_resolved_lookup_data(config, resolved, ec2, elbv2)
@@ -2893,6 +2896,21 @@ def _resolve_rds_snapshot(config: ProjectConfig, env_name: str) -> str:
     return _resolve_latest_prod_snapshot(config, env_name)
 
 
+def _resolve_rds_storage_encrypted(
+    config: ProjectConfig, env_name: str, rds_snapshot_identifier: str
+) -> str:
+    if not config.rds:
+        return ""
+
+    # StorageEncrypted is create-only, so setting it on a live database makes
+    # CloudFormation replace it; only a database's first deploy may set it. A
+    # snapshot restore inherits the snapshot's encryption instead.
+    parameters = _deployed_stack_parameters(config, env_name)
+    if parameters is not None and "RdsSnapshotIdentifier" in parameters:
+        return parameters.get("RdsStorageEncrypted", "")
+    return "" if rds_snapshot_identifier else "true"
+
+
 def _verified_snapshot(config: ProjectConfig, snapshot_id: str) -> str:
     """Return the snapshot id, failing the deploy if it does not exist."""
     rds = boto3.client("rds", region_name=config.aws_region)
@@ -3492,6 +3510,10 @@ def _build_parameters(
                 {
                     "ParameterKey": "RdsSourceSecretArn",
                     "ParameterValue": lookups.rds_source_secret_arn,
+                },
+                {
+                    "ParameterKey": "RdsStorageEncrypted",
+                    "ParameterValue": lookups.rds_storage_encrypted,
                 },
                 {"ParameterKey": "RdsInstanceType", "ParameterValue": rds_type},
             ]
