@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.14.3
+
+### Patch Changes
+
+- [#40](https://github.com/artshumrc/darth-infra-cli/pull/40) [`6a89618`](https://github.com/artshumrc/darth-infra-cli/commit/6a896185bd16f6c6217c6cd4c27fde4b2bfdb871) Thanks [@d-flood](https://github.com/d-flood)! - Block RDS security group egress, encrypt newly created databases, and keep no automated backups for preview databases.
+
 ## 0.14.2
 
 ### Patch Changes
