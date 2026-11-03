@@ -1,5 +1,11 @@
 # darth-infra
 
+## 0.15.0
+
+### Minor Changes
+
+- [`2c78339`](https://github.com/artshumrc/darth-infra-cli/commit/2c78339fc97eac4bc3d017fb60190c65cfea5b71) Thanks [@d-flood](https://github.com/d-flood)! - Previews run on Fargate Spot without Container Insights, accept their own sizing under `[preview_environments]`, and `prune-previews` destroys idle ones.
+
 ## 0.14.3
 
 ### Patch Changes
