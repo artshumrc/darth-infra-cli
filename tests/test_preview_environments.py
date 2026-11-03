@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from botocore.exceptions import ClientError
 
 from darth_infra.cli.cfn import (
     ResolvedLookupData,
     _build_parameters,
     _resolve_listener_priorities,
     _resolve_rds_snapshot,
+    idle_previews,
 )
 from darth_infra.cli.helpers import resolve_environment_config
 from darth_infra.config.document import ProjectDocument
@@ -19,6 +22,7 @@ from darth_infra.config.models import (
     AlbMode,
     AlbPathRule,
     EnvironmentOverride,
+    EnvironmentServiceOverride,
     PreviewEnvironmentsConfig,
     ProjectConfig,
     RdsConfig,
@@ -797,3 +801,187 @@ def test_existing_preview_reuses_original_rds_snapshot(monkeypatch) -> None:
     monkeypatch.setattr("darth_infra.cli.cfn.boto3.client", fake_client)
 
     assert _resolve_rds_snapshot(config, "pr-123") == "rds:demo-prod-db-2026-05-22"
+
+
+def _config_with_preview_sizing() -> ProjectConfig:
+    config = _config_with_rds()
+    config.services[0].cpu = 1024
+    config.services[0].memory_mib = 2048
+    config.environment_overrides["prod"] = EnvironmentOverride(
+        instance_type_override="db.t4g.medium",
+        services={
+            "web": EnvironmentServiceOverride(
+                desired_count=3, environment_variables={"TIER": "prod"}
+            )
+        },
+    )
+    config.preview_environments.instance_type_override = "t4g.micro"
+    config.preview_environments.services = {
+        "web": EnvironmentServiceOverride(
+            cpu=256, memory_mib=512, desired_count=1
+        )
+    }
+    config.__post_init__()
+    return config
+
+
+def test_preview_sizing_applies_over_the_base_environment() -> None:
+    resolved = resolve_environment_config(
+        _config_with_preview_sizing(), "pr-7", "prod"
+    )
+    web = resolved.services[0]
+
+    assert (web.cpu, web.memory_mib, web.desired_count) == (256, 512, 1)
+    assert web.environment_variables["TIER"] == "prod"
+    params = {
+        item["ParameterKey"]: item["ParameterValue"]
+        for item in _build_parameters(resolved, "pr-7", _lookups())
+    }
+    assert params["RdsInstanceType"] == "db.t4g.micro"
+
+
+def test_named_environment_ignores_preview_sizing() -> None:
+    resolved = resolve_environment_config(_config_with_preview_sizing(), "prod")
+    web = resolved.services[0]
+
+    assert (web.cpu, web.memory_mib, web.desired_count) == (1024, 2048, 3)
+    assert resolved.get_rds_instance_type("prod") == "db.t4g.medium"
+
+
+def test_preview_sizing_roundtrips_through_the_loader(tmp_path: Path) -> None:
+    config_path = tmp_path / "darth-infra.toml"
+    config_path.write_text(dump_config(_config_with_preview_sizing()))
+
+    preview = load_config(config_path).preview_environments
+
+    assert preview.instance_type_override == "db.t4g.micro"
+    assert preview.services == {
+        "web": EnvironmentServiceOverride(cpu=256, memory_mib=512, desired_count=1)
+    }
+
+
+def test_preview_sizing_rejects_unknown_service() -> None:
+    config = _config()
+    config.preview_environments.services = {"api": EnvironmentServiceOverride(cpu=256)}
+
+    with pytest.raises(ValueError, match="preview_environments.services"):
+        config.__post_init__()
+
+
+def _web_and_worker(*, preview: bool) -> tuple[dict, dict, dict]:
+    config = _config()
+    config.services.append(
+        ServiceConfig(name="worker", launch_type="ec2", ec2_instance_type="t3.small")
+    )
+    resolved = (
+        resolve_environment_config(config, "pr-1", "prod")
+        if preview
+        else resolve_environment_config(config, "prod")
+    )
+    templates = build_project_templates(resolved)
+    return (
+        template_to_dict(templates["templates/generated/root.yaml"]),
+        template_to_dict(templates["templates/generated/services/web.yaml"]),
+        template_to_dict(templates["templates/generated/services/worker.yaml"]),
+    )
+
+
+def test_preview_runs_fargate_on_spot_without_container_insights() -> None:
+    root, web, worker = _web_and_worker(preview=True)
+    cluster = root["Resources"]["EcsCluster"]["Properties"]
+    web_service = web["Resources"]["EcsService"]["Properties"]
+
+    assert cluster["ClusterSettings"] == [
+        {"Name": "containerInsights", "Value": "disabled"}
+    ]
+    assert cluster["CapacityProviders"] == ["FARGATE", "FARGATE_SPOT"]
+    assert web_service["CapacityProviderStrategy"] == [
+        {"CapacityProvider": "FARGATE_SPOT", "Weight": 1}
+    ]
+    assert "LaunchType" not in web_service
+    assert worker["Resources"]["EcsService"]["Properties"]["LaunchType"] == "EC2"
+
+
+def test_named_environment_keeps_on_demand_fargate_and_container_insights() -> None:
+    root, web, _ = _web_and_worker(preview=False)
+    cluster = root["Resources"]["EcsCluster"]["Properties"]
+    web_service = web["Resources"]["EcsService"]["Properties"]
+
+    assert cluster["ClusterSettings"] == [
+        {"Name": "containerInsights", "Value": "enabled"}
+    ]
+    assert "CapacityProviders" not in cluster
+    assert web_service["LaunchType"] == "FARGATE"
+    assert "CapacityProviderStrategy" not in web_service
+
+
+def test_idle_previews_counts_image_pushes_as_activity(monkeypatch) -> None:
+    config = _config()
+    config.services.append(ServiceConfig(name="search", image="opensearch:2"))
+    old = datetime(2026, 1, 1, tzinfo=UTC)
+    recent = datetime(2026, 6, 1, tzinfo=UTC)
+
+    def stack(env: str, created: datetime, **extra: object) -> dict[str, object]:
+        return {
+            "StackName": f"demo-ecs-{env}",
+            "StackStatus": "UPDATE_COMPLETE",
+            "CreationTime": created,
+            "Tags": [
+                {"Key": "darth-project", "Value": extra.pop("project", "demo")},
+                {"Key": "darth-environment", "Value": env},
+            ],
+            **extra,
+        }
+
+    stacks = [
+        stack("pr-1", old),
+        stack("pr-2", old),
+        stack("pr-3", old, LastUpdatedTime=recent),
+        stack("pr-4", old, ParentId="arn:root"),
+        stack("pr-5", old, project="other"),
+        stack("pr-6", old, StackStatus="DELETE_IN_PROGRESS"),
+        stack("prod", old),
+        stack("feature-x", old),
+    ]
+    pushes = {"demo/pr-1/web": [old], "demo/pr-2/web": [old, recent]}
+
+    class FakePaginator:
+        def __init__(self, pages: list[dict]) -> None:
+            self.pages = pages
+
+        def paginate(self, **_: object) -> list[dict]:
+            return self.pages
+
+    class FakeCloudFormation:
+        def get_paginator(self, name: str) -> FakePaginator:
+            assert name == "describe_stacks"
+            return FakePaginator([{"Stacks": stacks}])
+
+    class FakeEcr:
+        def get_paginator(self, name: str) -> object:
+            assert name == "describe_images"
+
+            class Images:
+                def paginate(self, *, repositoryName: str) -> list[dict]:
+                    if repositoryName not in pushes:
+                        raise ClientError(
+                            {"Error": {"Code": "RepositoryNotFoundException"}},
+                            "DescribeImages",
+                        )
+                    return [
+                        {
+                            "imageDetails": [
+                                {"imagePushedAt": at}
+                                for at in pushes[repositoryName]
+                            ]
+                        }
+                    ]
+
+            return Images()
+
+    clients = {"cloudformation": FakeCloudFormation(), "ecr": FakeEcr()}
+    monkeypatch.setattr(
+        "darth_infra.cli.cfn.boto3.client", lambda service, **_: clients[service]
+    )
+
+    assert idle_previews(config, datetime(2026, 3, 1, tzinfo=UTC)) == {"pr-1": old}

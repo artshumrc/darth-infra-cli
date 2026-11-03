@@ -19,9 +19,10 @@ Two things live here:
   database cleans up its overrides through the shared reference-impact behavior
   in the owning sections; this section only edits them.
 
-* **Preview-environment policy.** Every persisted ``preview_environments`` field
+* **Preview-environment policy.** The persisted ``preview_environments`` fields
   — enabled, base environment, name pattern, domain template, hosted-zone name,
-  the paired listener-priority bounds, and preview tags — grouped under a clearly
+  the paired listener-priority bounds, the RDS instance-type override, and
+  preview tags — grouped under a clearly
   optional panel that auto-opens when any preview field is already configured.
   Priority bounds remain editable because they reserve an allocation range for
   active previews; pairing, range, and ordering errors surface inline. Existing
@@ -64,6 +65,7 @@ _PREVIEW_PATHS = (
     "preview_environments.hosted_zone_name",
     "preview_environments.listener_priority_start",
     "preview_environments.listener_priority_end",
+    "preview_environments.instance_type_override",
     "preview_environments.tags",
 )
 
@@ -363,6 +365,14 @@ class EnvironmentsSection(VerticalScroll):
                 label="Listener priority range end",
                 help=_help("preview_environments.listener_priority_end"),
                 constraints="1-50000; must be >= the range start",
+            ),
+            TextField(
+                field_path="preview_environments.instance_type_override",
+                document=self.document,
+                label="Preview RDS instance type",
+                help=_help("preview_environments.instance_type_override"),
+                constraints="normalized to include the required 'db.' prefix",
+                example=_example("preview_environments.instance_type_override"),
             ),
             KeyValueMapField(
                 field_path="preview_environments.tags",

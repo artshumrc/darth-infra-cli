@@ -14,6 +14,7 @@ from ..config.loader import find_config, load_config
 from ..config.models import (
     ActivePreviewEnvironment,
     EnvironmentOverride,
+    EnvironmentServiceOverride,
     ProjectConfig,
     S3BucketMode,
     SecretSource,
@@ -81,7 +82,7 @@ def resolve_environment_config(
         )
         raise SystemExit(1)
 
-    number = _extract_preview_number(env_name, preview.name_pattern)
+    number = extract_preview_number(env_name, preview.name_pattern)
     if number is None:
         console.print(
             f"[red]Preview environment '{env_name}' does not match name pattern "
@@ -90,13 +91,16 @@ def resolve_environment_config(
         raise SystemExit(1)
 
     resolved = copy.deepcopy(config)
-    base_override = config.environment_overrides.get(preview_from)
-    if base_override:
-        resolved.environment_overrides[env_name] = EnvironmentOverride(
-            instance_type_override=base_override.instance_type_override,
-            ec2_instance_type_override=dict(base_override.ec2_instance_type_override),
-            tags={},
-        )
+    base_override = config.environment_overrides.get(
+        preview_from, EnvironmentOverride()
+    )
+    resolved.environment_overrides[env_name] = EnvironmentOverride(
+        instance_type_override=(
+            preview.instance_type_override or base_override.instance_type_override
+        ),
+        ec2_instance_type_override=dict(base_override.ec2_instance_type_override),
+        tags={},
+    )
     domain = _render_preview_value(preview.domain_template, resolved, env_name, number)
     preview_tags = {
         "environment-type": "preview",
@@ -120,6 +124,7 @@ def resolve_environment_config(
     _resolve_preview_s3_fallback_buckets(resolved, preview_from)
     resolved._validate_preview_overlay_bucket_collisions()
     _apply_environment_overrides(resolved, preview_from)
+    _apply_service_overrides(resolved, preview.services)
     # A listener priority configured for the base environment names *that*
     # environment's rule. A preview allocates its own from
     # preview_environments.listener_priority_start/end, so inheriting the base
@@ -138,7 +143,7 @@ def is_active_preview(config: ProjectConfig, env_name: str) -> bool:
     return bool(config.active_preview and config.active_preview.env_name == env_name)
 
 
-def _extract_preview_number(env_name: str, pattern: str) -> str | None:
+def extract_preview_number(env_name: str, pattern: str) -> str | None:
     escaped = re.escape(pattern).replace(r"\{number\}", r"(?P<number>[0-9]+)")
     match = re.fullmatch(escaped, env_name)
     if not match:
@@ -184,8 +189,14 @@ def _apply_environment_overrides(config: ProjectConfig, env_name: str) -> None:
     if alb_override.default_listener_priority is not None:
         config.alb.default_listener_priority = alb_override.default_listener_priority
 
+    _apply_service_overrides(config, override.services)
+
+
+def _apply_service_overrides(
+    config: ProjectConfig, overrides: dict[str, EnvironmentServiceOverride]
+) -> None:
     for service in config.services:
-        service_override = override.services.get(service.name)
+        service_override = overrides.get(service.name)
         if not service_override:
             continue
         if service_override.cpu is not None:

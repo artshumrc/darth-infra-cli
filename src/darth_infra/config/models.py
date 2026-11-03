@@ -481,6 +481,11 @@ class PreviewEnvironmentsConfig:
     listener_priority_start: int | None = None
     listener_priority_end: int | None = None
     tags: dict[str, str] = field(default_factory=dict)
+    instance_type_override: str | None = None
+    """RDS instance type for previews, over the base environment's."""
+
+    services: dict[str, EnvironmentServiceOverride] = field(default_factory=dict)
+    """Map of service name -> preview service settings, over the base environment's."""
 
 
 @dataclass
@@ -652,6 +657,18 @@ class ProjectConfig:
                         f"environments.{env_name}.services references unknown "
                         f"service '{svc_name}'"
                     )
+
+        preview = self.preview_environments
+        if preview.instance_type_override:
+            preview.instance_type_override = normalize_rds_instance_type(
+                preview.instance_type_override
+            )
+        for svc_name in preview.services:
+            if svc_name not in service_names:
+                raise ValueError(
+                    "preview_environments.services references unknown "
+                    f"service '{svc_name}'"
+                )
 
         for secret in self.secrets:
             if secret.source == SecretSource.GENERATE and not secret.generate_once:

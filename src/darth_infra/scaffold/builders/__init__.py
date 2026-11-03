@@ -1112,7 +1112,6 @@ def _build_service_template(
         Cluster=Ref("ClusterArn"),
         DesiredCount=service.svc.desired_count,
         EnableExecuteCommand=service.svc.enable_exec,
-        LaunchType="EC2" if service.launch_type == "ec2" else "FARGATE",
         TaskDefinition=Ref(task_definition),
         PropagateTags="TASK_DEFINITION",
         Tags=tags,
@@ -1124,6 +1123,16 @@ def _build_service_template(
             )
         ),
     )
+    if service.launch_type == "ec2":
+        ecs_service.LaunchType = "EC2"
+    elif context.is_preview:
+        ecs_service.CapacityProviderStrategy = [
+            ecs.CapacityProviderStrategyItem(
+                CapacityProvider="FARGATE_SPOT", Weight=1
+            )
+        ]
+    else:
+        ecs_service.LaunchType = "FARGATE"
     if (
         target_group is not None
         and service.svc.health_check_grace_period_seconds is not None
@@ -1757,16 +1766,20 @@ def build_project_templates(config: ProjectConfig) -> ProjectTemplates:
             Equals(Ref("ExistingCloudMapNamespaceId"), ""),
         )
 
-    cluster = root.add_resource(
-        ecs.Cluster(
-            "EcsCluster",
-            ClusterName=Sub("${ProjectName}-${EnvironmentName}"),
-            ClusterSettings=[
-                ecs.ClusterSetting(Name="containerInsights", Value="enabled")
-            ],
-            Tags=_resource_tags(context),
-        )
+    cluster = ecs.Cluster(
+        "EcsCluster",
+        ClusterName=Sub("${ProjectName}-${EnvironmentName}"),
+        ClusterSettings=[
+            ecs.ClusterSetting(
+                Name="containerInsights",
+                Value="disabled" if context.is_preview else "enabled",
+            )
+        ],
+        Tags=_resource_tags(context),
     )
+    if context.is_preview:
+        cluster.CapacityProviders = ["FARGATE", "FARGATE_SPOT"]
+    root.add_resource(cluster)
     service_namespace = None
     if context.has_service_discovery:
         service_namespace = root.add_resource(

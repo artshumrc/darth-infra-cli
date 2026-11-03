@@ -343,17 +343,23 @@ def _parse_env_override(raw: dict[str, Any]) -> EnvironmentOverride:
             shared_alb_security_group_id=alb_raw.get("shared_alb_security_group_id"),
             default_listener_priority=alb_raw.get("default_listener_priority"),
         ),
-        services={
-            name: EnvironmentServiceOverride(
-                cpu=data.get("cpu"),
-                memory_mib=data.get("memory_mib"),
-                desired_count=data.get("desired_count"),
-                environment_variables=data.get("environment_variables", {}),
-            )
-            for name, data in raw.get("services", {}).items()
-            if isinstance(data, dict)
-        },
+        services=_parse_service_overrides(raw.get("services", {})),
     )
+
+
+def _parse_service_overrides(
+    raw: dict[str, Any],
+) -> dict[str, EnvironmentServiceOverride]:
+    return {
+        name: EnvironmentServiceOverride(
+            cpu=data.get("cpu"),
+            memory_mib=data.get("memory_mib"),
+            desired_count=data.get("desired_count"),
+            environment_variables=data.get("environment_variables", {}),
+        )
+        for name, data in raw.items()
+        if isinstance(data, dict)
+    }
 
 
 def _parse_preview_environments(raw: dict[str, Any]) -> PreviewEnvironmentsConfig:
@@ -367,6 +373,8 @@ def _parse_preview_environments(raw: dict[str, Any]) -> PreviewEnvironmentsConfi
         listener_priority_start=raw.get("listener_priority_start"),
         listener_priority_end=raw.get("listener_priority_end"),
         tags=raw.get("tags", {}),
+        instance_type_override=raw.get("instance_type_override"),
+        services=_parse_service_overrides(raw.get("services", {})),
     )
 
 
@@ -725,21 +733,7 @@ def dump_config(config: ProjectConfig) -> str:
                     "default_listener_priority = "
                     f"{alb_override.default_listener_priority}"
                 )
-        for svc_name, svc_override in override.services.items():
-            lines.append("")
-            lines.append(f"[environments.{env_name}.services.{svc_name}]")
-            if svc_override.cpu is not None:
-                lines.append(f"cpu = {svc_override.cpu}")
-            if svc_override.memory_mib is not None:
-                lines.append(f"memory_mib = {svc_override.memory_mib}")
-            if svc_override.desired_count is not None:
-                lines.append(f"desired_count = {svc_override.desired_count}")
-            if svc_override.environment_variables:
-                env_inline = ", ".join(
-                    f'"{_toml_escape(k)}" = "{_toml_escape(v)}"'
-                    for k, v in svc_override.environment_variables.items()
-                )
-                lines.append(f"environment_variables = {{ {env_inline} }}")
+        _dump_service_overrides(lines, f"environments.{env_name}", override.services)
         lines.append("")
     if not config.environment_overrides:
         lines.append("# [deploy-live] no [environments.<name>] overrides configured")
@@ -762,11 +756,39 @@ def dump_config(config: ProjectConfig) -> str:
             lines.append(f"listener_priority_start = {preview.listener_priority_start}")
         if preview.listener_priority_end is not None:
             lines.append(f"listener_priority_end = {preview.listener_priority_end}")
+        if preview.instance_type_override:
+            lines.append(
+                "instance_type_override = "
+                f'"{_toml_escape(preview.instance_type_override)}"'
+            )
         if preview.tags:
             lines.append("")
             lines.append("[preview_environments.tags]")
             for key, value in preview.tags.items():
                 lines.append(f'"{_toml_escape(key)}" = "{_toml_escape(value)}"')
+        _dump_service_overrides(lines, "preview_environments", preview.services)
         lines.append("")
 
     return "\n".join(lines) + "\n"
+
+
+def _dump_service_overrides(
+    lines: list[str],
+    table: str,
+    services: dict[str, EnvironmentServiceOverride],
+) -> None:
+    for svc_name, svc_override in services.items():
+        lines.append("")
+        lines.append(f"[{table}.services.{svc_name}]")
+        if svc_override.cpu is not None:
+            lines.append(f"cpu = {svc_override.cpu}")
+        if svc_override.memory_mib is not None:
+            lines.append(f"memory_mib = {svc_override.memory_mib}")
+        if svc_override.desired_count is not None:
+            lines.append(f"desired_count = {svc_override.desired_count}")
+        if svc_override.environment_variables:
+            env_inline = ", ".join(
+                f'"{_toml_escape(k)}" = "{_toml_escape(v)}"'
+                for k, v in svc_override.environment_variables.items()
+            )
+            lines.append(f"environment_variables = {{ {env_inline} }}")

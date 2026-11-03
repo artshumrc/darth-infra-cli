@@ -809,6 +809,28 @@ FIELD_REGISTRY: tuple[FieldEntry, ...] = (
         "preview_environments.tags.*", _S.ENVIRONMENTS, _P.ADVANCED, _C.KEY_VALUE_MAP,
         "Tags applied only to dynamic preview environments.",
     ),
+    FieldEntry(
+        "preview_environments.instance_type_override", _S.ENVIRONMENTS, _P.ADVANCED, _C.TEXT,
+        "RDS instance type for previews, over the base environment's.",
+        example="db.t4g.micro",
+    ),
+    FieldEntry(
+        "preview_environments.services.*.cpu", _S.ENVIRONMENTS, _P.ADVANCED, _C.INTEGER,
+        "Task CPU units for one service in preview environments.",
+    ),
+    FieldEntry(
+        "preview_environments.services.*.memory_mib", _S.ENVIRONMENTS, _P.ADVANCED, _C.INTEGER,
+        "Task memory in MiB for one service in preview environments.",
+    ),
+    FieldEntry(
+        "preview_environments.services.*.desired_count", _S.ENVIRONMENTS, _P.ADVANCED, _C.INTEGER,
+        "Running task count for one service in preview environments.",
+    ),
+    FieldEntry(
+        "preview_environments.services.*.environment_variables.*", _S.ENVIRONMENTS, _P.ADVANCED, _C.KEY_VALUE_MAP,
+        "Environment variables merged over the base environment's for "
+        "previews, key by key.",
+    ),
 )
 
 

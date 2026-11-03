@@ -21,7 +21,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..config.models import ProjectConfig
-from .helpers import console, get_cluster_name, get_service_name
+from .helpers import (
+    console,
+    extract_preview_number,
+    get_cluster_name,
+    get_service_name,
+)
 
 
 _TRANSIENT_AWS_ERROR_CODES = {
@@ -1335,6 +1340,55 @@ def delete_tagged_preview_snapshots(config: ProjectConfig, env_name: str) -> int
             f"[green]✓ Deleted {deleted} retained preview RDS snapshot(s) for {env_name}[/green]"
         )
     return 0
+
+
+def idle_previews(config: ProjectConfig, idle_since: datetime) -> dict[str, datetime]:
+    """Map each preview with no deploy or image push since ``idle_since`` to its last one."""
+    cf = boto3.client("cloudformation", region_name=config.aws_region)
+    ecr = boto3.client("ecr", region_name=config.aws_region)
+    idle: dict[str, datetime] = {}
+    for page in cf.get_paginator("describe_stacks").paginate():
+        for stack in page["Stacks"]:
+            tags = {tag["Key"]: tag["Value"] for tag in stack.get("Tags", [])}
+            env_name = tags.get("darth-environment", "")
+            # Nested stacks inherit the root stack's tags.
+            if (
+                stack.get("ParentId")
+                or stack["StackStatus"] == "DELETE_IN_PROGRESS"
+                or tags.get("darth-project") != config.project_name
+                or env_name in config.environments
+                or extract_preview_number(
+                    env_name, config.preview_environments.name_pattern
+                )
+                is None
+            ):
+                continue
+            # Image-only deploys roll tasks without updating the stack.
+            last_activity = max(
+                [
+                    stack.get("LastUpdatedTime") or stack["CreationTime"],
+                    *_image_push_times(ecr, config, env_name),
+                ]
+            )
+            if last_activity < idle_since:
+                idle[env_name] = last_activity
+    return idle
+
+
+def _image_push_times(ecr, config: ProjectConfig, env_name: str) -> list[datetime]:
+    times: list[datetime] = []
+    for service in config.services:
+        if service.image:
+            continue
+        try:
+            for page in ecr.get_paginator("describe_images").paginate(
+                repositoryName=f"{config.project_name}/{env_name}/{service.name}"
+            ):
+                times.extend(image["imagePushedAt"] for image in page["imageDetails"])
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "RepositoryNotFoundException":
+                raise
+    return times
 
 
 def _rds_snapshot_has_cleanup_tag(rds, snapshot_arn: str, cleanup_id: str) -> bool:

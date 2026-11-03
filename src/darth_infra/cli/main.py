@@ -13,6 +13,7 @@ from .logs_cmd import logs
 from .exec_cmd import exec_cmd
 from .secret_cmd import secret_cmd
 from .destroy_cmd import destroy
+from .prune_cmd import prune_previews
 from .env_cmd import env_cmd
 from .status_cmd import status
 from .render_cmd import render_cmd
@@ -48,6 +49,7 @@ cli.add_command(exec_cmd, name="exec")
 cli.add_command(secret_cmd)
 cli.add_command(env_cmd)
 cli.add_command(destroy)
+cli.add_command(prune_previews)
 cli.add_command(status)
 cli.add_command(render_cmd)
 

@@ -789,6 +789,44 @@
           "type": "object",
           "description": "Tags applied only to dynamic preview environments. Supports {project}, {env}, {base_environment}, and {number} placeholders.",
           "additionalProperties": { "type": "string" }
+        },
+        "instance_type_override": {
+          "type": ["string", "null"],
+          "description": "RDS instance type for preview environments, over the base environment's.",
+          "default": null
+        },
+        "services": {
+          "type": "object",
+          "description": "Map of service name to preview service settings, applied over the base environment's.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "cpu": {
+                "type": ["integer", "null"],
+                "description": "Task CPU units for preview environments.",
+                "default": null,
+                "minimum": 256
+              },
+              "memory_mib": {
+                "type": ["integer", "null"],
+                "description": "Task memory in MiB for preview environments.",
+                "default": null,
+                "minimum": 512
+              },
+              "desired_count": {
+                "type": ["integer", "null"],
+                "description": "Number of running tasks for preview environments.",
+                "default": null,
+                "minimum": 0
+              },
+              "environment_variables": {
+                "type": "object",
+                "description": "Environment variables merged over the base environment's, key by key.",
+                "additionalProperties": { "type": "string" }
+              }
+            }
+          }
         }
       },
       "default": {}

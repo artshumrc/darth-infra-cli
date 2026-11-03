@@ -516,15 +516,36 @@ domain_template = "pr-{number}.myapp.example.com"   # must contain {number}
 hosted_zone_name = "example.com"         # enables Route 53 alias creation for previews
 listener_priority_start = 40000          # set together with the end bound
 listener_priority_end = 40999
+instance_type_override = "db.t4g.micro"  # RDS instance class for previews
 
 [preview_environments.tags]
 team = "web"
+
+[preview_environments.services.web]      # per-service preview settings
+cpu = 256
+memory_mib = 512
+desired_count = 1
+environment_variables = { DEBUG = "1" }
 ```
 
 Preview environments automatically receive the tags `environment-type=preview`,
 `preview-base-environment`, `pull-request`, and `ephemeral-cleanup-id`. Their database
 is restored from the latest **automated** snapshot of the prod instance, so prod must
 have at least one automated snapshot before the first preview deploy.
+
+A preview starts from its base environment's settings, including that environment's
+`[environments.<base>]` overrides, so by default it is sized like prod.
+`instance_type_override` and `[preview_environments.services.<service>]` apply on top,
+with the same fields and merge rules as
+[`[environments.<name>]`](#environmentsname). The database can be a smaller class than
+the one its snapshot came from.
+
+Previews also run Fargate services on **Fargate Spot** and turn Container Insights
+off. AWS can reclaim a Spot task with two minutes' notice; ECS starts a replacement,
+so a preview may be briefly unavailable. EC2 launch-type services are unaffected.
+
+Run `darth-infra prune-previews` on a schedule to destroy previews nobody is using —
+see [Commands](#commands).
 
 ## Editing the config with an agent
 
@@ -770,6 +791,7 @@ darth-infra deploy --env dev  --with-images
 | `darth-infra secret <NAME> --env <name>` | Prints a secret value to stdout. `--json-key <key>` extracts a field from a JSON secret. |
 | `darth-infra env --env <name>` | Appends all configured secrets to a `.env` file (`--file` to change the path). |
 | `darth-infra destroy --env <name>` | Deletes the environment's stack. `--force` skips the prompt. Prod can only be destroyed after all other environments. |
+| `darth-infra prune-previews` | Destroys every preview with no deploy and no image push in `--idle-days` days (default 7). Lists them and asks first; `--force` skips the prompt. |
 
 Useful `deploy` flags:
 
